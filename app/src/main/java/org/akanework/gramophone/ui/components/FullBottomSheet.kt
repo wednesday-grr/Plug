@@ -31,6 +31,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
+import android.os.SystemClock
 import android.text.format.DateFormat
 import android.util.AttributeSet
 import android.view.AbsSavedState
@@ -38,7 +39,6 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewPropertyAnimator
 import android.view.WindowInsets
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -63,7 +63,6 @@ import androidx.core.os.BundleCompat
 import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.isInvisible
 import androidx.core.view.isVisible
 import androidx.core.view.postOnAnimationDelayed
 import androidx.core.widget.NestedScrollView
@@ -104,8 +103,12 @@ import com.google.common.util.concurrent.Futures
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
@@ -142,6 +145,7 @@ import java.text.NumberFormat
 import java.text.ParseException
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.coroutines.coroutineContext
 
 @SuppressLint("NotifyDataSetChanged")
 class FullBottomSheet
@@ -167,6 +171,15 @@ class FullBottomSheet
     private var runnableRunning = false
     private var firstTime = false
     private var enableQualityInfo = false
+    private val djDisplayState = DjInfoDisplayState()
+    private var djScope: CoroutineScope? = null
+    private var djTicker: Job? = null
+    private var djRequest: Job? = null
+    private var djGeneration = 0
+    private var qualityInfo: AudioFormatInfo? = null
+    private var displayedDj: Boolean? = null
+    private var djTransitioning = false
+    private var djText = ""
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
     private var currentFormat: AudioFormatDetector.AudioFormats? = null
@@ -857,9 +870,26 @@ class FullBottomSheet
             .show()
     }
 
+    fun onStart() {
+        if (djScope == null) djScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        updateDjDisplay()
+        updateDjTicker()
+    }
+
     fun onStop() {
         pqs?.dismiss()
         runnableRunning = false
+        djScope?.cancel()
+        djScope = null
+        djTicker = null
+        djRequest = null
+        djDisplayState.showDj(SystemClock.elapsedRealtime(), false, C.TIME_UNSET, 0)
+    }
+
+    override fun onDetachedFromWindow() {
+        onStop()
+        handler?.removeCallbacks(formatUpdateRunnable)
+        super.onDetachedFromWindow()
     }
 
     override fun dispatchApplyWindowInsets(platformInsets: WindowInsets): WindowInsets {
@@ -963,20 +993,119 @@ class FullBottomSheet
         }
 
     private fun updateQualityIndicators(info: AudioFormatInfo?) {
-        val oldInfo =
-            (bottomSheetFullQualityDetails.getTag(R.id.quality_details) as AudioFormatInfo?)
-        if (oldInfo == info) return
-        (bottomSheetFullQualityDetails.getTag(R.id.fade_in_animation) as ViewPropertyAnimator?)?.cancel()
-        (bottomSheetFullQualityDetails.getTag(R.id.fade_out_animation) as ViewPropertyAnimator?)?.cancel()
-        if (info == null && bottomSheetFullQualityDetails.isInvisible) return
-        if (oldInfo != null)
-            applyQualityInfo(oldInfo)
-        bottomSheetFullQualityDetails.setTag(R.id.quality_details, info)
-        bottomSheetFullQualityDetails.fadOutAnimation(300) {
-            if (info == null)
-                return@fadOutAnimation
-            applyQualityInfo(info)
-            bottomSheetFullQualityDetails.fadInAnimation(300)
+        qualityInfo = info
+        updateDjDisplay()
+        updateDjTicker()
+    }
+
+    private fun updateDjTicker() {
+        if (djScope == null || !enableQualityInfo || instance?.isPlaying != true) {
+            djTicker?.cancel()
+            djTicker = null
+            return
+        }
+        if (djTicker != null) return
+        djTicker = djScope?.launch {
+            while (true) {
+                updateDjDisplay()
+                delay(250)
+            }
+        }
+    }
+
+    private fun updateDjDisplay(immediate: Boolean = false) {
+        val player = instance
+        val duration = player?.contentDuration?.takeIf { it != C.TIME_UNSET }
+            ?: player?.currentMediaItem?.mediaMetadata?.durationMs ?: C.TIME_UNSET
+        val position = player?.contentPosition ?: 0L
+        val showDj = djDisplayState.showDj(
+            SystemClock.elapsedRealtime(), player?.isPlaying == true && djScope != null && enableQualityInfo,
+            duration, position
+        )
+        val finalSection = duration > 15_000L && duration - position.coerceAtLeast(0) <= 15_000L
+        val target = if (!enableQualityInfo || player?.currentMediaItem == null) null
+            else if (showDj) true else if (qualityInfo != null) false else null
+        if (target == true) {
+            if (djText.isEmpty()) djText = formatDjMetrics(null, null, player?.playbackParameters?.speed ?: 1f)
+            requestDjMetrics()
+        }
+        if (target == displayedDj && !immediate) {
+            if (!djTransitioning) applyDisplayedInfo(target)
+            return
+        }
+        displayedDj = target
+        bottomSheetFullQualityDetails.animate().cancel()
+        djTransitioning = false
+        if (immediate || finalSection && target == true || !bottomSheetFullQualityDetails.isVisible) {
+            bottomSheetFullQualityDetails.alpha = 1f
+            applyDisplayedInfo(target)
+        } else {
+            djTransitioning = true
+            bottomSheetFullQualityDetails.fadOutAnimation(150) {
+                djTransitioning = false
+                applyDisplayedInfo(displayedDj)
+                if (displayedDj != null) bottomSheetFullQualityDetails.fadInAnimation(150)
+            }
+        }
+    }
+
+    private fun applyDisplayedInfo(showDj: Boolean?) {
+        if (showDj == null) {
+            bottomSheetFullQualityDetails.visibility = GONE
+        } else if (showDj) {
+            bottomSheetFullQualityDetails.setCompoundDrawablesRelative(null, null, null, null)
+            bottomSheetFullQualityDetails.text = djText
+            bottomSheetFullQualityDetails.visibility = VISIBLE
+        } else {
+            qualityInfo?.let(::applyQualityInfo)
+            bottomSheetFullQualityDetails.visibility = VISIBLE
+        }
+    }
+
+    private fun formatDjMetrics(bpm: Float?, key: String?, speed: Float): String {
+        val bpmFormat = NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }
+        val speedFormat = NumberFormat.getNumberInstance().apply {
+            minimumFractionDigits = 2
+            maximumFractionDigits = 2
+        }
+        return context.getString(R.string.dj_metrics, bpm?.let(bpmFormat::format) ?: "--",
+            key ?: "--", speedFormat.format(speed))
+    }
+
+    private fun requestDjMetrics() {
+        val player = instance ?: return
+        val scope = djScope ?: return
+        if (djRequest != null) return
+        val generation = djGeneration
+        val index = player.currentMediaItemIndex
+        val mediaId = player.currentMediaItem?.mediaId ?: return
+        djRequest = scope.launch {
+            try {
+                val result = player.sendCustomCommand(
+                    androidx.media3.session.SessionCommand(PlugPlaybackService.SERVICE_GET_DJ_METRICS, Bundle.EMPTY),
+                    Bundle.EMPTY
+                ).await()
+                if (result.resultCode != SessionResult.RESULT_SUCCESS) {
+                    Log.w(TAG, "DJ metrics request failed: ${result.resultCode}")
+                    return@launch
+                }
+                val data = result.extras
+                if (generation != djGeneration || instance !== player ||
+                    player.currentMediaItemIndex != index || player.currentMediaItem?.mediaId != mediaId ||
+                    data.getInt("index", C.INDEX_UNSET) != index || data.getString("media_id") != mediaId
+                ) return@launch
+                djText = formatDjMetrics(
+                    if (data.containsKey("bpm")) data.getFloat("bpm") else null,
+                    data.getString("key"), data.getFloat("speed", 1f)
+                )
+                if (displayedDj == true && !djTransitioning) applyDisplayedInfo(true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to retrieve DJ metrics", e)
+            } finally {
+                if (djRequest === coroutineContext[Job]) djRequest = null
+            }
         }
     }
 
@@ -1426,6 +1555,12 @@ class FullBottomSheet
         mediaItem: MediaItem?,
         reason: Int
     ) {
+        djGeneration++
+        djRequest?.cancel()
+        djRequest = null
+        djText = ""
+        djDisplayState.reset()
+        updateDjDisplay(immediate = true)
         if (instance?.mediaItemCount != 0) {
             bottomSheetFullCover.dispose()
             bottomSheetFullCover.loadNoPlaceholder(mediaItem?.mediaMetadata?.artworkUri) {
@@ -1497,6 +1632,7 @@ class FullBottomSheet
         reason: Int
     ) {
         positionRunnable.run()
+        updateDjDisplay()
     }
 
     override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
@@ -1530,6 +1666,8 @@ class FullBottomSheet
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
+        updateDjDisplay()
+        updateDjTicker()
         if (instance?.isPlaying == true) {
             if (bottomSheetFullControllerButton.getTag(R.id.play_next) as Int? != 1) {
                 bottomSheetFullControllerButton.icon =
@@ -1569,6 +1707,10 @@ class FullBottomSheet
                 progressDrawable.animate = false
             }
         }
+    }
+
+    override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+        updateDjDisplay()
     }
 
     // https://developer.android.com/media/implement/surfaces/pause-and-resume-media-playback-with-spacebar

@@ -17,6 +17,7 @@
 package org.akanework.gramophone.logic.utils.automix
 
 import androidx.media3.common.Metadata
+import androidx.media3.exoplayer.ExoPlayer
 
 data class ResolvedTrackAudioMetadata(
     val bpm: Float?,
@@ -25,6 +26,16 @@ data class ResolvedTrackAudioMetadata(
 )
 
 object TrackAudioMetadataResolver {
+    fun resolvePlayer(player: ExoPlayer, cached: TrackAnalysis?): ResolvedTrackAudioMetadata {
+        val tags = mutableListOf(player.audioFormat?.metadata)
+        for (group in player.currentTracks.groups) {
+            for (index in 0 until group.length) {
+                tags.add(group.getTrackFormat(index).metadata)
+            }
+        }
+        return resolve(tags, cached, player.currentPosition)
+    }
+
     fun resolve(tags: Iterable<Metadata?>, cached: TrackAnalysis?, positionMs: Long): ResolvedTrackAudioMetadata {
         val metadata = tags.filterNotNull()
         val taggedBpm = metadata.firstNotNullOfOrNull(BpmTags::read)

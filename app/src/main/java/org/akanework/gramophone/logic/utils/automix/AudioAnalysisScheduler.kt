@@ -22,6 +22,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -55,6 +57,7 @@ class AudioAnalysisScheduler(
     private var currentIsLibrary = false
     private var currentKey: AnalysisKey? = null
     private var libraryIndex = 0
+    private val displayLoads = mutableMapOf<AnalysisKey, Job>()
 
     init {
         scope.launch {
@@ -116,6 +119,25 @@ class AudioAnalysisScheduler(
                     }
                     delay(250)
                 }
+            }
+        }
+    }
+
+    fun loadCachedForDisplay(key: AnalysisKey): Job? {
+        if (cache.peek(key) != null) return null
+        return synchronized(lock) {
+            displayLoads[key] ?: scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+                try {
+                    cache.load(key)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    synchronized(lock) { displayLoads.remove(key) }
+                    Log.w("AudioAnalysis", "Unable to load cached analysis for ${key.mediaId}", e)
+                }
+            }.also {
+                displayLoads[key] = it
+                it.start()
             }
         }
     }

@@ -25,9 +25,12 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.akanework.gramophone.logic.utils.automix.AudioAnalysisScheduler
+import org.akanework.gramophone.logic.utils.automix.AnalysisKey
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysis
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysisCache
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -43,6 +46,28 @@ class AudioAnalysisSchedulerTest {
         .setMediaMetadata(MediaMetadata.Builder().setExtras(Bundle().apply {
             putLong(EXTRA_MODIFIED_DATE, 12345)
         }).build()).build()
+
+    @Test
+    fun displayLoadsPersistedAnalysisWithoutWaitingForLibraryWork() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val key = checkNotNull(AnalysisKey.from(item("display-cache-test")))
+        val analysis = TrackAnalysis(125f, "8A", 10.0, 0.9f, 0, 1000)
+        TrackAnalysisCache(context).also {
+            it.store(key, analysis)
+            it.close()
+        }
+        val cache = TrackAnalysisCache(context)
+        val scheduler = AudioAnalysisScheduler(context, cache)
+        try {
+            assertNull(cache.peek(key))
+            val load = scheduler.loadCachedForDisplay(key)
+            assertNotNull(load)
+            withTimeout(10_000) { load!!.join() }
+            assertEquals(analysis, cache.peek(key))
+        } finally {
+            scheduler.close()
+        }
+    }
 
     @Test
     fun upcomingQueuePreemptsIdleLibrary() = runBlocking {

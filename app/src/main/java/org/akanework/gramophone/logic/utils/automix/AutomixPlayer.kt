@@ -573,15 +573,9 @@ class AutomixPlayer private constructor(
     }
 
     private fun audioMetadata(player: ExoPlayer): ResolvedTrackAudioMetadata {
-        val tags = mutableListOf(player.audioFormat?.metadata)
-        for (group in player.currentTracks.groups) {
-            for (index in 0 until group.length) {
-                tags.add(group.getTrackFormat(index).metadata)
-            }
-        }
         val key = player.currentMediaItem?.let(AnalysisKey::from)
         val cached = key?.let { decks.analysisCache?.peek(it) }
-        return TrackAudioMetadataResolver.resolve(tags, cached, player.currentPosition)
+        return TrackAudioMetadataResolver.resolvePlayer(player, cached)
     }
 
     private fun cancelTransition() {

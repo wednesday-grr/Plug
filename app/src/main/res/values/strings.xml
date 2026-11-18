@@ -12,6 +12,7 @@
 
     <!-- Plug is the application name and should not be translated. -->
     <string name="app_name">Plug</string>
+    <string name="dj_metrics">%1$s BPM • %2$s • %3$sx</string>
     <!-- Menu item in home screen -->
     <string name="home_menu_search">Search</string>
     <!-- Menu item in home screen -->

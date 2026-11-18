@@ -188,6 +188,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         const val SERVICE_SET_TIMER = "set_timer"
         const val SERVICE_QUERY_TIMER = "query_timer"
         const val SERVICE_GET_AUDIO_FORMAT = "get_audio_format"
+        const val SERVICE_GET_DJ_METRICS = "get_dj_metrics"
         const val SERVICE_GET_LYRICS = "get_lyrics"
         const val SERVICE_TIMER_CHANGED = "changed_timer"
         const val SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY = "set_media_items_seamlessly"
@@ -878,6 +879,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         availableSessionCommands.add(SessionCommand(SERVICE_QB_DEL, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_REORDER, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_SORT_AUTOMIX, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_GET_DJ_METRICS, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_PIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_UNPIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_RENAME_QUEUE, Bundle.EMPTY))
@@ -1275,6 +1277,32 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                         "inactiveQueues",
                         MultiQueueList(qb.getInactiveQueues().map { it.copy(queue = ArrayList()) })
                     )
+                }
+            }
+        }
+
+        if (customCommand.customAction == SERVICE_GET_DJ_METRICS) {
+            return lifecycleScope.future {
+                val wrapper = endedWorkaroundPlayer
+                    ?: return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                val player = wrapper.exoPlayer
+                val item = player.currentMediaItem
+                    ?: return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                val index = player.currentMediaItemIndex
+                val key = AnalysisKey.from(item)
+                key?.let { audioAnalysis.loadCachedForDisplay(it)?.join() }
+                if (endedWorkaroundPlayer !== wrapper || wrapper.exoPlayer !== player ||
+                    player.currentMediaItemIndex != index || player.currentMediaItem != item
+                ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                val metadata = TrackAudioMetadataResolver.resolvePlayer(
+                    player, key?.let(audioAnalysis.cache::peek)
+                )
+                SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
+                    res.extras.putString("media_id", item.mediaId)
+                    res.extras.putInt("index", index)
+                    metadata.bpm?.let { res.extras.putFloat("bpm", it) }
+                    res.extras.putString("key", metadata.camelotKey)
+                    res.extras.putFloat("speed", player.playbackParameters.speed)
                 }
             }
         }
