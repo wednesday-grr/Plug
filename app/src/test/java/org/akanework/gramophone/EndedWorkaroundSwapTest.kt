@@ -44,6 +44,72 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class, sdk = [25])
 class EndedWorkaroundSwapTest {
     @Test
+    fun sortingDuringCrossfadeIsRejectedWithoutEditingQueue() {
+        val context = RuntimeEnvironment.getApplication()
+        shadowOf(context).grantPermissions("${context.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
+        val automix = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
+        val wrapper = EndedWorkaroundPlayer(
+            context, context.getSharedPreferences("queue-sort-fade-test", Context.MODE_PRIVATE),
+            automix, { null }, QueueBoard(GramophonePlaybackService())
+        )
+        val items = listOf("active", "next", "other").map { MediaItem.fromUri("file:///$it.mp3") }
+        try {
+            automix.activeExoPlayer.shuffleOrder = CircularShuffleOrder(wrapper, 0, 0, 1L)
+            automix.setMediaItems(items, 0, 5000)
+            shadowOf(Looper.getMainLooper()).idle()
+            val transition = AutomixPlayer::class.java.getDeclaredField("transition")
+                .apply { isAccessible = true }.get(automix) as DeckTransition
+            transition.beginPreparation()
+            transition.markReady()
+            transition.start(1000, 0)
+            try {
+                wrapper.sortQueueForAutomix(listOf(0, 2, 1))
+                org.junit.Assert.fail("Expected an in-progress fade to prevent sorting")
+            } catch (_: IllegalStateException) {
+                assertEquals(5000L, wrapper.currentPosition)
+                assertEquals(items, (0 until wrapper.mediaItemCount).map(wrapper::getMediaItemAt))
+            }
+        } finally {
+            wrapper.release()
+        }
+    }
+
+    @Test
+    fun sortingPreservesActivePositionDuplicatesAndShufflePlaybackOrder() {
+        val context = RuntimeEnvironment.getApplication()
+        shadowOf(context).grantPermissions("${context.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
+        val automix = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
+        val wrapper = EndedWorkaroundPlayer(
+            context, context.getSharedPreferences("queue-sort-test", Context.MODE_PRIVATE),
+            automix, { null }, QueueBoard(GramophonePlaybackService())
+        )
+        val items = listOf("past", "active", "same", "other", "same").map {
+            MediaItem.fromUri("file:///$it.mp3")
+        }
+        try {
+            automix.activeExoPlayer.shuffleOrder = CircularShuffleOrder(wrapper, 0, 0, 1L)
+            automix.setMediaItems(items, 1, 12000)
+            automix.activeExoPlayer.shuffleOrder =
+                CircularShuffleOrder(wrapper, intArrayOf(1, 4, 2, 3, 0), 1L, null)
+            automix.shuffleModeEnabled = true
+            shadowOf(Looper.getMainLooper()).idle()
+            wrapper.sortQueueForAutomix(listOf(0, 1, 3, 4, 2))
+            assertEquals(items[3], automix.pendingNextMediaItem)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(1, wrapper.currentMediaItemIndex)
+            assertEquals(12000L, wrapper.currentPosition)
+            assertEquals(listOf(items[0], items[1], items[3], items[4], items[2]),
+                (0 until wrapper.mediaItemCount).map(wrapper::getMediaItemAt))
+            assertEquals(true, wrapper.shuffleModeEnabled)
+            assertEquals(2, automix.nextMediaItemIndex)
+            assertEquals(items[3], automix.pendingNextMediaItem)
+            assertEquals(3, automix.activeExoPlayer.shuffleOrder.getNextIndex(2))
+        } finally {
+            wrapper.release()
+        }
+    }
+
+    @Test
     fun shuffleChangeInvalidatesPreparedQueueEvenWhenNextItemIsUnchanged() {
         val context = RuntimeEnvironment.getApplication()
         shadowOf(context).grantPermissions("${context.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")

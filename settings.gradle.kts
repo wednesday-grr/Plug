@@ -32,6 +32,7 @@ includeBuild(file("media3").toPath().toRealPath().toAbsolutePath().toString()) {
         substitute(module("androidx.media3:media3-exoplayer")).using(project(":lib-exoplayer"))
         substitute(module("androidx.media3:media3-exoplayer-midi")).using(project(":lib-decoder-midi"))
         substitute(module("androidx.media3:media3-session")).using(project(":lib-session"))
+        substitute(module("androidx.media3:media3-inspector")).using(project(":lib-inspector"))
     }
 }
 

@@ -283,6 +283,8 @@ class AutomixPlayer private constructor(
         check(!released) { "AutomixPlayer has been released" }
     }
 
+    val isCrossfading: Boolean get() = transition.phase == DeckTransition.Phase.FADING
+
     fun setNextMediaItem(mediaItem: MediaItem?) {
         assertThread()
         if (nextItem == mediaItem &&

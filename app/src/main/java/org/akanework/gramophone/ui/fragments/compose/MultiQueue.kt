@@ -1,6 +1,9 @@
 package org.akanework.gramophone.ui.fragments.compose
 
 import android.os.SystemClock
+import android.os.Bundle
+import android.content.SharedPreferences
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -46,7 +49,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -80,12 +85,17 @@ import androidx.media3.common.Player.REPEAT_MODE_OFF
 import androidx.media3.common.Player.REPEAT_MODE_ONE
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionCommand
+import androidx.preference.PreferenceManager
 import com.google.common.util.concurrent.Futures
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.guava.await
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.GramophonePlaybackService
 import org.akanework.gramophone.logic.MultiQueueList
 import org.akanework.gramophone.logic.MultiQueueObject
 import org.akanework.gramophone.logic.age
@@ -485,6 +495,16 @@ fun ActionBar(
     val isPlaying by mqState.isPlaying.collectAsState()
     val repeatMode by mqState.repeatMode.collectAsState()
     val shuffleModeEnabled by mqState.shuffleModeEnabled.collectAsState()
+    val context = LocalContext.current
+    val prefs = remember(context) { PreferenceManager.getDefaultSharedPreferences(context) }
+    var automixEnabled by remember(prefs) { mutableStateOf(prefs.getBoolean("automix_enabled", false)) }
+    DisposableEffect(prefs) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "automix_enabled") automixEnabled = prefs.getBoolean(key, false)
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 
     BackHandler(mqState.isEditAllowed) {
         mqState.isEditAllowed = false
@@ -533,6 +553,7 @@ fun ActionBar(
                     tint = LocalContentColor.current.copy(if (shuffleModeEnabled) 1f else 0.5f)
                 )
             }
+
         }
 
         // center options
@@ -602,6 +623,14 @@ fun ActionBar(
                         painter = painterResource(R.drawable.ic_play_arrow),
                         contentDescription = null,
                     )
+                }
+            }
+            if (automixEnabled) {
+                TextButton(
+                    onClick = { mqState.sortForAutomix() },
+                    enabled = !mqState.isDetached() && !mqState.sortingAutomix,
+                ) {
+                    Text(stringResource(R.string.sort_for_automix))
                 }
             }
         }
@@ -870,6 +899,33 @@ class MqState(
         private set
 
     var isEditAllowed by mutableStateOf(false)
+    var sortingAutomix by mutableStateOf(false)
+        private set
+
+    fun sortForAutomix() {
+        if (sortingAutomix || isDetached()) return
+        sortingAutomix = true
+        coroutineScope.launch {
+            try {
+                val result = instance.sendCustomCommand(
+                    SessionCommand(GramophonePlaybackService.SERVICE_SORT_AUTOMIX, Bundle.EMPTY),
+                    Bundle.EMPTY
+                ).await()
+                val message = if (result.resultCode == SessionResult.RESULT_SUCCESS) {
+                    val count = result.extras.getInt("count")
+                    activity.resources.getQuantityString(R.plurals.sorted_for_automix, count, count)
+                } else activity.getString(R.string.sort_for_automix_failed)
+                Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("MqState", "Automix queue sort failed", e)
+                Toast.makeText(activity, R.string.sort_for_automix_failed, Toast.LENGTH_SHORT).show()
+            } finally {
+                sortingAutomix = false
+            }
+        }
+    }
 
 
     val playerListener = object : Player.Listener {

@@ -1146,6 +1146,12 @@
     <string name="settings_automix_description">Crossfade between tracks. Audio offload is disabled while Automix is enabled.</string>
     <string name="settings_automix_beatmatch">DJ beatmatching / tempo sync</string>
     <string name="settings_automix_duration">Crossfade duration (seconds)</string>
+    <string name="sort_for_automix">Sort for Automix</string>
+    <string name="sort_for_automix_failed">Could not sort the queue. Check that Automix is enabled and try again after any transition.</string>
+    <plurals name="sorted_for_automix">
+        <item quantity="one">Sorted %d track for Automix</item>
+        <item quantity="other">Sorted %d tracks for Automix</item>
+    </plurals>
     <!-- Change the ReplayGain (this is a technical/"brand" name for an interoperable audio loudness
     normalization feature established since 2002) mode between off, Preserve album dynamics, All
     tracks equal loudness and Smart -->

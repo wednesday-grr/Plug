@@ -36,6 +36,10 @@ Upcoming queue items are analyzed first; the rest of the library is analyzed whi
 is idle and the playback service is running. Analysis results are cached locally and are
 estimates, not guaranteed beat grids. Tracks without a stable modification date or a
 supported Android system decoder are skipped.
+With Automix enabled, use **Sort for Automix** in the queue to order tracks after the
+current song by tempo and harmonic key. Embedded tags take precedence over cached
+analysis. Shuffle remains enabled if it was on, but its order is replaced by the sorted
+order. Sorting is unavailable during a crossfade; retry after the transition.
 
 ## Screenshots
 | ![Screenshot 1](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_1.jpg) | ![Screenshot 2](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_2.jpg) | ![Screenshot 3](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_3.jpg) |

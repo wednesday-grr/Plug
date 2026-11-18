@@ -78,6 +78,7 @@ import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.util.EventLogger
 import androidx.media3.extractor.mp3.Mp3Extractor
+import androidx.media3.inspector.MetadataRetriever
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
@@ -112,6 +113,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.guava.await
 import org.akanework.gramophone.R
@@ -136,6 +138,9 @@ import org.akanework.gramophone.logic.utils.automix.AutomixPlayer
 import org.akanework.gramophone.logic.utils.automix.AutomixSettingsStore
 import org.akanework.gramophone.logic.utils.automix.AudioAnalysisScheduler
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysisCache
+import org.akanework.gramophone.logic.utils.automix.AnalysisKey
+import org.akanework.gramophone.logic.utils.automix.SmartQueueSorter
+import org.akanework.gramophone.logic.utils.automix.TrackAudioMetadataResolver
 
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
@@ -193,6 +198,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         const val SERVICE_QB_GET_QUEUE_FOR_UI = "qb_get_queue_for_ui"
         const val SERVICE_QB_DEL = "qb_delete"
         const val SERVICE_QB_REORDER = "qb_reorder"
+        const val SERVICE_SORT_AUTOMIX = "sort_automix"
         const val SERVICE_QB_PIN_QUEUE = "qb_pin_queue"
         const val SERVICE_QB_UNPIN_QUEUE = "qb_unpin_queue"
         const val SERVICE_QB_RENAME_QUEUE = "qb_rename"
@@ -871,6 +877,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         availableSessionCommands.add(SessionCommand(SERVICE_QB_LOAD_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_DEL, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_REORDER, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_SORT_AUTOMIX, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_PIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_UNPIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_RENAME_QUEUE, Bundle.EMPTY))
@@ -1269,6 +1276,87 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                         MultiQueueList(qb.getInactiveQueues().map { it.copy(queue = ArrayList()) })
                     )
                 }
+            }
+        }
+
+        if (customCommand.customAction == SERVICE_SORT_AUTOMIX) {
+            return lifecycleScope.future {
+                val wrapper = endedWorkaroundPlayer
+                val engine = wrapper?.playbackEngine as? AutomixPlayer
+                val index = engine?.currentMediaItemIndex ?: C.INDEX_UNSET
+                if (wrapper == null || engine == null || !automixSettings.settings.value.enabled ||
+                    index !in 0 until engine.mediaItemCount || engine.isCrossfading
+                ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+
+                val timeline = engine.currentTimeline
+                val shuffle = engine.shuffleModeEnabled
+                val repeat = engine.repeatMode
+                fun shuffleOrder(): List<Int> {
+                    val order = engine.activeExoPlayer.shuffleOrder
+                    val indices = ArrayList<Int>(order.length)
+                    var next = order.firstIndex
+                    while (next != C.INDEX_UNSET && indices.size < order.length) {
+                        indices.add(next)
+                        next = order.getNextIndex(next)
+                    }
+                    return indices
+                }
+                val shuffledIndices = if (shuffle) shuffleOrder() else emptyList()
+                val window = Timeline.Window()
+                val ids = (0 until timeline.windowCount).map { timeline.getWindow(it, window).uid }
+                val items = (0 until engine.mediaItemCount).map(engine::getMediaItemAt)
+                val metadata = items.mapIndexed { itemIndex, item ->
+                    if (itemIndex < index) return@mapIndexed SmartQueueSorter.Metadata(null, null)
+                    val cached = withContext(Dispatchers.IO) {
+                        AnalysisKey.from(item)?.let(audioAnalysis.cache::load)
+                    }
+                    val uri = item.localConfiguration?.uri
+                    val tags = if (uri?.scheme in listOf("content", "file")) {
+                        val retriever = MetadataRetriever.Builder(applicationContext, item).build()
+                        try {
+                            val groups = withTimeout(10_000) {
+                                retriever.retrieveTrackGroups().await()
+                            }
+                            (0 until groups.length).flatMap { groupIndex ->
+                                val group = groups.get(groupIndex)
+                                (0 until group.length).map { group.getFormat(it).metadata }
+                            }
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                            Log.w(TAG, "Timed out reading tags for ${item.mediaId}", e)
+                            emptyList()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Unable to read tags for ${item.mediaId}", e)
+                            emptyList()
+                        } finally {
+                            retriever.close()
+                        }
+                    } else emptyList()
+                    val resolved = TrackAudioMetadataResolver.resolve(tags, cached, 0)
+                    SmartQueueSorter.Metadata(resolved.bpm, resolved.camelotKey)
+                }
+                val order = withContext(Dispatchers.Default) { SmartQueueSorter.order(metadata, index) }
+                val now = engine.currentTimeline
+                if (endedWorkaroundPlayer !== wrapper || wrapper.playbackEngine !== engine ||
+                    engine.currentMediaItemIndex != index || engine.isCrossfading ||
+                    !automixSettings.settings.value.enabled ||
+                    engine.shuffleModeEnabled != shuffle || engine.repeatMode != repeat ||
+                    (shuffle && shuffleOrder() != shuffledIndices) ||
+                    now.windowCount != ids.size ||
+                    ids.indices.any { now.getWindow(it, window).uid != ids[it] } ||
+                    items.indices.any { engine.getMediaItemAt(it) != items[it] }
+                ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+
+                wrapper.sortQueueForAutomix(order)
+                for (connected in session.connectedControllers) {
+                    session.sendCustomCommand(
+                        connected, buildMqCustomCommand(CLIENT_QB_REFRESH_LIST, null), Bundle.EMPTY
+                    )
+                }
+                SessionResult(SessionResult.RESULT_SUCCESS, Bundle().apply {
+                    putInt("count", items.size - index - 1)
+                })
             }
         }
 

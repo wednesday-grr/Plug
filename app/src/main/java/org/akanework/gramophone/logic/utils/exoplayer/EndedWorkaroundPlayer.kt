@@ -107,6 +107,29 @@ class EndedWorkaroundPlayer(
         )
     }
 
+    /** Applies a permutation of the physical queue without touching the current item. */
+    fun sortQueueForAutomix(order: List<Int>) {
+        val current = currentMediaItemIndex
+        require(order.size == mediaItemCount && current in order.indices)
+        require(order.take(current + 1) == (0..current).toList())
+        require(order.sorted() == order.indices.toList())
+        check((player as? AutomixPlayer)?.isCrossfading == false)
+        val indices = order.indices.toMutableList()
+        for (target in current + 1 until order.size) {
+            val from = indices.indexOf(order[target])
+            if (from != target) {
+                moveMediaItem(from, target)
+                indices.add(target, indices.removeAt(from))
+            }
+        }
+        if (shuffleModeEnabled) {
+            exoPlayer.shuffleOrder = CircularShuffleOrder(
+                this, order.indices.toList().toIntArray(), kotlin.random.Random.nextLong(), null
+            )
+        }
+        updateAutomixNext()
+    }
+
     override fun onEvents(player: Player, events: Player.Events) {
         if (events.containsAny(
                 Player.EVENT_TIMELINE_CHANGED,
