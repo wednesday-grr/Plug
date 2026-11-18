@@ -37,6 +37,7 @@ import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
+import org.akanework.gramophone.logic.utils.SessionBoostCoordinator
 import org.akanework.gramophone.logic.utils.automix.PcmTransientAudioProcessor
 import org.nift4.alacdecoder.AlacRenderer
 
@@ -46,6 +47,8 @@ class GramophoneRenderFactory(
     private val audioSinkListener: (PostAmpAudioOutputProvider) -> Unit,
     private val pcmMixing: Boolean = false,
     private val onPcmTransient: ((PcmTransientAudioProcessor.Transient) -> Unit)? = null,
+    private val sessionBoostCoordinator: SessionBoostCoordinator? = null,
+    private val deckId: String? = null,
 ) :
     DefaultRenderersFactory(context) {
     init {
@@ -125,7 +128,8 @@ class GramophoneRenderFactory(
         val builder = DefaultAudioSink.Builder(context)
         val aop = PostAmpAudioOutputProvider(
             ExtendedAudioOutputProvider(AudioTrackAudioOutputProvider.Builder(context)
-                .setMaxPlaybackSpeed(4f).build()), rgAp, context, pcmMixing)
+                .setMaxPlaybackSpeed(4f).build()), rgAp, context, pcmMixing,
+            sessionBoostCoordinator, deckId)
         builder.setAudioOutputProvider(aop)
         builder.setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams && !pcmMixing)
         builder.setEnableHighResolutionPcmOutput(pcmEncodingRestrictionLifted)

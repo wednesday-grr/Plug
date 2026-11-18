@@ -134,6 +134,8 @@ import org.akanework.gramophone.logic.utils.SemanticLyrics
 import org.akanework.gramophone.logic.utils.automix.AutomixOffloadPolicy
 import org.akanework.gramophone.logic.utils.automix.AutomixPlayer
 import org.akanework.gramophone.logic.utils.automix.AutomixSettingsStore
+import org.akanework.gramophone.logic.utils.automix.AudioAnalysisScheduler
+import org.akanework.gramophone.logic.utils.automix.TrackAnalysisCache
 
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
@@ -229,6 +231,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private var lastSentNotificationLyric: String? = null
     private lateinit var afFormatTracker: AfFormatTracker
     private var automixPlayer: AutomixPlayer? = null
+    private lateinit var audioAnalysis: AudioAnalysisScheduler
     private var automixTrackers: List<AfFormatTracker> = emptyList()
     private val playerEventLogger = EventLogger()
     private lateinit var rgAp: ReplayGainAudioProcessor
@@ -327,6 +330,11 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     override fun onCreate() {
         Log.i(TAG, "+onCreate()")
         super.onCreate()
+        audioAnalysis = AudioAnalysisScheduler(this, TrackAnalysisCache(this))
+        audioAnalysis.setIdle(true)
+        scope.launch {
+            gramophoneApplication.reader.songListFlow.collect { audioAnalysis.updateLibrary(it) }
+        }
         instanceForWidgetAndLyricsOnly = this
         internalPlaybackThread.start()
         playbackHandler = Handler(internalPlaybackThread.looper)
@@ -797,6 +805,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         // Important: this must happen before sending stop() as that changes state ENDED -> IDLE
         lastPlayedManager.save()
         scope.cancel()
+        audioAnalysis.close()
         endedWorkaroundPlayer!!.stop()
         handler.removeCallbacks(timer)
         handler.removeCallbacks(sendLyrics)
@@ -1016,7 +1025,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     if (afFormatTracker === tracker) onAudioSinkInputFormatChanged(format)
                 }
             },
-            onSinkCreated = { isA, sink -> trackers[if (isA) 0 else 1].setAudioSink(sink) }
+            onSinkCreated = { isA, sink -> trackers[if (isA) 0 else 1].setAudioSink(sink) },
+            audioSessionId = oldPlayer.audioSessionId,
+            analysisCache = audioAnalysis.cache,
         ) else null
         val renderFactory = if (newAutomix == null) createRenderFactory(newTracker, false) else null
         val newProcessor = newAutomix?.activeReplayGainProcessor ?: renderFactory!!.replayGainAudioProcessor
@@ -1092,9 +1103,6 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 mediaSession?.broadcastCustomCommand(
                     SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY), Bundle.EMPTY
                 )
-            }
-            newAutomix.onActiveAudioSessionChanged = { id ->
-                if (id != C.AUDIO_SESSION_ID_UNSET) onAudioSessionIdChanged(id)
             }
         } else if (oldPlayer.audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
             newDeck.setAudioSessionId(oldPlayer.audioSessionId)
@@ -1849,10 +1857,33 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         scheduleSendingLyrics(false)
         lastPlayedManager.save()
+        audioAnalysis.setIdle(!isPlaying)
     }
 
     override fun onEvents(player: Player, events: Player.Events) {
         super<Player.Listener>.onEvents(player, events)
+        if (events.containsAny(
+                Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION,
+                Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED
+            )
+        ) {
+            val engine = endedWorkaroundPlayer?.exoPlayer
+            if (engine != null) {
+                val order = engine.shuffleOrder
+                val queue = mutableListOf<MediaItem>()
+                val current = engine.currentMediaItemIndex
+                var index = if (engine.repeatMode == Player.REPEAT_MODE_ONE) current
+                    else engine.nextMediaItemIndex
+                val visited = mutableSetOf<Int>()
+                while (index in 0 until engine.mediaItemCount && visited.add(index)) {
+                    queue.add(engine.getMediaItemAt(index))
+                    index = if (engine.shuffleModeEnabled) order.getNextIndex(index) else index + 1
+                }
+                if (current in 0 until engine.mediaItemCount && visited.add(current))
+                    queue.add(engine.getMediaItemAt(current))
+                audioAnalysis.updateQueue(queue)
+            }
+        }
         // if timeline changed, shuffle order is handled elsewhere instead (cloneAndInsert called by
         // ExoPlayer for common case and nextShuffleOrder for resumption case)
         if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)

@@ -127,6 +127,7 @@ class DynamicsProcessingEffectWrapper(
         private set
     private var dpeCanary: ReflectionAudioEffect? = null
     private var failureCounter = 0
+    private val retry = Runnable { tryRecreateIfFailed() }
     override var hasControl: Boolean = false
         private set
 
@@ -137,6 +138,15 @@ class DynamicsProcessingEffectWrapper(
     }
 
     override fun destroy() {
+        handler.removeCallbacks(retry)
+        if (dpeCanary != null) {
+            try {
+                dpeCanary?.release()
+            } catch (e: RuntimeException) {
+                Log.e(TAG, "failed to release DPE canary", e)
+            }
+            dpeCanary = null
+        }
         if (effect != null) {
             Log.i(TAG, "release DPE")
             // DPE must be released synchronously to avoid getting the old effect instance
@@ -196,6 +206,7 @@ class DynamicsProcessingEffectWrapper(
                     hasControl = false
                     createDpeCanary()
                 }
+                hasControlListener?.invoke(hasControl)
             }
             // wow, we got here. very good.
             if (dpeCanary != null) {
@@ -237,7 +248,10 @@ class DynamicsProcessingEffectWrapper(
                     AudioEffect.EFFECT_TYPE_DYNAMICS_PROCESSING,
                     ReflectionAudioEffect.EFFECT_TYPE_NULL, Int.MIN_VALUE, audioSessionId
                 )
-                dpeCanary!!.setControlStatusListener { _, controlGranted ->
+                dpeCanary!!.setControlStatusListener { canary, controlGranted ->
+                    if (canary !== dpeCanary || !created || audioSessionId == 0) {
+                        return@setControlStatusListener
+                    }
                     Log.i(TAG, "dpe canary control state is now: $controlGranted")
                     if (controlGranted) {
                         try {
@@ -247,6 +261,7 @@ class DynamicsProcessingEffectWrapper(
                         }
                         dpeCanary = null
                         createDpeEffect()
+                        hasControlListener?.invoke(hasControl)
                     } else {
                         Log.e(TAG, "DPE canary lost control, but why did it ever have it?")
                         // an invalid state transition occurred, ensure we are using setVolume()
@@ -267,7 +282,7 @@ class DynamicsProcessingEffectWrapper(
                             Log.e(TAG, "failed to release DPE canary", e)
                         }
                         dpeCanary = null
-                        handler.postDelayed(this::tryRecreateIfFailed, 60000)
+                        handler.postDelayed(retry, 60000)
                     } else {
                         Log.w(TAG, "release dpe canary because we suddenly have control")
                         try {
@@ -296,6 +311,7 @@ class DynamicsProcessingEffectWrapper(
     fun tryRecreateIfFailed() {
         if (audioSessionId != 0 && created && dpeCanary == null && effect == null) {
             createDpeEffect()
+            hasControlListener?.invoke(hasControl)
         }
     }
 }

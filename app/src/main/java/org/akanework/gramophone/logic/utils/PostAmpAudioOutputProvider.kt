@@ -54,7 +54,9 @@ import kotlin.math.min
 // TODO: less hacky https://github.com/nift4/media/commit/2988651676987cfd42affc21e1939d6cacbfbe7f
 class PostAmpAudioOutputProvider(
     val sink: ExtendedAudioOutputProvider, val rgAp: ReplayGainAudioProcessor, val context: Context,
-    private val pcmMixing: Boolean = false
+    private val pcmMixing: Boolean = false,
+    private val sessionBoostCoordinator: SessionBoostCoordinator? = null,
+    private val deckId: String? = null,
 ) : ForwardingAudioOutputProvider(sink), AudioSystemHiddenApi.VolumeChangeListener {
     companion object {
         private const val TAG = "PostAmpAOP"
@@ -131,6 +133,8 @@ class PostAmpAudioOutputProvider(
     private var rgVolume = 1f
 
     init {
+        require((sessionBoostCoordinator == null) == (deckId == null))
+        require(sessionBoostCoordinator == null || pcmMixing)
         var forVolumeChanged = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
         if (!forVolumeChanged) {
             try {
@@ -161,7 +165,7 @@ class PostAmpAudioOutputProvider(
             }
             rgAp.boostGainChangedListener = {
                 handler?.post { // if null, there are no effects that need to be notified anyway
-                    if (dpeEffect != null) {
+                    if (sessionBoostCoordinator != null || dpeEffect != null) {
                         calculateGain()
                     } else if (volumeEffect != null) {
                         updateVolumeEffect()
@@ -225,8 +229,11 @@ class PostAmpAudioOutputProvider(
             tags = ReplayGainUtil.parse(pendingFormat)
             pendingFormat = null
         }
-        calculateGain() // parse new tags and apply to DPE/setVolume()
-        return InnerAudioOutput(ao).also { currentAudioOutput = it }
+        if (sessionBoostCoordinator == null) calculateGain()
+        return InnerAudioOutput(ao).also {
+            currentAudioOutput = it
+            if (sessionBoostCoordinator != null) calculateGain()
+        }
     }
 
     private inner class InnerAudioOutput(val ao: ExtendedAudioOutput) :
@@ -273,7 +280,7 @@ class PostAmpAudioOutputProvider(
                         "(${routedDevice?.type?.let { audioDeviceTypeToString(context, it) }})"
             )
             deviceType = routedDevice?.type
-            if (dpeEffect != null) {
+            if (sessionBoostCoordinator != null || dpeEffect != null) {
                 calculateGain() // device change may have changed available headroom, recalculate boost
             } else {
                 updateVolumeEffect() // device change reset the Volume effect state, configure it again
@@ -476,7 +483,7 @@ class PostAmpAudioOutputProvider(
     }
 
     private fun onVolumeChanged() {
-        if (dpeEffect != null) {
+        if (sessionBoostCoordinator != null || dpeEffect != null) {
             // have to recalculate gain to avoid clipping if boost headroom just got too small
             calculateGain()
         } else if (volumeEffect != null) {
@@ -485,6 +492,16 @@ class PostAmpAudioOutputProvider(
     }
 
     private fun calculateGain() {
+        if (sessionBoostCoordinator != null) {
+            val boost = synchronized(rgAp) { rgAp.boostGain }
+            val mixerVolumeDb = getCurrentMixerVolume()
+            val gainMb = (min(getHeadroomDb(), boost.coerceAtLeast(0).toFloat()) * 100f).toInt()
+            sessionBoostCoordinator.updateRequirement(
+                checkNotNull(deckId), gainMb, mixerVolumeDb, currentAudioOutput?.volume ?: 1f,
+                boost.coerceAtLeast(0) * 100
+            )
+            return
+        }
         val lastRgVolume = rgVolume
         // Nonchalantly borrow settings from ReplayGainAudioProcessor
         val mode: Mode
@@ -566,6 +583,7 @@ class PostAmpAudioOutputProvider(
     private fun mySetAudioSessionId(id: Int?) {
         if (handler == null)
             handler = Handler(Looper.myLooper()!!)
+        if (id != null) sessionBoostCoordinator?.requireSessionId(id)
         val offloadEnabled: Boolean
         synchronized(rgAp) {
             offloadEnabled = rgAp.offloadEnabled
@@ -577,10 +595,15 @@ class PostAmpAudioOutputProvider(
             dpeEffect?.audioSessionId = id
             volumeEffect?.audioSessionId = id
         }
+        if (sessionBoostCoordinator != null) return
         createEffectsIfNeeded()
     }
 
     private fun updateVolumeEffect() {
+        if (sessionBoostCoordinator != null) {
+            calculateGain()
+            return
+        }
         if (volumeEffect == null) return
         val boostGainDb: Int
         synchronized(rgAp) {
@@ -615,6 +638,7 @@ class PostAmpAudioOutputProvider(
             rgAp.boostGainChangedListener = null
             rgAp.offloadEnabledChangedListener = null
         }
+        sessionBoostCoordinator?.updateRequirement(checkNotNull(deckId), 0, null, 1f)
         dpeEffect?.releaseSafe()
         dpeEffect = null
         volumeEffect?.releaseSafe()

@@ -34,6 +34,7 @@ import androidx.media3.common.audio.AudioBecomingNoisyManager
 import androidx.media3.common.audio.AudioManagerCompat
 import androidx.media3.common.util.Clock
 import androidx.media3.common.util.Log
+import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -50,6 +51,7 @@ import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.ReplayGainUtil
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
+import org.akanework.gramophone.logic.utils.SessionBoostCoordinator
 import androidx.media3.common.Format
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
@@ -71,7 +73,9 @@ class AutomixPlayer private constructor(
         playbackLooper: Looper? = null,
         onFormatChanged: (Boolean, Format?) -> Unit = { _, _ -> },
         onSinkCreated: (Boolean, PostAmpAudioOutputProvider) -> Unit = { _, _ -> },
-    ) : this(createDecks(context, replayGainSettings, playbackLooper, onFormatChanged, onSinkCreated))
+        audioSessionId: Int = C.AUDIO_SESSION_ID_UNSET,
+        analysisCache: TrackAnalysisCache? = null,
+    ) : this(createDecks(context, replayGainSettings, playbackLooper, onFormatChanged, onSinkCreated, audioSessionId, analysisCache))
 
     private constructor(decks: Decks) : this(decks, SwappableDeckPlayer(decks.a))
 
@@ -82,6 +86,9 @@ class AutomixPlayer private constructor(
         val factoryA: GramophoneRenderFactory,
         val factoryB: GramophoneRenderFactory,
         val capture: Capture,
+        val boostCoordinator: SessionBoostCoordinator,
+        val audioSessionId: Int,
+        val analysisCache: TrackAnalysisCache?,
     )
 
     private class Capture {
@@ -101,12 +108,21 @@ class AutomixPlayer private constructor(
             playbackLooper: Looper?,
             onFormatChanged: (Boolean, Format?) -> Unit,
             onSinkCreated: (Boolean, PostAmpAudioOutputProvider) -> Unit,
+            requestedSessionId: Int,
+            analysisCache: TrackAnalysisCache?,
         ): Decks {
             val app = context.applicationContext
             val capture = Capture()
+            val sessionId = if (requestedSessionId != C.AUDIO_SESSION_ID_UNSET) requestedSessionId
+                else Util.generateAudioSessionId(app)
+            check(sessionId > 0) { "Unable to generate an audio session ID" }
+            val coordinator = SessionBoostCoordinator(Handler(Looper.myLooper()!!), sessionId)
+            coordinator.registerDeck("deckA")
+            coordinator.registerDeck("deckB")
             fun factory(isA: Boolean) = GramophoneRenderFactory(
                 app, { onFormatChanged(isA, it) }, { onSinkCreated(isA, it) }, pcmMixing = true,
-                onPcmTransient = { capture.listener?.invoke(isA, it) }
+                onPcmTransient = { capture.listener?.invoke(isA, it) },
+                sessionBoostCoordinator = coordinator, deckId = if (isA) "deckA" else "deckB",
             ).apply {
                 replayGainAudioProcessor.applySettings(settings)
                 setEnableHighResolutionPcmOutput(true)
@@ -134,9 +150,19 @@ class AutomixPlayer private constructor(
                 player(bFactory)
             } catch (e: RuntimeException) {
                 a.release()
+                coordinator.release()
                 throw e
             }
-            return Decks(app, a, b, aFactory, bFactory, capture)
+            try {
+                a.setAudioSessionId(sessionId)
+                b.setAudioSessionId(sessionId)
+            } catch (e: RuntimeException) {
+                b.release()
+                a.release()
+                coordinator.release()
+                throw e
+            }
+            return Decks(app, a, b, aFactory, bFactory, capture, coordinator, sessionId, analysisCache)
         }
     }
 
@@ -174,12 +200,12 @@ class AutomixPlayer private constructor(
     private val samplesB = ArrayDeque<Long>()
     private var samplesPeriodA: Any? = null
     private var samplesPeriodB: Any? = null
-    var onActiveAudioSessionChanged: ((Int) -> Unit)? = null
     var onActiveDeckChanged: ((ExoPlayer, ExoPlayer) -> Unit)? = null
 
     private val active: ExoPlayer get() = if (transition.activeDeck == DeckTransition.Deck.A) decks.a else decks.b
     private val standby: ExoPlayer get() = if (transition.standbyDeck == DeckTransition.Deck.A) decks.a else decks.b
     val activeExoPlayer: ExoPlayer get() = active
+    internal fun deckAudioSessionIds(): Pair<Int, Int> = decks.a.audioSessionId to decks.b.audioSessionId
     val wantsPlayback: Boolean get() = desiredPlay
     private val activeProcessor: ReplayGainAudioProcessor
         get() = if (transition.activeDeck == DeckTransition.Deck.A)
@@ -243,6 +269,7 @@ class AutomixPlayer private constructor(
         decks.b.addListener(listenerB)
         noisyManager.setEnabled(true)
         decks.b.volume = 0f
+        applyVolumes()
         scope.launch {
             while (isActive) {
                 tick()
@@ -398,6 +425,7 @@ class AutomixPlayer private constructor(
         abandonFocus()
         standby.release()
         forwarding.release()
+        decks.boostCoordinator.release()
     }
 
     override fun seekTo(positionMs: Long) {
@@ -515,6 +543,11 @@ class AutomixPlayer private constructor(
     }
 
     private fun applyVolumes() {
+        decks.boostCoordinator.updateFadeWeights(
+            if (transition.activeDeck == DeckTransition.Deck.A) "deckA" else "deckB", activeGain,
+            if (transition.standbyDeck == DeckTransition.Deck.A) "deckA" else "deckB", standbyGain,
+            transition.phase == DeckTransition.Phase.FADING
+        )
         active.volume = userVolume * focusVolume * activeGain
         standby.volume = userVolume * focusVolume * standbyGain
     }
@@ -537,14 +570,16 @@ class AutomixPlayer private constructor(
         samples.addLast(event.positionUs)
     }
 
-    private fun bpm(player: ExoPlayer): Float? {
-        BpmTags.read(player.audioFormat?.metadata)?.let { return it }
+    private fun audioMetadata(player: ExoPlayer): ResolvedTrackAudioMetadata {
+        val tags = mutableListOf(player.audioFormat?.metadata)
         for (group in player.currentTracks.groups) {
             for (index in 0 until group.length) {
-                BpmTags.read(group.getTrackFormat(index).metadata)?.let { return it }
+                tags.add(group.getTrackFormat(index).metadata)
             }
         }
-        return null
+        val key = player.currentMediaItem?.let(AnalysisKey::from)
+        val cached = key?.let { decks.analysisCache?.peek(it) }
+        return TrackAudioMetadataResolver.resolve(tags, cached, player.currentPosition)
     }
 
     private fun cancelTransition() {
@@ -564,10 +599,6 @@ class AutomixPlayer private constructor(
     }
 
     private fun deckListener(deck: ExoPlayer) = object : Player.Listener {
-        override fun onAudioSessionIdChanged(audioSessionId: Int) {
-            if (!released && deck === active) onActiveAudioSessionChanged?.invoke(audioSessionId)
-        }
-
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             if (released) return
             if (deck === standby) {
@@ -634,10 +665,9 @@ class AutomixPlayer private constructor(
                 cancelTransition()
                 return
             }
-            if (active.audioSessionId != C.AUDIO_SESSION_ID_UNSET &&
-                active.audioSessionId == standby.audioSessionId
-            ) {
-                Log.e(TAG, "Deck audio sessions collided during crossfade")
+            if (active.audioSessionId != decks.audioSessionId ||
+                standby.audioSessionId != decks.audioSessionId) {
+                Log.e(TAG, "Deck audio sessions diverged during crossfade")
                 cancelTransition()
                 nextItem = null
                 return
@@ -687,22 +717,26 @@ class AutomixPlayer private constructor(
         val activeSession = active.audioSessionId
         val standbySession = standby.audioSessionId
         if (activeSession == C.AUDIO_SESSION_ID_UNSET || standbySession == C.AUDIO_SESSION_ID_UNSET) return
-        if (activeSession == standbySession) {
-            Log.e(TAG, "Deck audio sessions must be distinct; cancelling crossfade")
+        if (activeSession != decks.audioSessionId || standbySession != decks.audioSessionId) {
+            Log.e(TAG, "Deck audio sessions do not match; cancelling crossfade")
             cancelTransition()
             nextItem = null
             return
         }
 
         if (pendingStartPositionMs == null) {
-            val outBpm = bpm(active)
-            val inBpm = bpm(standby)
+            val outgoing = audioMetadata(active)
+            val incoming = audioMetadata(standby)
+            val outBpm = outgoing.bpm
+            val inBpm = incoming.bpm
             val outgoingSamples = if (transition.activeDeck == DeckTransition.Deck.A) samplesA else samplesB
             val incomingSamples = if (transition.standbyDeck == DeckTransition.Deck.A) samplesA else samplesB
             val alignment = if (beatmatchEnabled) BeatPhaseAligner.align(
                 outBpm, inBpm,
-                BeatPhaseAligner.estimate(outBpm, outgoingSamples.toList()),
-                BeatPhaseAligner.estimate(inBpm, incomingSamples.toList()),
+                outgoing.beatGrid?.takeIf { it.confidence >= 0.8f }
+                    ?: BeatPhaseAligner.estimate(outBpm, outgoingSamples.toList()),
+                incoming.beatGrid?.takeIf { it.confidence >= 0.8f }
+                    ?: BeatPhaseAligner.estimate(inBpm, incomingSamples.toList()),
                 active.currentPosition.toDouble(), standby.currentPosition.toDouble()
             ) else null
             matchedSpeed = alignment?.incomingSpeed ?: 1f
@@ -727,6 +761,7 @@ class AutomixPlayer private constructor(
         standby.playbackParameters = PlaybackParameters(matchedSpeed, active.playbackParameters.pitch)
         transition.start(fadeDuration, SystemClock.elapsedRealtime())
         transition.pause(SystemClock.elapsedRealtime())
+        applyVolumes()
         standby.playWhenReady = true
     }
 
@@ -748,7 +783,6 @@ class AutomixPlayer private constructor(
         outgoing.stop()
         outgoing.shuffleOrder = ShuffleOrder.DefaultShuffleOrder(outgoing.mediaItemCount)
         outgoing.clearMediaItems()
-        onActiveAudioSessionChanged?.invoke(incoming.audioSessionId)
     }
 }
 

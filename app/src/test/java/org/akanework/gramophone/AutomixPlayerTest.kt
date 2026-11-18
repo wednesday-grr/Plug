@@ -43,6 +43,25 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class, sdk = [25])
 class AutomixPlayerTest {
     @Test
+    fun bothDecksUseTheRequestedSession() {
+        val context = RuntimeEnvironment.getApplication()
+        shadowOf(context).grantPermissions("${context.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
+        val sessionId = (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+            .generateAudioSessionId()
+        val player = AutomixPlayer(
+            context, ReplayGainAudioProcessor().snapshotSettings(), audioSessionId = sessionId
+        )
+        try {
+            assertEquals(sessionId to sessionId, player.deckAudioSessionIds())
+            player.updateAutomixConfig(true, false, 5)
+            player.stop()
+            assertEquals(sessionId to sessionId, player.deckAudioSessionIds())
+        } finally {
+            player.release()
+        }
+    }
+
+    @Test
     fun queueVolumeAndControlsRemainUsableWithoutASecondTrack() {
         val context = RuntimeEnvironment.getApplication()
         shadowOf(context).grantPermissions("${context.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
