@@ -69,6 +69,7 @@ class AfFormatTracker(
     private var lastAudioOutput: ExtendedAudioOutput? = null
     private var lastPeriodUid: Any? = null
     private var audioSink: PostAmpAudioOutputProvider? = null
+    @Volatile private var detached = false
     var format: AfFormatInfo? = null
         private set
     var formatChangedCallback: ((AfFormatInfo?, Any?) -> Unit)? = null
@@ -76,6 +77,7 @@ class AfFormatTracker(
     private val routingChangedListener = ::onRoutingChanged
 
     private fun onRoutingChanged(router: ExtendedAudioOutput) {
+        if (detached) return
         val audioOutput = (audioSink ?: throw NullPointerException(
             "audioSink is null in onAudioTrackInitialized"
         )).getExtendedAudioOutput()
@@ -88,12 +90,23 @@ class AfFormatTracker(
         this.audioSink = sink
     }
 
+    fun detach() {
+        detached = true
+        playbackHandler.post {
+            lastAudioOutput?.removeOnRoutingChangedListener(routingChangedListener)
+            lastAudioOutput = null
+            lastPeriodUid = null
+            audioSink = null
+        }
+    }
+
     override fun onAudioTrackInitialized(
         eventTime: AnalyticsListener.EventTime,
         audioTrackConfig: AudioTrackConfig
     ) {
         format = null
         playbackHandler.post {
+            if (detached) return@post
             val audioOutput = (audioSink ?: throw NullPointerException(
                 "audioSink is null in onAudioTrackInitialized"
             )).getExtendedAudioOutput()
@@ -114,6 +127,7 @@ class AfFormatTracker(
     ) {
         if (!playbackHandler.looper.thread.isAlive) return
         playbackHandler.post {
+            if (detached) return@post
             if (lastAudioOutput?.isInitialized == false) {
                 lastAudioOutput?.removeOnRoutingChangedListener(routingChangedListener)
                 lastAudioOutput = null

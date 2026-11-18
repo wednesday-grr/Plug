@@ -131,6 +131,9 @@ import org.akanework.gramophone.logic.utils.MediaItemList
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.ReplayGainUtil
 import org.akanework.gramophone.logic.utils.SemanticLyrics
+import org.akanework.gramophone.logic.utils.automix.AutomixOffloadPolicy
+import org.akanework.gramophone.logic.utils.automix.AutomixPlayer
+import org.akanework.gramophone.logic.utils.automix.AutomixSettingsStore
 
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
@@ -220,9 +223,14 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private lateinit var nm: NotificationManagerCompat
     private lateinit var lastPlayedManager: LastPlayedManager
     private lateinit var prefs: SharedPreferences
+    internal lateinit var automixSettings: AutomixSettingsStore
+        private set
     private var lastSentHighlightedLyric: String? = null
     private var lastSentNotificationLyric: String? = null
     private lateinit var afFormatTracker: AfFormatTracker
+    private var automixPlayer: AutomixPlayer? = null
+    private var automixTrackers: List<AfFormatTracker> = emptyList()
+    private val playerEventLogger = EventLogger()
     private lateinit var rgAp: ReplayGainAudioProcessor
     private var rgMode = 0 // 0 = disabled, 1 = track, 2 = album, 3 = smart
     private var updatedLyricAtLeastOnce = false
@@ -326,6 +334,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         mainExecutor = ContextCompat.getMainExecutor(this)
         nm = NotificationManagerCompat.from(this)
         prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        automixSettings = AutomixSettingsStore(prefs)
         qb = QueueBoard(this)
         setListener(this)
         setMediaNotificationProvider(
@@ -377,89 +386,27 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     .setSessionCommand(SessionCommand(SessionCommand.COMMAND_CODE_SESSION_SET_RATING), HeartRating(false))
                     .build(),
             )
-        afFormatTracker = AfFormatTracker(this, playbackHandler, handler)
-        afFormatTracker.formatChangedCallback = { format, period ->
-            if (period != null) {
-                handler.post {
-                    val currentPeriod = endedWorkaroundPlayer?.exoPlayer?.currentPeriodIndex
-                        ?.takeIf { it != C.INDEX_UNSET && (endedWorkaroundPlayer?.exoPlayer
-                            ?.currentTimeline?.periodCount ?: 0) > it }?.let {
-                                endedWorkaroundPlayer!!.exoPlayer.currentTimeline
-                                    .getUidOfPeriod(it) }
-                    if (currentPeriod != period) {
-                        if (format != null) {
-                            pendingAfTrackFormats[period] = format
-                        } else {
-                            pendingAfTrackFormats.remove(period)
-                        }
-                    } else {
-                        afTrackFormat = format?.let { period to it }
-                        mediaSession?.broadcastCustomCommand(
-                            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
-                            Bundle.EMPTY
-                        )
-                    }
-                }
-            } else {
-                Log.e(TAG, "mediaPeriodId is NULL in formatChangedCallback!!")
-            }
-        }
-        rgAp = ReplayGainAudioProcessor()
+        afFormatTracker = createAfFormatTracker()
+        val renderFactory = createRenderFactory(
+            afFormatTracker, automixSettings.settings.value.enabled
+        )
+        rgAp = renderFactory.replayGainAudioProcessor
         prefs.registerOnSharedPreferenceChangeListener(this)
         onSharedPreferenceChanged(prefs, null) // read initial values
+        val offloadPreferences = getAudioOffloadPreferences()
+        rgAp.setOffloadEnabled(
+            offloadPreferences.audioOffloadMode !=
+                TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
+        )
         val player = EndedWorkaroundPlayer(
             this,
             prefs,
-            exoPlayer = ExoPlayer.Builder(
-                this,
-                GramophoneRenderFactory(
-                    this, rgAp, this::onAudioSinkInputFormatChanged,
-                    afFormatTracker::setAudioSink
-                )
-                    .setEnableHighResolutionPcmOutput(true)
-                    .setEnableDecoderFallback(true)
-                    .setEnableAudioOutputPlaybackParameters(true)
-                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
-                GramophoneMediaSourceFactory(
-                    DefaultDataSource.Factory(this),
-                    GramophoneExtractorsFactory().also {
-                        it.setConstantBitrateSeekingEnabled(true)
-                        it.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
-                    })
-            )
-                .setWakeMode(C.WAKE_MODE_LOCAL)
-                .setAudioAttributes(
-                    AudioAttributes
-                        .Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                        .build(), true
-                )
-                .setHandleAudioBecomingNoisy(true)
-                .setTrackSelector(DefaultTrackSelector(this).apply {
-                    setParameters(
-                        buildUponParameters()
-                        .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
-                        .setAudioOffloadPreferences(
-                            TrackSelectionParameters.AudioOffloadPreferences.Builder()
-                                .apply {
-                                    val config =
-                                        prefs.getStringStrict("offload", "0")?.toIntOrNull()
-                                    if (config != null && config > 0 && Flags.OFFLOAD) {
-                                        rgAp.setOffloadEnabled(true)
-                                        setAudioOffloadMode(TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
-                                        setIsGaplessSupportRequired(config == 2)
-                                    }
-                                }
-                                .build()))
-                })
-                .setPlaybackLooper(internalPlaybackThread.looper)
-                .build(),
+            exoPlayer = createExoPlayer(renderFactory, offloadPreferences),
             { lyrics },
             queueBoard = qb,
             getNotificationLyric = { lastSentNotificationLyric }
         )
-        player.exoPlayer.addAnalyticsListener(EventLogger())
+        player.exoPlayer.addAnalyticsListener(playerEventLogger)
         player.exoPlayer.addAnalyticsListener(afFormatTracker)
         player.exoPlayer.addAnalyticsListener(this)
         player.exoPlayer.setShuffleOrder(CircularShuffleOrder(player, 0, 0, Random.nextLong()))
@@ -575,6 +522,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 // Workaround for AA bug where content cannot be scrolled (androidx/media#2192)
                 .setPeriodicPositionUpdateEnabled(false)
                 .build()
+        if (automixSettings.settings.value.enabled) rebuildPlayerForAudioMode(true)
         addSession(mediaSession!!)
         controller = MediaBrowser.Builder(this, mediaSession!!.token).buildAsync().get()
         controller!!.addListener(this)
@@ -687,6 +635,34 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 }
         }
         Log.i(TAG, "-onCreate()")
+    }
+
+    private fun createAfFormatTracker(): AfFormatTracker {
+        val tracker = AfFormatTracker(this, playbackHandler, handler)
+        tracker.formatChangedCallback = { format, period ->
+            if (period != null) {
+                handler.post {
+                    if (afFormatTracker !== tracker) return@post
+                    val currentPeriod = endedWorkaroundPlayer?.exoPlayer?.currentPeriodIndex
+                        ?.takeIf { it != C.INDEX_UNSET && (endedWorkaroundPlayer?.exoPlayer
+                            ?.currentTimeline?.periodCount ?: 0) > it }?.let {
+                                endedWorkaroundPlayer!!.exoPlayer.currentTimeline
+                                    .getUidOfPeriod(it) }
+                    if (currentPeriod != period) {
+                        if (format != null) pendingAfTrackFormats[period] = format
+                        else pendingAfTrackFormats.remove(period)
+                    } else {
+                        afTrackFormat = format?.let { period to it }
+                        mediaSession?.broadcastCustomCommand(
+                            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY), Bundle.EMPTY
+                        )
+                    }
+                }
+            } else {
+                Log.e(TAG, "mediaPeriodId is NULL in formatChangedCallback!!")
+            }
+        }
+        return tracker
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -832,6 +808,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         controller = null
         mediaSession!!.release()
         endedWorkaroundPlayer!!.release()
+        if (automixTrackers.isEmpty()) afFormatTracker.detach()
+        else automixTrackers.forEach(AfFormatTracker::detach)
+        automixTrackers = emptyList()
         mediaSession = null
         broadcastAudioSessionClose()
         LyricWidgetProvider.update(this)
@@ -909,6 +888,18 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String?) {
+        automixSettings.onPreferenceChanged(key)
+        if (key == "automix_enabled") {
+            rebuildPlayerForAudioMode(automixSettings.settings.value.enabled)
+        } else if (key == "automix_beatmatch_enabled" || key == "automix_duration_sec") {
+            automixSettings.settings.value.let { settings ->
+                automixPlayer?.updateAutomixConfig(
+                    settings.enabled, settings.beatmatchEnabled, settings.durationSeconds
+                )
+            }
+        } else if (key == "offload") {
+            updateAudioOffloadPreferences()
+        }
         var restart = false
         if (key == null || key == "notification_lyrics" || key == "status_bar_lyrics") {
             scheduleSendingLyrics(false)
@@ -934,15 +925,229 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             val boostGain = prefs.getIntStrict("rg_boost_gain", 0)
             restart = !rgAp.setBoostGain(boostGain) || restart
         }
+        if (key == null || key.startsWith("rg_")) {
+            automixPlayer?.let { restart = !it.applyReplayGainSettings(rgAp.snapshotSettings()) || restart }
+        }
         if (restart) {
             controller?.stop()
             controller?.prepare()
         }
     }
 
+    private fun getAudioOffloadPreferences(): TrackSelectionParameters.AudioOffloadPreferences =
+        AutomixOffloadPolicy.preferences(
+            automixSettings.settings.value.enabled,
+            Flags.OFFLOAD,
+            prefs.getStringStrict("offload", "0")?.toIntOrNull(),
+        )
+
+    private fun createExoPlayer(
+        renderFactory: GramophoneRenderFactory,
+        offloadPreferences: TrackSelectionParameters.AudioOffloadPreferences,
+    ): ExoPlayer = ExoPlayer.Builder(
+        this,
+        renderFactory
+            .setEnableHighResolutionPcmOutput(true)
+            .setEnableDecoderFallback(true)
+            .setEnableAudioOutputPlaybackParameters(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
+        GramophoneMediaSourceFactory(
+            DefaultDataSource.Factory(this),
+            GramophoneExtractorsFactory().also {
+                it.setConstantBitrateSeekingEnabled(true)
+                it.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
+            })
+    )
+        .setWakeMode(C.WAKE_MODE_LOCAL)
+        .setAudioAttributes(
+            AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true
+        )
+        .setHandleAudioBecomingNoisy(true)
+        .setTrackSelector(DefaultTrackSelector(this).apply {
+            setParameters(buildUponParameters()
+                .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
+                .setAudioOffloadPreferences(offloadPreferences))
+        })
+        .setPlaybackLooper(internalPlaybackThread.looper)
+        .build()
+
+    private fun createRenderFactory(
+        tracker: AfFormatTracker,
+        pcmMixing: Boolean,
+    ): GramophoneRenderFactory = GramophoneRenderFactory(
+        this,
+        { format ->
+            handler.post {
+                if (afFormatTracker === tracker) onAudioSinkInputFormatChanged(format)
+            }
+        },
+        tracker::setAudioSink,
+        pcmMixing,
+    )
+
+    private fun rebuildPlayerForAudioMode(pcmMixingMode: Boolean) {
+        val wrapper = endedWorkaroundPlayer ?: return
+        val oldEngine = wrapper.playbackEngine
+        val oldPlayer = wrapper.exoPlayer
+        val items = (0 until wrapper.mediaItemCount).map(wrapper::getMediaItemAt)
+        val index = wrapper.currentMediaItemIndex
+        val position = wrapper.currentPosition
+        val wasEnded = wrapper.playbackState == Player.STATE_ENDED
+        val shouldPrepare = oldPlayer.playbackState != Player.STATE_IDLE
+        val playWhenReady = (oldEngine as? AutomixPlayer)?.wantsPlayback ?: wrapper.playWhenReady
+        val shuffleOrder = oldPlayer.shuffleOrder
+        val settings = rgAp.snapshotSettings()
+        val offloadPreferences = getAudioOffloadPreferences()
+        val oldTracker = afFormatTracker
+        val newTracker = createAfFormatTracker()
+        val trackers = if (pcmMixingMode) listOf(newTracker, createAfFormatTracker()) else emptyList()
+        val sinkFormats = arrayOfNulls<Format>(2)
+        val deckAudioTracks = arrayOfNulls<AudioTrackInfo>(2)
+        val deckAudioTrackInitializations = IntArray(2)
+        val deckAudioTrackReleases = IntArray(2)
+        val deckDownstreamFormats = Array(2) { mutableListOf<Pair<Any, Pair<Int, Format>>>() }
+        val newAutomix = if (pcmMixingMode) AutomixPlayer(
+            this, settings, internalPlaybackThread.looper,
+            onFormatChanged = { isA, format ->
+                val tracker = trackers[if (isA) 0 else 1]
+                handler.post {
+                    sinkFormats[if (isA) 0 else 1] = format
+                    if (afFormatTracker === tracker) onAudioSinkInputFormatChanged(format)
+                }
+            },
+            onSinkCreated = { isA, sink -> trackers[if (isA) 0 else 1].setAudioSink(sink) }
+        ) else null
+        val renderFactory = if (newAutomix == null) createRenderFactory(newTracker, false) else null
+        val newProcessor = newAutomix?.activeReplayGainProcessor ?: renderFactory!!.replayGainAudioProcessor
+        if (newAutomix == null) newProcessor.applySettings(settings)
+        newProcessor.setOffloadEnabled(offloadPreferences.audioOffloadMode !=
+            TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
+        val newDeck = newAutomix?.activeExoPlayer ?: createExoPlayer(renderFactory!!, offloadPreferences)
+        val newEngine: Player = newAutomix ?: newDeck
+        if (newAutomix != null) {
+            val initialDeck = newDeck
+            newAutomix.addDeckAnalyticsListener(trackers[0], trackers[1])
+            fun deckAnalytics(index: Int) = object : AnalyticsListener {
+                override fun onAudioTrackInitialized(
+                    eventTime: AnalyticsListener.EventTime, audioTrackConfig: AudioSink.AudioTrackConfig
+                ) {
+                    deckAudioTrackInitializations[index]++
+                    deckAudioTracks[index] = AudioTrackInfo.fromMedia3AudioTrackConfig(audioTrackConfig)
+                }
+
+                override fun onAudioTrackReleased(
+                    eventTime: AnalyticsListener.EventTime, audioTrackConfig: AudioSink.AudioTrackConfig
+                ) {
+                    if (++deckAudioTrackReleases[index] == deckAudioTrackInitializations[index]) {
+                        deckAudioTracks[index] = null
+                    }
+                }
+
+                override fun onDownstreamFormatChanged(
+                    eventTime: AnalyticsListener.EventTime, mediaLoadData: MediaLoadData
+                ) {
+                    val period = eventTime.mediaPeriodId?.periodUid ?: return
+                    val format = mediaLoadData.trackFormat ?: return
+                    val formats = deckDownstreamFormats[index]
+                    formats.removeAll { it.first == period && it.second.first == mediaLoadData.trackType }
+                    formats.add(period to (mediaLoadData.trackType to format))
+                    if (formats.size > 64) formats.removeAt(0)
+                }
+            }
+            newAutomix.addDeckAnalyticsListener(deckAnalytics(0), deckAnalytics(1))
+            newAutomix.setAudioAttributes(
+                AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true
+            )
+            automixSettings.settings.value.let {
+                newAutomix.updateAutomixConfig(it.enabled, it.beatmatchEnabled, it.durationSeconds)
+            }
+            newAutomix.onActiveDeckChanged = { outgoing, incoming ->
+                val deckIndex = if (incoming === initialDeck) 0 else 1
+                outgoing.removeAnalyticsListener(this)
+                outgoing.removeAnalyticsListener(playerEventLogger)
+                incoming.addAnalyticsListener(this)
+                incoming.addAnalyticsListener(playerEventLogger)
+                afFormatTracker = trackers[deckIndex]
+                rgAp = newAutomix.activeReplayGainProcessor
+                onAudioSinkInputFormatChanged(sinkFormats[deckIndex])
+                val periodIndex = incoming.currentPeriodIndex
+                val period = if (periodIndex != C.INDEX_UNSET &&
+                    periodIndex < incoming.currentTimeline.periodCount
+                ) incoming.currentTimeline.getUidOfPeriod(periodIndex) else null
+                afTrackFormat = period?.let { uid ->
+                    afFormatTracker.format
+                        ?.takeIf { it.audioSessionId == incoming.audioSessionId }
+                        ?.let { uid to it }
+                }
+                audioTrackInfo = deckAudioTracks[deckIndex]
+                audioTrackInfoCounter = if (audioTrackInfo == null) 0 else 1
+                audioTrackReleaseCounter = 0
+                downstreamFormat.clear()
+                pendingDownstreamFormat.clear()
+                pendingAfTrackFormats.clear()
+                downstreamFormat.addAll(deckDownstreamFormats[deckIndex].filter { it.first == period })
+                deckDownstreamFormats[1 - deckIndex].clear()
+                mediaSession?.broadcastCustomCommand(
+                    SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY), Bundle.EMPTY
+                )
+            }
+            newAutomix.onActiveAudioSessionChanged = { id ->
+                if (id != C.AUDIO_SESSION_ID_UNSET) onAudioSessionIdChanged(id)
+            }
+        } else if (oldPlayer.audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            newDeck.setAudioSessionId(oldPlayer.audioSessionId)
+        }
+        newEngine.repeatMode = wrapper.repeatMode
+        newEngine.shuffleModeEnabled = wrapper.shuffleModeEnabled
+        newEngine.playbackParameters = wrapper.playbackParameters
+        newEngine.volume = wrapper.volume
+        newDeck.pauseAtEndOfMediaItems = oldPlayer.pauseAtEndOfMediaItems
+        newEngine.trackSelectionParameters = oldPlayer.trackSelectionParameters.buildUpon()
+            .setAudioOffloadPreferences(offloadPreferences).build()
+        if (items.isNotEmpty()) newEngine.setMediaItems(items, index, position)
+        newDeck.setShuffleOrder(shuffleOrder)
+        newDeck.addAnalyticsListener(playerEventLogger)
+        if (newAutomix == null) newDeck.addAnalyticsListener(newTracker)
+        newDeck.addAnalyticsListener(this)
+        oldPlayer.removeAnalyticsListener(oldTracker)
+        oldPlayer.removeAnalyticsListener(this)
+        oldPlayer.removeAnalyticsListener(playerEventLogger)
+        if (automixTrackers.isEmpty()) oldTracker.detach()
+        else automixTrackers.forEach(AfFormatTracker::detach)
+        automixTrackers = trackers
+        automixPlayer = newAutomix
+        afFormatTracker = newTracker
+        rgAp = newProcessor
+        afTrackFormat = null
+        pendingAfTrackFormats.clear()
+        downstreamFormat.clear()
+        pendingDownstreamFormat.clear()
+        audioTrackInfo = null
+        audioTrackInfoCounter = 0
+        audioTrackReleaseCounter = 0
+        onAudioSinkInputFormatChanged(null)
+        wrapper.replacePlayer(newEngine, wasEnded)
+        oldEngine.release()
+        if (shouldPrepare) newEngine.prepare()
+        newEngine.playWhenReady = playWhenReady
+    }
+
+    private fun updateAudioOffloadPreferences() {
+        val player = endedWorkaroundPlayer?.exoPlayer ?: return
+        val offloadPreferences = getAudioOffloadPreferences()
+        rgAp.setOffloadEnabled(
+            offloadPreferences.audioOffloadMode !=
+                TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
+        )
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setAudioOffloadPreferences(offloadPreferences)
+            .build()
+    }
+
     private fun computeRgMode(force: Boolean): Boolean {
-        return rgAp.setMode(
-            when (rgMode) {
+        val mode = when (rgMode) {
                 0 -> ReplayGainUtil.Mode.None
                 1 -> ReplayGainUtil.Mode.Track
                 2 -> ReplayGainUtil.Mode.Album
@@ -962,8 +1167,8 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 }
 
                 else -> throw IllegalArgumentException("invalid rg mode $rgMode")
-            }, !force
-        )
+            }
+        return automixPlayer?.setReplayGainMode(mode, !force) ?: rgAp.setMode(mode, !force)
     }
 
     override fun onAudioSessionIdChanged(audioSessionId: Int) {

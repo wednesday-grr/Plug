@@ -102,6 +102,9 @@ class CircularShuffleOrder private constructor(
         return shuffled.size
     }
 
+    fun copy(): CircularShuffleOrder =
+        CircularShuffleOrder(listener, shuffled.copyOf(), random.nextLong(), seed)
+
     override fun getNextIndex(index: Int): Int {
         val shuffledIndex = indexInShuffled[index] + 1
         return if (shuffledIndex < shuffled.size) shuffled[shuffledIndex] else C.INDEX_UNSET

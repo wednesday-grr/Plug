@@ -53,7 +53,8 @@ import kotlin.math.min
 // TODO: less hacky https://github.com/nift4/media/commit/22d2156bec74542a0764bf0ec27c839cc70874ed
 // TODO: less hacky https://github.com/nift4/media/commit/2988651676987cfd42affc21e1939d6cacbfbe7f
 class PostAmpAudioOutputProvider(
-    val sink: ExtendedAudioOutputProvider, val rgAp: ReplayGainAudioProcessor, val context: Context
+    val sink: ExtendedAudioOutputProvider, val rgAp: ReplayGainAudioProcessor, val context: Context,
+    private val pcmMixing: Boolean = false
 ) : ForwardingAudioOutputProvider(sink), AudioSystemHiddenApi.VolumeChangeListener {
     companion object {
         private const val TAG = "PostAmpAOP"
@@ -180,9 +181,33 @@ class PostAmpAudioOutputProvider(
 
     fun getExtendedAudioOutput() = currentAudioOutput?.ao
 
+    override fun getFormatSupport(formatConfig: AudioOutputProvider.FormatConfig): AudioOutputProvider.FormatSupport {
+        if (pcmMixing && (formatConfig.format.sampleMimeType != MimeTypes.AUDIO_RAW ||
+                    formatConfig.format.pcmEncoding != C.ENCODING_PCM_16BIT &&
+                    formatConfig.format.pcmEncoding != C.ENCODING_PCM_FLOAT)
+        ) {
+            return AudioOutputProvider.FormatSupport.UNSUPPORTED
+        }
+        val support = super.getFormatSupport(formatConfig)
+        return if (pcmMixing) support.buildUpon()
+            .setIsGaplessSupportedForOffload(false)
+            .setIsSpeedChangeSupportedForOffload(false)
+            .setIsFormatSupportedForOffload(false)
+            .build() else support
+    }
+
     override fun getOutputConfig(formatConfig: AudioOutputProvider.FormatConfig): AudioOutputProvider.OutputConfig {
+        if (pcmMixing && (formatConfig.format.sampleMimeType != MimeTypes.AUDIO_RAW ||
+                    formatConfig.format.pcmEncoding != C.ENCODING_PCM_16BIT &&
+                    formatConfig.format.pcmEncoding != C.ENCODING_PCM_FLOAT)
+        ) {
+            throw AudioOutputProvider.ConfigurationException("Automix requires 16-bit or float PCM")
+        }
         pendingFormat = formatConfig.format
-        return super.getOutputConfig(formatConfig)
+        return super.getOutputConfig(if (pcmMixing) formatConfig.buildUpon()
+            .setEnableOffload(false)
+            .setEnablePlaybackParameters(false)
+            .build() else formatConfig)
     }
 
     override fun getAudioOutput(config: AudioOutputProvider.OutputConfig): AudioOutput {

@@ -76,7 +76,6 @@ import org.akanework.gramophone.logic.ui.BaseActivity
 import org.akanework.gramophone.logic.ui.placeholderScaleToFit
 import org.akanework.gramophone.logic.utils.CalculationUtils.convertDurationToTimeStamp
 import org.akanework.gramophone.logic.utils.Flags
-import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneMediaSourceFactory
 import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
@@ -180,12 +179,11 @@ class AudioPreviewActivity : BaseActivity(), View.OnClickListener {
             it.animate = false
         }
         // TODO de-dupe
-        val rgAp = ReplayGainAudioProcessor()
+        val renderFactory = GramophoneRenderFactory(this, {}, {})
+        val rgAp = renderFactory.replayGainAudioProcessor
         player = ExoPlayer.Builder(
             this,
-            GramophoneRenderFactory(
-                this,
-                rgAp, {}, {})
+            renderFactory
                 .setEnableHighResolutionPcmOutput(true)
                 .setEnableDecoderFallback(true)
                 .setEnableAudioOutputPlaybackParameters(true)

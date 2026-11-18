@@ -38,6 +38,7 @@ import org.akanework.gramophone.logic.parseQueueTitle
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.Flags
 import org.akanework.gramophone.logic.utils.SemanticLyrics
+import org.akanework.gramophone.logic.utils.automix.AutomixPlayer
 import org.json.JSONObject
 import org.akanework.gramophone.logic.getBooleanStrict
 import uk.akane.libphonograph.items.EXTRA_HD_ARTWORK_URI
@@ -53,7 +54,7 @@ import java.util.Objects
 class EndedWorkaroundPlayer(
     val context: Context,
     private val prefs: SharedPreferences,
-    exoPlayer: ExoPlayer,
+    exoPlayer: Player,
     private val getLyric: () -> SemanticLyrics?,
     val queueBoard: QueueBoard,
     private val getNotificationLyric: () -> CharSequence? = { null }
@@ -72,7 +73,50 @@ class EndedWorkaroundPlayer(
     }
 
     val exoPlayer
-        get() = player as ExoPlayer
+        get() = when (val delegate = player) {
+            is ExoPlayer -> delegate
+            is AutomixPlayer -> delegate.activeExoPlayer
+            else -> error("Unsupported playback engine ${delegate.javaClass.name}")
+        }
+    val playbackEngine: Player get() = player
+
+    fun replaceExoPlayer(newPlayer: ExoPlayer, wasEnded: Boolean) {
+        replacePlayer(newPlayer, wasEnded)
+    }
+
+    fun replacePlayer(newPlayer: Player, wasEnded: Boolean) {
+        require(newPlayer is ExoPlayer || newPlayer is AutomixPlayer)
+        player.removeListener(this)
+        isEnded = wasEnded
+        newPlayer.addListener(this)
+        setPlayer(newPlayer)
+        updateAutomixNext()
+    }
+
+    override fun handleRelease(): ListenableFuture<*> {
+        player.removeListener(this)
+        return super.handleRelease()
+    }
+
+    private fun updateAutomixNext() {
+        val automix = player as? AutomixPlayer ?: return
+        val index = if (automix.repeatMode == Player.REPEAT_MODE_ONE) C.INDEX_UNSET
+            else automix.nextMediaItemIndex
+        automix.setNextMediaItem(
+            if (index in 0 until automix.mediaItemCount) automix.getMediaItemAt(index) else null
+        )
+    }
+
+    override fun onEvents(player: Player, events: Player.Events) {
+        if (events.containsAny(
+                Player.EVENT_TIMELINE_CHANGED,
+                Player.EVENT_MEDIA_ITEM_TRANSITION,
+                Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED,
+                Player.EVENT_REPEAT_MODE_CHANGED,
+                Player.EVENT_POSITION_DISCONTINUITY
+            )
+        ) updateAutomixNext()
+    }
 
     var nextShuffleOrder: CircularShuffleOrder.Persistent? = null
     var currentQueueId: Long? = null

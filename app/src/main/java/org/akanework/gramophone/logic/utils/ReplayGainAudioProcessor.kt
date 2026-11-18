@@ -32,6 +32,14 @@ class ReplayGainAudioProcessor : BaseAudioProcessor() {
         private const val TAG = "ReplayGainAP"
     }
 
+    data class Settings(
+        val mode: ReplayGainUtil.Mode,
+        val rgGain: Int,
+        val nonRgGain: Int,
+        val boostGain: Int,
+        val reduceGain: Boolean,
+    )
+
     private var compressor: AdaptiveDynamicRangeCompression? = null
     var mode = ReplayGainUtil.Mode.None
         private set
@@ -54,6 +62,20 @@ class ReplayGainAudioProcessor : BaseAudioProcessor() {
     private var outputFloat: Boolean? = null
     private var pendingOutputFloat: Boolean? = null
     private var tags: ReplayGainUtil.ReplayGainInfo? = null
+
+    fun snapshotSettings(): Settings = synchronized(this) {
+        Settings(mode, rgGain, nonRgGain, boostGain, reduceGain)
+    }
+
+    fun applySettings(settings: Settings): Boolean {
+        var applied = setMode(settings.mode, false)
+        applied = setRgGain(settings.rgGain) && applied
+        applied = setNonRgGain(settings.nonRgGain) && applied
+        applied = setBoostGain(settings.boostGain) && applied
+        applied = setReduceGain(settings.reduceGain) && applied
+        return applied
+    }
+
     override fun queueInput(inputBuffer: ByteBuffer) {
         val frameCount = inputBuffer.remaining() / inputAudioFormat.bytesPerFrame
         val outputBuffer = replaceOutputBuffer(frameCount * outputAudioFormat.bytesPerFrame)

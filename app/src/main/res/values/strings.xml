@@ -11,7 +11,7 @@
     <eat-comment />
 
     <!-- If your language uses a latin script: use "Gramophone", please do not translate. If your language uses a different script: translate "Gramophone" into your language. -->
-    <string name="app_name">Gramophone</string>
+    <string name="app_name">Plug</string>
     <!-- Menu item in home screen -->
     <string name="home_menu_search">Search</string>
     <!-- Menu item in home screen -->
@@ -1140,6 +1140,12 @@
     <!-- Used in audio settings, this is a technical/"brand" name for an interoperable audio
     loudness normalization feature established since 2002 -->
     <string name="settings_replaygain">ReplayGain</string>
+    <!-- Automix controls in audio settings -->
+    <string name="settings_automix_category">Automix</string>
+    <string name="settings_automix_enabled">Enable Automix</string>
+    <string name="settings_automix_description">Crossfade between tracks. Audio offload is disabled while Automix is enabled.</string>
+    <string name="settings_automix_beatmatch">DJ beatmatching / tempo sync</string>
+    <string name="settings_automix_duration">Crossfade duration (seconds)</string>
     <!-- Change the ReplayGain (this is a technical/"brand" name for an interoperable audio loudness
     normalization feature established since 2002) mode between off, Preserve album dynamics, All
     tracks equal loudness and Smart -->

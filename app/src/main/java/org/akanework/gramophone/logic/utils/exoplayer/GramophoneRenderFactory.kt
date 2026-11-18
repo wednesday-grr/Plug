@@ -24,6 +24,7 @@ import androidx.media3.common.Format
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.AudioProcessorChain
+import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.audio.AudioRendererEventListener
@@ -36,15 +37,23 @@ import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
+import org.akanework.gramophone.logic.utils.automix.PcmTransientAudioProcessor
 import org.nift4.alacdecoder.AlacRenderer
 
 class GramophoneRenderFactory(
     context: Context,
-    private val rgAp: ReplayGainAudioProcessor,
     private val configurationListener: (Format?) -> Unit,
-    private val audioSinkListener: (PostAmpAudioOutputProvider) -> Unit
+    private val audioSinkListener: (PostAmpAudioOutputProvider) -> Unit,
+    private val pcmMixing: Boolean = false,
+    private val onPcmTransient: ((PcmTransientAudioProcessor.Transient) -> Unit)? = null,
 ) :
     DefaultRenderersFactory(context) {
+    init {
+        require(pcmMixing || onPcmTransient == null) { "PCM capture requires PCM mixing mode" }
+    }
+    val replayGainAudioProcessor = ReplayGainAudioProcessor()
+    private var audioSinkCreated = false
+
     override fun buildTextRenderers(
         context: Context,
         output: TextOutput,
@@ -108,21 +117,33 @@ class GramophoneRenderFactory(
         pcmEncodingRestrictionLifted: Boolean,
         enableAudioTrackPlaybackParams: Boolean
     ): AudioSink {
+        check(!audioSinkCreated) { "A render factory cannot be shared between players" }
+        audioSinkCreated = true
+        val rgAp = replayGainAudioProcessor
+        val sonic = if (pcmMixing) SonicAudioProcessor() else null
+        val pcmTap = onPcmTransient?.let(::PcmTransientAudioProcessor)
         val builder = DefaultAudioSink.Builder(context)
         val aop = PostAmpAudioOutputProvider(
             ExtendedAudioOutputProvider(AudioTrackAudioOutputProvider.Builder(context)
-                .setMaxPlaybackSpeed(4f).build()), rgAp, context)
+                .setMaxPlaybackSpeed(4f).build()), rgAp, context, pcmMixing)
         builder.setAudioOutputProvider(aop)
-        builder.setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
+        builder.setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams && !pcmMixing)
         builder.setEnableHighResolutionPcmOutput(pcmEncodingRestrictionLifted)
         builder.setAudioProcessorChain(object : AudioProcessorChain {
             override fun getAudioProcessors(inputFormat: Format): Array<out AudioProcessor> {
                 rgAp.setRootFormat(inputFormat)
-                return arrayOf(rgAp)
+                return when {
+                    sonic == null -> arrayOf(rgAp)
+                    pcmTap == null -> arrayOf(rgAp, sonic)
+                    else -> arrayOf(pcmTap, rgAp, sonic)
+                }
             }
 
             override fun applyPlaybackParameters(playbackParameters: PlaybackParameters): PlaybackParameters {
-                return PlaybackParameters.DEFAULT
+                if (sonic == null) return PlaybackParameters.DEFAULT
+                sonic.setSpeed(playbackParameters.speed)
+                sonic.setPitch(playbackParameters.pitch)
+                return playbackParameters
             }
 
             override fun applySkipSilenceEnabled(skipSilenceEnabled: Boolean): Boolean {
@@ -130,7 +151,8 @@ class GramophoneRenderFactory(
             }
 
             override fun getMediaDuration(playoutDuration: Long): Long {
-                return playoutDuration
+                return if (sonic?.isActive == true) sonic.getMediaDuration(playoutDuration)
+                    else playoutDuration
             }
 
             override fun getSkippedOutputFrameCount(): Long {
