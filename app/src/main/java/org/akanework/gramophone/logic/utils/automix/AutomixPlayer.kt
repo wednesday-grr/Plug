@@ -53,9 +53,9 @@ import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
 import org.akanework.gramophone.logic.utils.SessionBoostCoordinator
 import androidx.media3.common.Format
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneMediaSourceFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugRenderFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugExtractorsFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugMediaSourceFactory
 import kotlin.math.ceil
 import kotlin.random.Random
 
@@ -83,8 +83,8 @@ class AutomixPlayer private constructor(
         val context: Context,
         val a: ExoPlayer,
         val b: ExoPlayer,
-        val factoryA: GramophoneRenderFactory,
-        val factoryB: GramophoneRenderFactory,
+        val factoryA: PlugRenderFactory,
+        val factoryB: PlugRenderFactory,
         val capture: Capture,
         val boostCoordinator: SessionBoostCoordinator,
         val audioSessionId: Int,
@@ -119,7 +119,7 @@ class AutomixPlayer private constructor(
             val coordinator = SessionBoostCoordinator(Handler(Looper.myLooper()!!), sessionId)
             coordinator.registerDeck("deckA")
             coordinator.registerDeck("deckB")
-            fun factory(isA: Boolean) = GramophoneRenderFactory(
+            fun factory(isA: Boolean) = PlugRenderFactory(
                 app, { onFormatChanged(isA, it) }, { onSinkCreated(isA, it) }, pcmMixing = true,
                 onPcmTransient = { capture.listener?.invoke(isA, it) },
                 sessionBoostCoordinator = coordinator, deckId = if (isA) "deckA" else "deckB",
@@ -131,10 +131,10 @@ class AutomixPlayer private constructor(
             }
             val aFactory = factory(true)
             val bFactory = factory(false)
-            fun player(factory: GramophoneRenderFactory): ExoPlayer {
-                val builder = ExoPlayer.Builder(app, factory, GramophoneMediaSourceFactory(
+            fun player(factory: PlugRenderFactory): ExoPlayer {
+                val builder = ExoPlayer.Builder(app, factory, PlugMediaSourceFactory(
                     DefaultDataSource.Factory(app),
-                    GramophoneExtractorsFactory().apply {
+                    PlugExtractorsFactory().apply {
                         setConstantBitrateSeekingEnabled(true)
                         setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
                     }

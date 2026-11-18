@@ -55,7 +55,7 @@ private const val QUEUE_EXPIRY_MS = 10 * 3600000 // 10 hrs
  *  A non-original queue is any queue the user has intentionally created or modified. These queues will not be automatically replaced.
  */
 class QueueBoard(
-    private val player: GramophonePlaybackService,
+    private val player: PlugPlaybackService,
     queues: MutableList<MultiQueueObject> = ArrayList(),
 ) {
     private val QUEUE_DEBUG = true // TODO: disable when done

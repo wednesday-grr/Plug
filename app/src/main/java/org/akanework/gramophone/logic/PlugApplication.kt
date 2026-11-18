@@ -65,11 +65,11 @@ import java.io.IOException
 import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.milliseconds
 
-class GramophoneApplication : Application(), SingletonImageLoader.Factory,
+class PlugApplication : Application(), SingletonImageLoader.Factory,
     Thread.UncaughtExceptionHandler, SharedPreferences.OnSharedPreferenceChangeListener {
 
     companion object {
-        private const val TAG = "GramophoneApplication"
+        private const val TAG = "PlugApplication"
     }
 
     init {
@@ -166,7 +166,7 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory,
                 .penaltyDeath()
                 .build()
         }
-        android.util.Log.d(TAG, "GramophoneApplication.onCreate()")
+        android.util.Log.d(TAG, "PlugApplication.onCreate()")
         org.nift4.mediastorecompat.Log.setLogger(object : org.nift4.mediastorecompat.Log.Logger {
             override fun d(
                 tag: String,
@@ -279,7 +279,7 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory,
                 }
             }
             onSharedPreferenceChanged(prefs, null) // reload all values
-            prefs.registerOnSharedPreferenceChangeListener(this@GramophoneApplication)
+            prefs.registerOnSharedPreferenceChangeListener(this@PlugApplication)
 
             // https://github.com/androidx/media/issues/805
             if (needsMissingOnDestroyCallWorkarounds()) {
@@ -287,7 +287,7 @@ class GramophoneApplication : Application(), SingletonImageLoader.Factory,
                 nm.cancel(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID)
             }
 
-            LyricWidgetProvider.update(this@GramophoneApplication)
+            LyricWidgetProvider.update(this@PlugApplication)
 
             delay(10000.milliseconds) // Wait until we are idle with useless IO
             withContext(Dispatchers.IO) {

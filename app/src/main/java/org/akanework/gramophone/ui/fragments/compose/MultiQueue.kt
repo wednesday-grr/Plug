@@ -95,7 +95,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.guava.await
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.GramophonePlaybackService
+import org.akanework.gramophone.logic.PlugPlaybackService
 import org.akanework.gramophone.logic.MultiQueueList
 import org.akanework.gramophone.logic.MultiQueueObject
 import org.akanework.gramophone.logic.age
@@ -908,7 +908,7 @@ class MqState(
         coroutineScope.launch {
             try {
                 val result = instance.sendCustomCommand(
-                    SessionCommand(GramophonePlaybackService.SERVICE_SORT_AUTOMIX, Bundle.EMPTY),
+                    SessionCommand(PlugPlaybackService.SERVICE_SORT_AUTOMIX, Bundle.EMPTY),
                     Bundle.EMPTY
                 ).await()
                 val message = if (result.resultCode == SessionResult.RESULT_SUCCESS) {

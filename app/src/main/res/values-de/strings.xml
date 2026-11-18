@@ -235,7 +235,7 @@
     <string name="device_type_dock_analog">Analoges Dock</string>
     <string name="spk_encoding_ac3">AC-3</string>
     <string name="spk_encoding_aac_xhe">xHE-AAC</string>
-    <string name="open_in_gramophone">In Gramophone öffnen</string>
+    <string name="open_in_gramophone">In Plug öffnen</string>
     <string name="spk_channel_out_mono">Mono</string>
     <string name="spk_channel_out_quad">Quad</string>
     <string name="spk_channel_out_front_left_of_center">Vorne Links von Center</string>
@@ -280,7 +280,7 @@
     <string name="spk_channel_out_top_front_center">Oben Vorne Mitte</string>
     <string name="settings_lyrics_no_animation_summary">Alle Zeilenübergangsanimationen deaktivieren</string>
     <string name="failed_to_parse_lyric">Analysieren des Liedtextes fehlgeschlagen</string>
-    <string name="package_type_explainer">Gramophone APKs können von jedem erstellt werden weil Gramophone open source ist. Um daran zu erinnern, woher eine APK kam gibt Gramophone den Pakettyp an.\n\nDer häufigste Typ ist Release, der bei F-Droid, Google Play, Github oder IzzyOnDroid erworben werden kann.\nDer CI Pakettyp weißt auf automatisierte APKs hin, die für jeden commit auf Github generiert werden. Diese Pakete können instabil sein.\nBei anderen Typen sollte die Bezeichnung des Pakettypen einen Hinweis darauf geben, woher die APK stammt.</string>
+    <string name="package_type_explainer">Plug APKs können von jedem erstellt werden weil Plug open source ist. Um daran zu erinnern, woher eine APK kam gibt Plug den Pakettyp an.\n\nDer häufigste Typ ist Release, der bei F-Droid, Google Play, Github oder IzzyOnDroid erworben werden kann.\nDer CI Pakettyp weißt auf automatisierte APKs hin, die für jeden commit auf Github generiert werden. Diese Pakete können instabil sein.\nBei anderen Typen sollte die Bezeichnung des Pakettypen einen Hinweis darauf geben, woher die APK stammt.</string>
     <string name="mix_port_flag_bit_perfect">Bit perfect</string>
     <string name="mix_port_flag_direct_pcm">Direct PCM</string>
     <string name="mix_port_flag_sync">Sync</string>
@@ -370,8 +370,8 @@
     <string name="crash_report">Absturzbericht</string>
     <string name="email_clipboard">E-Mail-Adresse und Text wurden in die Zwischenablage kopiert</string>
     <string name="settings_export_logs">App-Protokolle exportieren</string>
-    <string name="gramophone_crashed_explainer2">Gramophone ist abgestürzt :(\n\nBitte sende mir einen Fehlerbericht, sodass Probleme wie das, welches diesen Absturz verursacht hat, behoben werden können!\n\nJede Situation ist so einzigartig wie Musik, ohne deine Hilfe ist es wahrscheinlich, das dieser Fehler <b>NICHT</b> behoben wird!</string>
-    <string name="what_were_you_doing">Was hast du in Gramophone gemacht, bevor dieser Absturz passiert ist? Bitte erklär es so detailliert wie möglich, um die Chance zu erhöhen, dass ich das Problem beheben kann.\n\nEnglisch ist die bevorzugte Sprache für Fehlerberichte, aber ich werde versuchen, für andere Sprachen Maschinenübersetzung zu benutzen.</string>
+    <string name="gramophone_crashed_explainer2">Plug ist abgestürzt :(\n\nBitte sende mir einen Fehlerbericht, sodass Probleme wie das, welches diesen Absturz verursacht hat, behoben werden können!\n\nJede Situation ist so einzigartig wie Musik, ohne deine Hilfe ist es wahrscheinlich, das dieser Fehler <b>NICHT</b> behoben wird!</string>
+    <string name="what_were_you_doing">Was hast du in Plug gemacht, bevor dieser Absturz passiert ist? Bitte erklär es so detailliert wie möglich, um die Chance zu erhöhen, dass ich das Problem beheben kann.\n\nEnglisch ist die bevorzugte Sprache für Fehlerberichte, aber ich werde versuchen, für andere Sprachen Maschinenübersetzung zu benutzen.</string>
     <string name="settings_audio_quality_info">Audioqualität anzeigen</string>
     <string name="settings_audio_quality_info_summary">Informationen über Audioformat/-qualität im Player anzeigen</string>
     <string name="delete_failed_playlist">Löschen der Wiedergabeliste fehlgeschlagen: %s</string>
@@ -486,7 +486,7 @@
     <string name="pitch">Tonhöhe</string>
     <string name="lock_tempo_pitch">Tempo und Tonhöhe fixieren</string>
     <string name="delete_really_artist">Willst du wirklich alle Titel von \"%s\" löschen? Diese Aktion kann nicht rückgängig gemacht werden.</string>
-    <string name="refresh_did_you_know">Gramophone fordert bei jedem App-Start eine aktualisierte Songliste an, und während Gramophone läuft, erkennt es auch automatisch neue Medien. Diese \"Aktualisieren\"-Taste aktualisiert die Medien nicht nur in Gramophone, sondern weist das Betriebssystem an, alle Dateien von allen angeschlossenen permanenten Speichergeräten erneut zu scannen (darum braucht es einige Zeit). Somit wirst du diese Funktion niemals verwenden müssen, es sei denn, dein Betriebssystem oder andere Apps sind fehlerhaft.\n\nEs fehlen einige Titel? Überprüfe in Einstellungen &gt; Verhalten die minimale Länge eines Titels sowie die Ordner in der schwarzen Liste und stelle sicher, dass diese Einstellungen auf den erwarteten Wert gesetzt sind. Für weitere möglichen Gründen überprüfe bitte unsere FAQ.</string>
+    <string name="refresh_did_you_know">Plug fordert bei jedem App-Start eine aktualisierte Songliste an, und während Plug läuft, erkennt es auch automatisch neue Medien. Diese \"Aktualisieren\"-Taste aktualisiert die Medien nicht nur in Plug, sondern weist das Betriebssystem an, alle Dateien von allen angeschlossenen permanenten Speichergeräten erneut zu scannen (darum braucht es einige Zeit). Somit wirst du diese Funktion niemals verwenden müssen, es sei denn, dein Betriebssystem oder andere Apps sind fehlerhaft.\n\nEs fehlen einige Titel? Überprüfe in Einstellungen &gt; Verhalten die minimale Länge eines Titels sowie die Ordner in der schwarzen Liste und stelle sicher, dass diese Einstellungen auf den erwarteten Wert gesetzt sind. Für weitere möglichen Gründen überprüfe bitte unsere FAQ.</string>
     <string name="edit_favorites_failed">Bearbeiten der Favoriten fehlgeschlagen: %s</string>
     <string name="settings_replaygain_preamp">Vorverstärkung</string>
     <string name="settings_replaygain_no_rg_amp">Dämpfung (kein RG)</string>

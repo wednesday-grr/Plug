@@ -92,11 +92,11 @@ class SearchSuggestionsProvider : ContentProvider() {
 
     private suspend fun searchForMediaItem(text: String): List<MediaItem> {
         val text = text.trim()
-        val list = context!!.gramophoneApplication.reader.songListFlow.first()
+        val list = context!!.plugApplication.reader.songListFlow.first()
         // TODO support focus and sub queries (see MainActivity)
         return if (text == "") list else list.filter {
             // TODO sort results by match quality? (using raw=natural order)
-            // TODO this is copied directly from SearchFragment and GramophonePlaybackService,
+            // TODO this is copied directly from SearchFragment and PlugPlaybackService,
             //  it should be deduplicated
             val isMatchingTitle =
                 it.mediaMetadata.title?.contains(text, true) == true
@@ -109,7 +109,7 @@ class SearchSuggestionsProvider : ContentProvider() {
     }
 
     private fun queryCachedShortcut(id: Long): Cursor {
-        val idMap = runBlocking { context!!.gramophoneApplication.reader.idMapFlow.first() }
+        val idMap = runBlocking { context!!.plugApplication.reader.idMapFlow.first() }
         return songsToCursor(idMap[id]?.let { listOf(it) } ?: emptyList())
     }
 

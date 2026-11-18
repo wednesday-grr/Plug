@@ -50,7 +50,7 @@ object MediaRoutes {
         if (!isSystemRoute) {
             Log.e(
                 TAG,
-                "Route is not flagged as system route, however Gramophone only supports system routes?"
+                "Route is not flagged as system route, however Plug only supports system routes?"
             )
             return null
         }
@@ -296,7 +296,7 @@ object MediaRoutes {
         if (!isSystemRoute) { // MediaRouteProviderService, but shouldn't get selected by itself
             Log.e(
                 TAG,
-                "Route is not flagged as system route, however Gramophone only supports system routes?"
+                "Route is not flagged as system route, however Plug only supports system routes?"
             )
             return null
         }

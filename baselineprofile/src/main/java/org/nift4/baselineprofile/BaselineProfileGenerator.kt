@@ -74,12 +74,13 @@ class BaselineProfileGenerator {
             null
         ) { _: String, _: Uri -> }
         val ae = InstrumentationRegistry.getInstrumentation().uiAutomation
-        ae.executeShellCommand("pm clear org.akanework.gramophone")
+        val targetAppId = InstrumentationRegistry.getArguments().getString("targetAppId")
+            ?: throw Exception("targetAppId not passed as instrumentation runner arg")
+        ae.executeShellCommand("pm clear $targetAppId")
         Thread.sleep(1000) // let device settle a bit
         // The application id for the running build variant is read from the instrumentation arguments.
         rule.collect(
-            packageName = InstrumentationRegistry.getArguments().getString("targetAppId")
-                ?: throw Exception("targetAppId not passed as instrumentation runner arg"),
+            packageName = targetAppId,
 
             // See: https://d.android.com/topic/performance/baselineprofiles/dex-layout-optimizations
             includeInStartupProfile = true
@@ -89,7 +90,7 @@ class BaselineProfileGenerator {
 
             // Start default activity for your app
             pressHome()
-            ae.executeShellCommand("pm grant org.akanework.gramophone android.permission.READ_MEDIA_AUDIO")
+            ae.executeShellCommand("pm grant $targetAppId android.permission.READ_MEDIA_AUDIO")
             startActivityAndWait()
 
             // More interactions to optimize advanced journeys of your app.

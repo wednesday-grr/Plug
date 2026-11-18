@@ -23,7 +23,7 @@ import android.os.Looper
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import org.akanework.gramophone.logic.GramophonePlaybackService
+import org.akanework.gramophone.logic.PlugPlaybackService
 import org.akanework.gramophone.logic.QueueBoard
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
@@ -50,7 +50,7 @@ class EndedWorkaroundSwapTest {
         val automix = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
         val wrapper = EndedWorkaroundPlayer(
             context, context.getSharedPreferences("queue-sort-fade-test", Context.MODE_PRIVATE),
-            automix, { null }, QueueBoard(GramophonePlaybackService())
+            automix, { null }, QueueBoard(PlugPlaybackService())
         )
         val items = listOf("active", "next", "other").map { MediaItem.fromUri("file:///$it.mp3") }
         try {
@@ -81,7 +81,7 @@ class EndedWorkaroundSwapTest {
         val automix = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
         val wrapper = EndedWorkaroundPlayer(
             context, context.getSharedPreferences("queue-sort-test", Context.MODE_PRIVATE),
-            automix, { null }, QueueBoard(GramophonePlaybackService())
+            automix, { null }, QueueBoard(PlugPlaybackService())
         )
         val items = listOf("past", "active", "same", "other", "same").map {
             MediaItem.fromUri("file:///$it.mp3")
@@ -116,7 +116,7 @@ class EndedWorkaroundSwapTest {
         val automix = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
         val wrapper = EndedWorkaroundPlayer(
             context, context.getSharedPreferences("queue-invalidation-test", Context.MODE_PRIVATE),
-            automix, { null }, QueueBoard(GramophonePlaybackService())
+            automix, { null }, QueueBoard(PlugPlaybackService())
         )
         val items = (0..3).map { MediaItem.fromUri("file:///$it.mp3") }
         try {
@@ -148,7 +148,7 @@ class EndedWorkaroundSwapTest {
         val automix = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
         val wrapper = EndedWorkaroundPlayer(
             context, context.getSharedPreferences("handoff-test", Context.MODE_PRIVATE),
-            automix, { null }, QueueBoard(GramophonePlaybackService())
+            automix, { null }, QueueBoard(PlugPlaybackService())
         )
         val items = listOf(
             MediaItem.fromUri("file:///same.mp3"), MediaItem.fromUri("file:///same.mp3"),
@@ -195,7 +195,7 @@ class EndedWorkaroundSwapTest {
         val automix = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
         val wrapper = EndedWorkaroundPlayer(
             context, context.getSharedPreferences("automix-swap-test", Context.MODE_PRIVATE),
-            automix, { null }, QueueBoard(GramophonePlaybackService())
+            automix, { null }, QueueBoard(PlugPlaybackService())
         )
         val items = listOf(
             MediaItem.fromUri("file:///one.mp3"), MediaItem.fromUri("file:///two.mp3"),
@@ -227,7 +227,7 @@ class EndedWorkaroundSwapTest {
         val replacement = ExoPlayer.Builder(context).build()
         val wrapper = EndedWorkaroundPlayer(
             context, context.getSharedPreferences("swap-test", Context.MODE_PRIVATE),
-            old, { null }, QueueBoard(GramophonePlaybackService())
+            old, { null }, QueueBoard(PlugPlaybackService())
         )
         try {
             val items = listOf(

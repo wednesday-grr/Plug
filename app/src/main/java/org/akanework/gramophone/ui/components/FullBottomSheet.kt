@@ -109,7 +109,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.GramophonePlaybackService
+import org.akanework.gramophone.logic.PlugPlaybackService
 import org.akanework.gramophone.logic.clone
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.fadInAnimation
@@ -298,14 +298,14 @@ class FullBottomSheet
         prefs.registerOnSharedPreferenceChangeListener(this)
         activity.controllerViewModel.customCommandListeners.addCallback(activity.lifecycle) { _, command, _ ->
             when (command.customAction) {
-                GramophonePlaybackService.SERVICE_TIMER_CHANGED -> updateTimer()
+                PlugPlaybackService.SERVICE_TIMER_CHANGED -> updateTimer()
 
-                GramophonePlaybackService.SERVICE_GET_LYRICS -> {
+                PlugPlaybackService.SERVICE_GET_LYRICS -> {
                     val parsedLyrics = instance?.getLyrics()
                     bottomSheetFullLyricView.updateLyrics(parsedLyrics)
                 }
 
-                GramophonePlaybackService.SERVICE_GET_AUDIO_FORMAT -> {
+                PlugPlaybackService.SERVICE_GET_AUDIO_FORMAT -> {
                     val format = instance?.getAudioFormat()
                     this.currentFormat = format
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||

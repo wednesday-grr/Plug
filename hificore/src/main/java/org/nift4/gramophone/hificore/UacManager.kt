@@ -46,18 +46,17 @@ class UacManager(private val context: Context) {
         private const val AUDIOCONTROL = 0x01
         private const val AUDIOSTREAMING = 0x02
         private const val MIDISTREAMING = 0x03
-        private const val UAC_PERMISSION_ACTION =
-            "org.nift4.gramophone.action.UAC_PERMISSION_GRANTED"
         private const val ENABLE_UAC = false
     }
 
+    private val uacPermissionAction = "${context.packageName}.action.UAC_PERMISSION_GRANTED"
     private val usbManager = context.getSystemService<UsbManager>()!!
     /*private*/ val openDevices = mutableListOf<Pair<LibUsbManager, LibUsbDevice>>()
     private val attachDetachReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val isAttach = intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED
             val isDetach = intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED
-            val isPermState = intent.action == UAC_PERMISSION_ACTION
+            val isPermState = intent.action == uacPermissionAction
             Log.i(TAG, "received $intent")
             if (isAttach || isDetach || isPermState) {
                 val device = IntentCompat.getParcelableExtra(
@@ -86,7 +85,7 @@ class UacManager(private val context: Context) {
         ContextCompat.registerReceiver(context, attachDetachReceiver, IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            addAction(UAC_PERMISSION_ACTION)
+            addAction(uacPermissionAction)
         }, ContextCompat.RECEIVER_NOT_EXPORTED)
         CoroutineScope(Dispatchers.Default).launch {
             enumerateSoundcards()
@@ -224,7 +223,7 @@ class UacManager(private val context: Context) {
     }
 
     private fun requestPermission(device: UsbDevice) {
-        val i = Intent(UAC_PERMISSION_ACTION)
+        val i = Intent(uacPermissionAction)
         i.setPackage(context.packageName)
         val pi = PendingIntentCompat.getBroadcast(
             context, 0x4ac2, i,

@@ -36,7 +36,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.getFile
-import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.plugApplication
 import org.akanework.gramophone.logic.hasImprovedMediaStore
 import org.akanework.gramophone.logic.queryWithPending
 import org.akanework.gramophone.logic.utils.Flags
@@ -56,7 +56,7 @@ object ItemManipulator {
     const val DEFAULT_FORMAT = "m3u"
 
     suspend fun deleteSongs(context: MainActivity, list: List<Pair<File, Long>>): (() -> Unit)? {
-        val faves = context.gramophoneApplication.reader.playlistListFlow.map { it.find { p ->
+        val faves = context.plugApplication.reader.playlistListFlow.map { it.find { p ->
             p is Favorite } }.first()
         val songsToUnfave = faves?.let { _ -> list.filter { faves.songList.find { song ->
             song.getFile() == it.first } != null }.map { it.first.toUriCompat() } }
@@ -219,7 +219,7 @@ object ItemManipulator {
     }
 
     suspend fun readbackPlaylist(context: Context, uri: Uri): PlaylistSerializer.Playlist {
-        val pathMap = context.gramophoneApplication.reader.pathMapFlow.first()
+        val pathMap = context.plugApplication.reader.pathMapFlow.first()
         return Reader.readPlaylist(context, uri).let {
             it.copy(entries = it.entries.map {
                 it.updateFromMediaItem(pathMap)

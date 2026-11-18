@@ -85,7 +85,7 @@ import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.enableEdgeToEdgeProperly
 import org.akanework.gramophone.logic.getBooleanStrict
-import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.plugApplication
 import org.akanework.gramophone.logic.hasAudioPermission
 import org.akanework.gramophone.logic.hasScopedStorageV2
 import org.akanework.gramophone.logic.hasScopedStorageWithMediaTypes
@@ -147,8 +147,8 @@ class MainActivity : BaseActivity() {
         if (!ready) handler.postDelayed(reportFullyDrawnRunnable, 2000)
         CoroutineScope(Dispatchers.Default).launch {
             if (smartScanFirst)
-                MediaStoreCompat.smartScan(this@MainActivity.gramophoneApplication)
-            this@MainActivity.gramophoneApplication.reader.refresh()
+                MediaStoreCompat.smartScan(this@MainActivity.plugApplication)
+            this@MainActivity.plugApplication.reader.refresh()
             withContext(Dispatchers.Main) {
                 onLibraryLoaded()
                 then?.let { it() }
@@ -360,7 +360,7 @@ class MainActivity : BaseActivity() {
 
     fun markIsFavoriteStatus(songs: List<Entry>, favorite: Boolean) {
         CoroutineScope(Dispatchers.Default).launch {
-            val uri = gramophoneApplication.reader.playlistListFlow.map { it.find { p -> p is
+            val uri = plugApplication.reader.playlistListFlow.map { it.find { p -> p is
                     Favorite } }.first()?.id?.let {
                     ContentUris.withAppendedId(@Suppress("deprecation")
                     MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, it)
@@ -517,7 +517,7 @@ class MainActivity : BaseActivity() {
     private fun doPlayFromIntent(intent: Intent) {
         Log.i("MainActivity", "doPlayFromIntent($intent)")
         val autoPlayId = intent.extras?.getString(PLAYBACK_AUTO_PLAY_ID) ?: (if
-                (intent.action == "org.akanework.gramophone.action.PLAY_MEDIA_FROM_SUGGESTION")
+                (intent.action == "${BuildConfig.APPLICATION_ID}.action.PLAY_MEDIA_FROM_SUGGESTION")
                 intent.data?.let {
                     try {
                         ContentUris.parseId(it)
@@ -681,7 +681,7 @@ class MainActivity : BaseActivity() {
                 }
             }
         }
-        if (intent.action == "org.akanework.gramophone.action.SHUFFLE") {
+        if (intent.action == "${BuildConfig.APPLICATION_ID}.action.SHUFFLE") {
             ShortcutManagerCompat.reportShortcutUsed(this@MainActivity, "shuffle_all")
             val query = intent.getStringExtra("item_name") ?: ""
             willAutoPlayLater = true
@@ -846,5 +846,5 @@ class MainActivity : BaseActivity() {
     fun getPlayer() = controllerViewModel.get()
 
     inline val reader
-        get() = gramophoneApplication.reader
+        get() = plugApplication.reader
 }

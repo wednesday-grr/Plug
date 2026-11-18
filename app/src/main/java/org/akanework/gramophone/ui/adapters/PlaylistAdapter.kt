@@ -48,7 +48,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.plugApplication
 import org.akanework.gramophone.ui.PlaylistPickerActivity
 import org.akanework.gramophone.ui.fragments.AdapterFragment
 import org.akanework.gramophone.ui.fragments.GeneralSubFragment
@@ -72,7 +72,7 @@ class PlaylistAdapter(
     (
     fragment,
     liveData = (fragment?.requireActivity() ?: fallbackContext)!!
-        .gramophoneApplication.reader.playlistListFlow.let {
+        .plugApplication.reader.playlistListFlow.let {
             if (isSubFragment == R.id.songs)
                 it.map { playlistsList ->
                     playlistsList.filter { p -> p.id != null && p.path != null }

@@ -76,9 +76,9 @@ import org.akanework.gramophone.logic.ui.BaseActivity
 import org.akanework.gramophone.logic.ui.placeholderScaleToFit
 import org.akanework.gramophone.logic.utils.CalculationUtils.convertDurationToTimeStamp
 import org.akanework.gramophone.logic.utils.Flags
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneMediaSourceFactory
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugExtractorsFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugMediaSourceFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugRenderFactory
 import org.akanework.gramophone.ui.components.FullBottomSheet.Companion.SLIDER_UPDATE_INTERVAL
 import org.akanework.gramophone.ui.components.SquigglyProgress
 import uk.akane.libphonograph.toUriCompat
@@ -179,7 +179,7 @@ class AudioPreviewActivity : BaseActivity(), View.OnClickListener {
             it.animate = false
         }
         // TODO de-dupe
-        val renderFactory = GramophoneRenderFactory(this, {}, {})
+        val renderFactory = PlugRenderFactory(this, {}, {})
         val rgAp = renderFactory.replayGainAudioProcessor
         player = ExoPlayer.Builder(
             this,
@@ -188,9 +188,9 @@ class AudioPreviewActivity : BaseActivity(), View.OnClickListener {
                 .setEnableDecoderFallback(true)
                 .setEnableAudioOutputPlaybackParameters(true)
                 .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER),
-            GramophoneMediaSourceFactory(
+            PlugMediaSourceFactory(
                 DefaultDataSource.Factory(this),
-                GramophoneExtractorsFactory().also {
+                PlugExtractorsFactory().also {
                     it.setConstantBitrateSeekingEnabled(true)
                     it.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
                 })

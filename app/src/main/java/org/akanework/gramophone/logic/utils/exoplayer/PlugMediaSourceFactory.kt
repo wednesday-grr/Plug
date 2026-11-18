@@ -31,7 +31,7 @@ import com.google.common.primitives.Ints
 import java.io.IOException
 
 @Suppress("unused")
-class GramophoneMediaSourceFactory(
+class PlugMediaSourceFactory(
     private var dataSourceFactory: DataSource.Factory,
     extractorsFactory: ExtractorsFactory
 ) : MediaSource.Factory {
@@ -55,37 +55,37 @@ class GramophoneMediaSourceFactory(
         this.liveMaxSpeed = -3.4028235E38f
     }
 
-    fun setExternalImageLoader(externalImageLoader: ExternalLoader?): GramophoneMediaSourceFactory {
+    fun setExternalImageLoader(externalImageLoader: ExternalLoader?): PlugMediaSourceFactory {
         this.externalImageLoader = externalImageLoader
         return this
     }
 
-    fun setLiveTargetOffsetMs(liveTargetOffsetMs: Long): GramophoneMediaSourceFactory {
+    fun setLiveTargetOffsetMs(liveTargetOffsetMs: Long): PlugMediaSourceFactory {
         this.liveTargetOffsetMs = liveTargetOffsetMs
         return this
     }
 
-    fun setLiveMinOffsetMs(liveMinOffsetMs: Long): GramophoneMediaSourceFactory {
+    fun setLiveMinOffsetMs(liveMinOffsetMs: Long): PlugMediaSourceFactory {
         this.liveMinOffsetMs = liveMinOffsetMs
         return this
     }
 
-    fun setLiveMaxOffsetMs(liveMaxOffsetMs: Long): GramophoneMediaSourceFactory {
+    fun setLiveMaxOffsetMs(liveMaxOffsetMs: Long): PlugMediaSourceFactory {
         this.liveMaxOffsetMs = liveMaxOffsetMs
         return this
     }
 
-    fun setLiveMinSpeed(minSpeed: Float): GramophoneMediaSourceFactory {
+    fun setLiveMinSpeed(minSpeed: Float): PlugMediaSourceFactory {
         this.liveMinSpeed = minSpeed
         return this
     }
 
-    fun setLiveMaxSpeed(maxSpeed: Float): GramophoneMediaSourceFactory {
+    fun setLiveMaxSpeed(maxSpeed: Float): PlugMediaSourceFactory {
         this.liveMaxSpeed = maxSpeed
         return this
     }
 
-    override fun setCmcdConfigurationFactory(cmcdConfigurationFactory: CmcdConfiguration.Factory): GramophoneMediaSourceFactory {
+    override fun setCmcdConfigurationFactory(cmcdConfigurationFactory: CmcdConfiguration.Factory): PlugMediaSourceFactory {
         delegateFactoryLoader.setCmcdConfigurationFactory(
             Assertions.checkNotNull(
                 cmcdConfigurationFactory
@@ -98,7 +98,7 @@ class GramophoneMediaSourceFactory(
         throw UnsupportedOperationException("drm is not supported")
     }
 
-    override fun setLoadErrorHandlingPolicy(loadErrorHandlingPolicy: LoadErrorHandlingPolicy): GramophoneMediaSourceFactory {
+    override fun setLoadErrorHandlingPolicy(loadErrorHandlingPolicy: LoadErrorHandlingPolicy): PlugMediaSourceFactory {
         this.loadErrorHandlingPolicy =
             Assertions.checkNotNull(
                 loadErrorHandlingPolicy,

@@ -77,7 +77,7 @@ data class Playlist2(
 // doesn't it already do that...? this TODO is so old i wonder if its correct
 
 private var useEnhancedCoverReading = true
-private var coverStubUri: String? = "gramophoneAlbumCover"//TODO
+private var coverStubUri: String? = "plugAlbumCover"//TODO
 private val scope = CoroutineScope(Dispatchers.Default)
 val songFlow: Flow<IncrementalList<MediaItem>> = TODO()
     .provideReplayCacheInvalidationManager<IncrementalList<MediaItem>>(

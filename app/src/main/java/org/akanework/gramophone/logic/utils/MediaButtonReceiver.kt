@@ -31,9 +31,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.media3.common.util.Log
 import androidx.media3.session.MediaButtonReceiver
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.NOTIFY_CHANNEL_ID
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.NOTIFY_ID
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.PENDING_INTENT_NOTIFY_ID
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.NOTIFY_CHANNEL_ID
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.NOTIFY_ID
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.PENDING_INTENT_NOTIFY_ID
 import org.akanework.gramophone.logic.hasNotificationPermission
 import org.akanework.gramophone.logic.mayThrowForegroundServiceStartNotAllowed
 import org.akanework.gramophone.logic.mayThrowForegroundServiceStartNotAllowedMiui

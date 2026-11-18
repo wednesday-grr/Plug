@@ -9,7 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.plugApplication
 import org.akanework.gramophone.logic.ui.BaseActivity
 
 class Reflections : BaseActivity() {
@@ -24,10 +24,10 @@ class Reflections : BaseActivity() {
         }
         val r = findViewById<RecyclerView>(R.id.recyclerview)
         CoroutineScope(Dispatchers.Default).launch {
-            gramophoneApplication.reader.refresh()
+            plugApplication.reader.refresh()
             withContext(Dispatchers.Main) {
                 r.adapter =
-                    ReflectionAdapter(gramophoneApplication.reader, null, { r.adapter = it }, false)
+                    ReflectionAdapter(plugApplication.reader, null, { r.adapter = it }, false)
             }
         }
     }

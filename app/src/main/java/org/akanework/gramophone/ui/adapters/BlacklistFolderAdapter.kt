@@ -34,7 +34,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.plugApplication
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.logic.utils.flows.repeatPausingWithLifecycle
 import org.akanework.gramophone.ui.fragments.settings.BlacklistSettingsActivity
@@ -51,9 +51,9 @@ class BlacklistFolderAdapter(
 
     init {
         repeatPausingWithLifecycle(activity, Dispatchers.Default) {
-            (if (isWhitelist) activity.gramophoneApplication.reader.foldersForWhitelistFlow else
-                activity.gramophoneApplication.reader.foldersFlow).combine(if (isWhitelist)
-                activity.gramophoneApplication.whiteListSetFlow else activity.gramophoneApplication
+            (if (isWhitelist) activity.plugApplication.reader.foldersForWhitelistFlow else
+                activity.plugApplication.reader.foldersFlow).combine(if (isWhitelist)
+                activity.plugApplication.whiteListSetFlow else activity.plugApplication
                     .blackListSetFlow) { newFolderArray, newFolderFilter ->
                 val sortedFolderArray = newFolderArray.sorted()
                 val oldFolderArray = folderArray?.toList()

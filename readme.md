@@ -49,6 +49,10 @@ order. Sorting is unavailable during a crossfade; retry after the transition.
 
 
 ## Installation
+Plug uses the application ID `org.plug.player`. Android installs it separately from
+Gramophone, so Gramophone's app-private settings, queues, analysis cache, and permissions
+are not automatically transferred.
+
 You can download the latest stable version of the app from either [GitHub releases](https://github.com/FoedusProgramme/Gramophone/releases/latest), [F-Droid](https://f-droid.org/packages/org.akanework.gramophone/), or from [IzzyOnDroid](https://apt.izzysoft.de/fdroid/index/apk/org.akanework.gramophone).
 
 Beta versions and sneak peeks are available in the [telegram channel](https://t.me/FoedusProgramme) or [chat](https://t.me/FoedusDiscussion).

@@ -55,6 +55,12 @@
             android:title="@string/settings_open_source_licenses"
             app:iconSpaceReserved="false" />
 
+        <Preference
+            android:layout="@layout/preference_basic"
+            android:summary="@string/upstream_credit"
+            android:selectable="false"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

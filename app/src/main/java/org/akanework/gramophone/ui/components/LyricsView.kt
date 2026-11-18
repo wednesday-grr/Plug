@@ -31,7 +31,7 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.media3.common.Player
 import androidx.preference.PreferenceManager
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.GramophonePlaybackService
+import org.akanework.gramophone.logic.PlugPlaybackService
 import org.akanework.gramophone.logic.getBooleanStrict
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.logic.utils.SemanticLyrics
@@ -105,7 +105,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             // TODO https://github.com/androidx/media/issues/1578
             override fun getCurrentPosition(): ULong =
                 if (waitingForSeek > 0) waitingForSeekPos else
-                GramophonePlaybackService.instanceForWidgetAndLyricsOnly
+                PlugPlaybackService.instanceForWidgetAndLyricsOnly
                     ?.endedWorkaroundPlayer?.currentPosition?.toULong()
                     ?: (context as MainActivity).getPlayer()?.currentPosition?.toULong() ?: 0uL
 
@@ -119,7 +119,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 newView?.handleSeek(getCurrentPosition(), position)
                 waitingForSeek = max(0, waitingForSeek) + 1
                 waitingForSeekPos = position
-                (GramophonePlaybackService.instanceForWidgetAndLyricsOnly?.endedWorkaroundPlayer
+                (PlugPlaybackService.instanceForWidgetAndLyricsOnly?.endedWorkaroundPlayer
                     ?: (context as MainActivity).getPlayer())?.seekTo(position.toLong())
             }
 

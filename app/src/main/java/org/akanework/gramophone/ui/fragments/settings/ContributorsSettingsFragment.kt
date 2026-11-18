@@ -72,14 +72,14 @@ import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.utils.data.Contributors
 import org.akanework.gramophone.logic.utils.data.GitHubUser
 import org.akanework.gramophone.ui.BaseComposeActivity
-import org.akanework.gramophone.ui.GramophoneTheme
+import org.akanework.gramophone.ui.PlugTheme
 
 class ContributorsSettingsActivity : BaseComposeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            GramophoneTheme {
+            PlugTheme {
                 ContributorsSettingsScreen()
             }
         }

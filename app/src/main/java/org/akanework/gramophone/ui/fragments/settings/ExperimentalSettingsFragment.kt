@@ -59,7 +59,7 @@ class ExperimentalSettingsFragment : BasePreferenceFragment() {
         if (preference.key == "crash" && BuildConfig.DEBUG) {
             throw IllegalArgumentException("I crashed your app >:)", e)
         } else if (preference.key == "self_log") {
-            Log.w("Gramophone", "Exporting logs...")
+            Log.w("Plug", "Exporting logs...")
             CoroutineScope(Dispatchers.IO).launch {
                 val p = ProcessBuilder()
                     .command("logcat", "-dball")
@@ -72,7 +72,7 @@ class ExperimentalSettingsFragment : BasePreferenceFragment() {
                 val selfLogDir = File(requireContext().cacheDir, "SelfLog")
                 val f = File(
                     selfLogDir.also { it.mkdirs() },
-                    "GramophoneLog${System.currentTimeMillis()}.txt"
+                    "PlugLog${System.currentTimeMillis()}.txt"
                 )
                 f.writeText(
                     "SDK: ${Build.VERSION.SDK_INT}\nDevice: ${Build.BRAND} ${Build.DEVICE} " +
@@ -83,7 +83,7 @@ class ExperimentalSettingsFragment : BasePreferenceFragment() {
                 withContext(Dispatchers.Main) {
                     val sendIntent = Intent().apply {
                         action = Intent.ACTION_SEND
-                        putExtra(Intent.EXTRA_TITLE, "Gramophone Logs")
+                        putExtra(Intent.EXTRA_TITLE, "Plug Logs")
                         putExtra(
                             Intent.EXTRA_STREAM,
                             FileProvider.getUriForFile(

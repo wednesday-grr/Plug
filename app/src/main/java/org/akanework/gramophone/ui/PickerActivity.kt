@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.enableEdgeToEdgePaddingListener
 import org.akanework.gramophone.logic.enableEdgeToEdgeProperly
-import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.plugApplication
 import org.akanework.gramophone.logic.hasAudioPermission
 import org.akanework.gramophone.logic.hasScopedStorageV2
 import org.akanework.gramophone.logic.hasScopedStorageWithMediaTypes
@@ -91,9 +91,9 @@ abstract class PickerActivity<T : Any> : BaseActivity() {
             )
         } else {
             // If all permissions are granted, we can update library now.
-            if (!gramophoneApplication.reader.hadFirstRefresh) {
+            if (!plugApplication.reader.hadFirstRefresh) {
                 CoroutineScope(Dispatchers.Default).launch {
-                    gramophoneApplication.reader.refresh()
+                    plugApplication.reader.refresh()
                 }
             }
         }
@@ -118,7 +118,7 @@ abstract class PickerActivity<T : Any> : BaseActivity() {
                 grantResults[0] == PackageManager.PERMISSION_GRANTED
             ) {
                 CoroutineScope(Dispatchers.Default).launch {
-                    gramophoneApplication.reader.refresh()
+                    plugApplication.reader.refresh()
                 }
             } else {
                 Toast.makeText(this, getString(R.string.grant_audio), Toast.LENGTH_LONG).show()

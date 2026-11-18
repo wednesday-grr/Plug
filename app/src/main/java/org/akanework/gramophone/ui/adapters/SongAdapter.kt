@@ -40,7 +40,7 @@ import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.getBooleanStrict
 import org.akanework.gramophone.logic.getFile
-import org.akanework.gramophone.logic.gramophoneApplication
+import org.akanework.gramophone.logic.plugApplication
 import org.akanework.gramophone.logic.requireMediaStoreId
 import org.akanework.gramophone.logic.setMediaItemsSeamlessly
 import org.akanework.gramophone.logic.ui.MyRecyclerView
@@ -66,7 +66,7 @@ class SongAdapter(
     val fragment: Fragment?,
     val queueTitle: Flow<String>?,
     songList: Flow<List<MediaItem>?> = (fragment?.requireContext() ?: fallbackContext!!)
-        .gramophoneApplication.reader.songListFlow,
+        .plugApplication.reader.songListFlow,
     helper: Sorter.NaturalOrderHelper<MediaItem>? = null,
     isSubFragment: Int? = null,
     allowDiffUtils: Boolean = false,

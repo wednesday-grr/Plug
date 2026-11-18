@@ -101,7 +101,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = appIdOverride ?: "org.akanework.gramophone"
+        applicationId = appIdOverride ?: "org.plug.player"
         minSdk = 23
         targetSdk = 37
         versionCode = 24
@@ -258,7 +258,7 @@ android {
 }
 
 resourcePlaceholders {
-    files.set(listOf("xml/shortcuts.xml"))
+    files.set(listOf("xml/shortcuts.xml", "xml/searchable.xml"))
 }
 
 kotlin {
@@ -274,7 +274,7 @@ kotlin {
 }
 
 base {
-    archivesName = "Gramophone-${android.defaultConfig.versionName}${android.defaultConfig.versionNameSuffix ?: ""}"
+    archivesName = "Plug-${android.defaultConfig.versionName}${android.defaultConfig.versionNameSuffix ?: ""}"
 }
 
 baselineProfile {

@@ -41,10 +41,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.GramophonePlaybackService
+import org.akanework.gramophone.logic.PlugPlaybackService
 
 private inline val service
-    get() = GramophonePlaybackService.instanceForWidgetAndLyricsOnly
+    get() = PlugPlaybackService.instanceForWidgetAndLyricsOnly
 
 class LyricWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(
@@ -54,7 +54,7 @@ class LyricWidgetProvider : AppWidgetProvider() {
     ) {
         val seekPi = PendingIntent.getBroadcast(
             context,
-            GramophonePlaybackService.PENDING_INTENT_WIDGET_ID,
+            PlugPlaybackService.PENDING_INTENT_WIDGET_ID,
             Intent(context.packageName + ".SEEK_TO").setPackage(context.packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )

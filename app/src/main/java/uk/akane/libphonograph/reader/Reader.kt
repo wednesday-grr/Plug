@@ -34,7 +34,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.Log
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
-import org.akanework.gramophone.logic.GramophoneAlbumArtProvider
+import org.akanework.gramophone.logic.PlugAlbumArtProvider
 import org.akanework.gramophone.logic.getFile
 import org.akanework.gramophone.logic.hasAudioPermission
 import org.akanework.gramophone.logic.hasImagePermission
@@ -365,7 +365,7 @@ internal object Reader {
                 val dateTakenDay = if (hasImprovedMediaStore()) {
                     dateTakenParsed?.dayOfMonth
                 } else null
-                val imgUri = GramophoneAlbumArtProvider.buildSongUri(id, pathFile)
+                val imgUri = PlugAlbumArtProvider.buildSongUri(id, pathFile)
                 if (cdTrackNumber != null && trackNumber == null) {
                     cdTrackNumber.toIntOrNull()?.let {
                         trackNumber = it
@@ -531,7 +531,7 @@ internal object Reader {
             coverCache?.get(it.id)?.let { p ->
                 // if this is false, folder contains >1 albums
                 if (p.second.albumId == it.id) {
-                    it.cover = GramophoneAlbumArtProvider.buildAlbumUri(p.second
+                    it.cover = PlugAlbumArtProvider.buildAlbumUri(p.second
                         .songList.first().requireMediaStoreId(), p.second
                         .songList.first().getFile()!!)
                 }

@@ -227,8 +227,8 @@
     <string name="spk_channel_invalid">无效</string>
     <string name="spk_channel_out_bottom_front_left">底部前置左声道</string>
     <string name="mix_port_flag_none">无</string>
-    <string name="open_in_gramophone">在留声机中打开</string>
-    <string name="gramophone_crashed_explainer2">留声机崩溃了 :(\n\n请向我发送错误报告，以便修复导致此次崩溃的问题！\n\n每次崩溃的情况都像音乐一样独一无二，如果没有您的帮助，这个问题很可能<b>无法</b>得到修复！</string>
+    <string name="open_in_gramophone">在 Plug 中打开</string>
+    <string name="gramophone_crashed_explainer2">Plug 崩溃了 :(\n\n请向我发送错误报告，以便修复导致此次崩溃的问题！\n\n每次崩溃的情况都像音乐一样独一无二，如果没有您的帮助，这个问题很可能<b>无法</b>得到修复！</string>
     <string name="email_clipboard">已复制邮件地址以及文本到剪贴板</string>
     <string name="audio_signal_chain">音频信号链</string>
     <string name="delete_failed_playlist">删除播放列表失败：%s</string>

@@ -75,21 +75,21 @@ import com.google.android.material.appbar.CollapsingToolbarLayout
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.akanework.gramophone.BuildConfig
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_GET_AUDIO_FORMAT
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_GET_LYRICS
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_AGE
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_DEL
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_GET_INACTIVE_LIST
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_GET_QUEUE_FOR_UI
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_LOAD_QUEUE
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_PIN_QUEUE
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_RENAME_QUEUE
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_REORDER
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QB_UNPIN_QUEUE
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_QUERY_TIMER
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_SET_MEDIA_ITEMS_ATOMIC
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY
-import org.akanework.gramophone.logic.GramophonePlaybackService.Companion.SERVICE_SET_TIMER
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_GET_AUDIO_FORMAT
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_GET_LYRICS
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_AGE
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_DEL
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_GET_INACTIVE_LIST
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_GET_QUEUE_FOR_UI
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_LOAD_QUEUE
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_PIN_QUEUE
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_RENAME_QUEUE
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_REORDER
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QB_UNPIN_QUEUE
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_QUERY_TIMER
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_SET_MEDIA_ITEMS_ATOMIC
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY
+import org.akanework.gramophone.logic.PlugPlaybackService.Companion.SERVICE_SET_TIMER
 import org.akanework.gramophone.logic.utils.AfFormatInfo
 import org.akanework.gramophone.logic.utils.AudioFormatDetector
 import org.akanework.gramophone.logic.utils.AudioTrackInfo
@@ -630,8 +630,8 @@ fun Context.supportsWideScreen() : Boolean {
     return config.screenWidthDp >= 780
 }
 
-val Context.gramophoneApplication
-    get() = this.applicationContext as GramophoneApplication
+val Context.plugApplication
+    get() = this.applicationContext as PlugApplication
 
 /*
 fun AppWidgetManager.createWidgetInSizes(appWidgetId: Int, creator: (SizeF?) -> RemoteViews): RemoteViews {

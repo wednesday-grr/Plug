@@ -27,7 +27,7 @@ import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.ReplayGainUtil
 import org.akanework.gramophone.logic.utils.exoplayer.ExtendedAudioOutputProvider
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugRenderFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertThrows
@@ -40,21 +40,21 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [25])
-class GramophoneRenderFactoryTest {
+class PlugRenderFactoryTest {
     @Test
     fun captureRequiresPcmMixingMode() {
         val context = RuntimeEnvironment.getApplication()
         assertThrows(IllegalArgumentException::class.java) {
-            GramophoneRenderFactory(context, {}, {}, onPcmTransient = {})
+            PlugRenderFactory(context, {}, {}, onPcmTransient = {})
         }
-        GramophoneRenderFactory(context, {}, {}, pcmMixing = true, onPcmTransient = {})
+        PlugRenderFactory(context, {}, {}, pcmMixing = true, onPcmTransient = {})
     }
 
     @Test
     fun factoriesOwnIndependentReplayGainSettings() {
         val context = RuntimeEnvironment.getApplication()
-        val deckA = GramophoneRenderFactory(context, {}, {})
-        val deckB = GramophoneRenderFactory(context, {}, {})
+        val deckA = PlugRenderFactory(context, {}, {})
+        val deckB = PlugRenderFactory(context, {}, {})
         val processorA = deckA.replayGainAudioProcessor
         val processorB = deckB.replayGainAudioProcessor
 

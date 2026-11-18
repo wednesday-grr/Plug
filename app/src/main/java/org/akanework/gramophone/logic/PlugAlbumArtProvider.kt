@@ -84,19 +84,19 @@ import kotlin.time.Duration.Companion.milliseconds
 /**
  * ContentProvider that serves album artwork to external processes (e.g. Android Auto).
  *
- * URI format: `content://org.akanework.gramophone.albumart/{type}/{id}`
+ * URI format: `content://<applicationId>.albumart/{type}/{id}`
  * where `type` is "song" or "album" and `id` is a song ID.
  */
-class GramophoneAlbumArtProvider : ContentProvider() {
+class PlugAlbumArtProvider : ContentProvider() {
 
     companion object {
-        private const val TAG = "GramophoneArtProvider"
+        private const val TAG = "PlugArtProvider"
 
         /** Authority for the ContentProvider that serves art to external processes. */
         const val PROVIDER_AUTHORITY = "${BuildConfig.APPLICATION_ID}.albumart"
 
         /**
-         * Builds a `content://` URI pointing to [GramophoneAlbumArtProvider].
+         * Builds a `content://` URI pointing to [PlugAlbumArtProvider].
          *
          * @param id        the ID of any song (!!! not album ID)
          * @param songFile  the song file's path
@@ -111,7 +111,7 @@ class GramophoneAlbumArtProvider : ContentProvider() {
                 .build()
 
         /**
-         * Builds a `content://` URI pointing to [GramophoneAlbumArtProvider].
+         * Builds a `content://` URI pointing to [PlugAlbumArtProvider].
          *
          * @param id the song ID
          */

@@ -52,7 +52,7 @@ import org.akanework.gramophone.logic.getBooleanStrict
 import org.akanework.gramophone.logic.replaceAllSupport
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.logic.utils.Flags
-import org.akanework.gramophone.ui.GramophoneTheme
+import org.akanework.gramophone.ui.PlugTheme
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.fragments.compose.MqState
 import org.akanework.gramophone.ui.fragments.compose.QueueRoot
@@ -147,7 +147,7 @@ class PlaylistQueueSheet(
                 }
                 val pureDark by pureDarkFlow.collectAsState()
 
-                GramophoneTheme(
+                PlugTheme(
                     pureDark = pureDark
                 ) {
                     val mqState =

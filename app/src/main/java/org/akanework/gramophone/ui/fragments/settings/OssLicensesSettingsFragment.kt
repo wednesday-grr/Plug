@@ -41,14 +41,14 @@ import com.mikepenz.aboutlibraries.ui.compose.android.produceLibraries
 import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
 import org.akanework.gramophone.R
 import org.akanework.gramophone.ui.BaseComposeActivity
-import org.akanework.gramophone.ui.GramophoneTheme
+import org.akanework.gramophone.ui.PlugTheme
 
 class OssLicensesSettingsActivity : BaseComposeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            GramophoneTheme {
+            PlugTheme {
                 OssLicensesSettingsScreen()
             }
         }

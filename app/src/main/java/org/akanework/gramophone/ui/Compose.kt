@@ -55,16 +55,16 @@ abstract class BaseComposeActivity : AppCompatActivity() {
 }
 
 @Composable
-fun BaseComposeActivity.GramophoneTheme(
+fun BaseComposeActivity.PlugTheme(
     useDarkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     val pureDark by pureDarkFlow.collectAsState()
-    GramophoneTheme(useDarkTheme, pureDark, content)
+    PlugTheme(useDarkTheme, pureDark, content)
 }
 
 @Composable
-fun GramophoneTheme(
+fun PlugTheme(
     useDarkTheme: Boolean = isSystemInDarkTheme(),
     pureDark: Boolean,
     content: @Composable () -> Unit

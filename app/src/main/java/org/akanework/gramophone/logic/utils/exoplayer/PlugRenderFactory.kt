@@ -41,7 +41,7 @@ import org.akanework.gramophone.logic.utils.SessionBoostCoordinator
 import org.akanework.gramophone.logic.utils.automix.PcmTransientAudioProcessor
 import org.nift4.alacdecoder.AlacRenderer
 
-class GramophoneRenderFactory(
+class PlugRenderFactory(
     context: Context,
     private val configurationListener: (Format?) -> Unit,
     private val audioSinkListener: (PostAmpAudioOutputProvider) -> Unit,

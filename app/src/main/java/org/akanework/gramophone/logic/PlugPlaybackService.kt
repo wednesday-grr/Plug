@@ -143,9 +143,9 @@ import org.akanework.gramophone.logic.utils.automix.SmartQueueSorter
 import org.akanework.gramophone.logic.utils.automix.TrackAudioMetadataResolver
 
 import org.akanework.gramophone.logic.utils.exoplayer.EndedWorkaroundPlayer
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneExtractorsFactory
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneMediaSourceFactory
-import org.akanework.gramophone.logic.utils.exoplayer.GramophoneRenderFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugExtractorsFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugMediaSourceFactory
+import org.akanework.gramophone.logic.utils.exoplayer.PlugRenderFactory
 import org.akanework.gramophone.ui.AudioPreviewActivity
 import org.akanework.gramophone.ui.LyricWidgetProvider
 import org.akanework.gramophone.ui.MainActivity
@@ -168,16 +168,16 @@ import kotlin.random.Random
 
 
 /**
- * [GramophonePlaybackService] is a server service.
+ * [PlugPlaybackService] is a server service.
  * It's using exoplayer2 as its player backend.
  */
-class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Listener,
+class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
     MediaLibrarySession.Callback, Player.Listener, AnalyticsListener,
     SharedPreferences.OnSharedPreferenceChangeListener {
 
     companion object {
         private const val TAG = "GramoPlaybackService"
-        const val NOTIFY_CHANNEL_ID = "serviceFgsError"
+        const val NOTIFY_CHANNEL_ID = "plugServiceFgsError"
         const val NOTIFY_ID = 1
         private const val FAVE_ID = 2
         private const val PENDING_INTENT_SESSION_ID = 0
@@ -205,7 +205,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
 
         const val SERVICE_QB_AGE = "qb_age"
 
-        var instanceForWidgetAndLyricsOnly: GramophonePlaybackService? = null
+        var instanceForWidgetAndLyricsOnly: PlugPlaybackService? = null
     }
 
     private var lastSessionId = 0
@@ -339,7 +339,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         audioAnalysis = AudioAnalysisScheduler(this, TrackAnalysisCache(this))
         audioAnalysis.setIdle(true)
         scope.launch {
-            gramophoneApplication.reader.songListFlow.collect { audioAnalysis.updateLibrary(it) }
+            plugApplication.reader.songListFlow.collect { audioAnalysis.updateLibrary(it) }
         }
         instanceForWidgetAndLyricsOnly = this
         internalPlaybackThread.start()
@@ -360,7 +360,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             NotificationChannelCompat.Builder(
                 NOTIFY_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_HIGH
             ).apply {
-                setName(getString(R.string.error_in_bg))
+                setName("${getString(R.string.app_name)} - ${getString(R.string.error_in_bg)}")
                 setVibrationEnabled(true)
                 setVibrationPattern(longArrayOf(0L, 200L))
                 setLightsEnabled(false)
@@ -428,7 +428,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         lastPlayedManager.allowSavingState = false
         libraryTreeLoader = LibraryTreeLoader(
             this,
-            gramophoneApplication,
+            plugApplication,
             lifecycleScope,
             prefs
         )
@@ -441,7 +441,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     // Coil-based bitmap loader to reuse Coil's caching and to make sure we use
                     // the same cover art as the rest of the app, ie MediaStore's cover
 
-                    private val limit by lazy { MediaSession.getBitmapDimensionLimit(this@GramophonePlaybackService) }
+                    private val limit by lazy { MediaSession.getBitmapDimensionLimit(this@PlugPlaybackService) }
 
                     // the suppression is correct, we want identity of the byte array as it will
                     // stay the same over one song's lifetime
@@ -449,7 +449,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
                         return CallbackToFutureAdapter.getFuture { completer ->
                             imageLoader.enqueue(
-                                ImageRequest.Builder(this@GramophonePlaybackService)
+                                ImageRequest.Builder(this@PlugPlaybackService)
                                     .data(data)
                                     .memoryCacheKey(data.hashCode().toString())
                                     .size(limit, limit)
@@ -485,7 +485,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                     ): ListenableFuture<Bitmap> {
                         return CallbackToFutureAdapter.getFuture { completer ->
                             imageLoader.enqueue(
-                                ImageRequest.Builder(this@GramophonePlaybackService)
+                                ImageRequest.Builder(this@PlugPlaybackService)
                                     .data(uri)
                                     .size(limit, limit)
                                     .allowHardware(false)
@@ -621,7 +621,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             }
         }
         scope.launch(Dispatchers.Default) {
-            gramophoneApplication.reader.playlistListFlow.map { it.find { p -> p is Favorite } }
+            plugApplication.reader.playlistListFlow.map { it.find { p -> p is Favorite } }
                 .collect { list ->
                     val ids = list?.songList?.map { it.mediaId } ?: emptyList()
                     withContext(Dispatchers.Main + NonCancellable) {
@@ -707,7 +707,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         }
         val completion = SettableFuture.create<SessionResult>()
         lifecycleScope.launch(Dispatchers.Default) {
-            val item = gramophoneApplication.reader.songListFlow.map {
+            val item = plugApplication.reader.songListFlow.map {
                 it.find { s -> s.mediaId == mediaId } }.first()
             if (item == null) {
                 completion.set(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
@@ -718,16 +718,16 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 completion.set(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
                 return@launch
             }
-            val uriIn = gramophoneApplication.reader.playlistListFlow.map { it.find { p ->
+            val uriIn = plugApplication.reader.playlistListFlow.map { it.find { p ->
                 p is Favorite } }.first()?.id?.let {
                 ContentUris.withAppendedId(@Suppress("deprecation")
                 MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, it)
             }
             val token = if (uriIn != null) {
-                MediaStoreCompat.needRequestBytesWrite(this@GramophonePlaybackService,
+                MediaStoreCompat.needRequestBytesWrite(this@PlugPlaybackService,
                     uriIn)
             } else {
-                MediaStoreCompat.needRequestCreate(this@GramophonePlaybackService,
+                MediaStoreCompat.needRequestCreate(this@PlugPlaybackService,
                     ItemManipulator.getDefaultPlaylistFile(
                         ItemManipulator.FAVORITES).path)
             }
@@ -735,17 +735,17 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             if (token == null) {
                 try {
                     val uri = uriIn ?: ItemManipulator.createPlaylist(
-                        this@GramophonePlaybackService, ItemManipulator
+                        this@PlugPlaybackService, ItemManipulator
                             .getDefaultPlaylistFile(ItemManipulator.FAVORITES))
                     val readback = if (uriIn != null) ItemManipulator.readbackPlaylist(
-                        this@GramophonePlaybackService, uri) else
+                        this@PlugPlaybackService, uri) else
                             PlaylistSerializer.Playlist.create()
                     val newSongs = if (rating.isHeart) {
                         readback.entries + song
                     } else {
                         readback.entries.filter { !song.fuzzyEquals(it) }
                     }
-                    ItemManipulator.setPlaylistContent(this@GramophonePlaybackService, uri,
+                    ItemManipulator.setPlaylistContent(this@PlugPlaybackService, uri,
                         readback.copy(entries = newSongs), uriIn == null)
                 } catch (e: Exception) {
                     Log.e(TAG, "failed to set $rating on $mediaId", e)
@@ -758,18 +758,18 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 if (!supportsNotificationPermission() || hasNotificationPermission()) {
                     @SuppressLint("MissingPermission") // false positive
                     nm.notify(FAVE_ID, NotificationCompat.Builder(
-                        this@GramophonePlaybackService, NOTIFY_CHANNEL_ID).apply {
+                        this@PlugPlaybackService, NOTIFY_CHANNEL_ID).apply {
                         setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                         setAutoCancel(true)
                         setCategory(NotificationCompat.CATEGORY_ERROR)
                         setSmallIcon(R.drawable.ic_error)
-                        setContentTitle(this@GramophonePlaybackService.getString(R.string.favorite_failed_title))
-                        setContentText(this@GramophonePlaybackService.getString(R.string.favorite_failed_text))
+                        setContentTitle(this@PlugPlaybackService.getString(R.string.favorite_failed_title))
+                        setContentText(this@PlugPlaybackService.getString(R.string.favorite_failed_text))
                         setContentIntent(
                             PendingIntent.getActivity(
-                                this@GramophonePlaybackService,
+                                this@PlugPlaybackService,
                                 PENDING_INTENT_FAVE_ID,
-                                Intent(this@GramophonePlaybackService, MainActivity::class.java)
+                                Intent(this@PlugPlaybackService, MainActivity::class.java)
                                     .putExtra(MainActivity.FAVORITE_ENTRY, song)
                                     .putExtra(MainActivity.FAVORITE_STATE, rating.isHeart),
                                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -958,7 +958,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         )
 
     private fun createExoPlayer(
-        renderFactory: GramophoneRenderFactory,
+        renderFactory: PlugRenderFactory,
         offloadPreferences: TrackSelectionParameters.AudioOffloadPreferences,
     ): ExoPlayer = ExoPlayer.Builder(
         this,
@@ -967,9 +967,9 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
             .setEnableDecoderFallback(true)
             .setEnableAudioOutputPlaybackParameters(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
-        GramophoneMediaSourceFactory(
+        PlugMediaSourceFactory(
             DefaultDataSource.Factory(this),
-            GramophoneExtractorsFactory().also {
+            PlugExtractorsFactory().also {
                 it.setConstantBitrateSeekingEnabled(true)
                 it.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
             })
@@ -991,7 +991,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     private fun createRenderFactory(
         tracker: AfFormatTracker,
         pcmMixing: Boolean,
-    ): GramophoneRenderFactory = GramophoneRenderFactory(
+    ): PlugRenderFactory = PlugRenderFactory(
         this,
         { format ->
             handler.post {
@@ -1878,8 +1878,8 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
         if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
             bitrate = null
             bitrateFetcher.launch {
-                bitrate = mediaItem?.getBitrate(this@GramophonePlaybackService) // TODO subtract cover size
-                this@GramophonePlaybackService.mediaSession?.broadcastCustomCommand(
+                bitrate = mediaItem?.getBitrate(this@PlugPlaybackService) // TODO subtract cover size
+                this@PlugPlaybackService.mediaSession?.broadcastCustomCommand(
                     SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
                     Bundle.EMPTY
                 )
@@ -1993,7 +1993,7 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
     }
 
     private suspend fun mapMediaItemsForFavorites(mediaItems: List<MediaItem>): List<MediaItem> {
-        val favorites = gramophoneApplication.reader.playlistListFlow.map { it.find { p ->
+        val favorites = plugApplication.reader.playlistListFlow.map { it.find { p ->
             p is Favorite } }.first()?.songList?.map { it.mediaId } ?: emptyList()
         return mediaItems.map { item ->
             val isHeart = (item.mediaMetadata.userRating as? HeartRating)
@@ -2220,13 +2220,13 @@ class GramophonePlaybackService : MediaLibraryService(), MediaSessionService.Lis
                 setAutoCancel(true)
                 setCategory(NotificationCompat.CATEGORY_ERROR)
                 setSmallIcon(R.drawable.ic_error)
-                setContentTitle(this@GramophonePlaybackService.getString(R.string.fgs_failed_title))
-                setContentText(this@GramophonePlaybackService.getString(R.string.fgs_failed_text))
+                setContentTitle(this@PlugPlaybackService.getString(R.string.fgs_failed_title))
+                setContentText(this@PlugPlaybackService.getString(R.string.fgs_failed_text))
                 setContentIntent(
                     PendingIntent.getActivity(
-                        this@GramophonePlaybackService,
+                        this@PlugPlaybackService,
                         PENDING_INTENT_NOTIFY_ID,
-                        Intent(this@GramophonePlaybackService, MainActivity::class.java)
+                        Intent(this@PlugPlaybackService, MainActivity::class.java)
                             .putExtra(MainActivity.PLAYBACK_AUTO_START_FOR_FGS, true),
                         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                     )

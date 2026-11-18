@@ -31,12 +31,12 @@ import org.akanework.gramophone.ui.adapters.ViewPager2Adapter
 import uk.akane.libphonograph.items.*
 
 /**
- * Handles the media library browsing logic for [GramophonePlaybackService].
+ * Handles the media library browsing logic for [PlugPlaybackService].
  * Responsible for building the library tree and searching for items.
  */
 class LibraryTreeLoader(
     private val context: Context,
-    private val app: GramophoneApplication,
+    private val app: PlugApplication,
     private val scope: CoroutineScope,
     private val prefs: SharedPreferences
 ) {
