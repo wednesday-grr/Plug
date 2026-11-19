@@ -29,6 +29,10 @@ class LyricsBackdropTest {
 
         Color.colorToHSV(darkenLyricsSurface(Color.WHITE), hsv)
         assertEquals(0.45f, hsv[2], 0.005f)
+        Color.colorToHSV(darkenLyricsSurface(Color.WHITE, 0.25f, 1f), hsv)
+        assertEquals(0.25f, hsv[2], 0.005f)
+        Color.colorToHSV(darkenLyricsSurface(Color.WHITE, 1f, 1f), hsv)
+        assertEquals(1f, hsv[2], 0.005f)
     }
 
     @Test

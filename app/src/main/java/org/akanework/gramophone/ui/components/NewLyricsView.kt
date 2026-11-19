@@ -21,6 +21,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Region
 import android.graphics.RenderNode
 import android.graphics.Typeface
 import android.os.Build
@@ -110,6 +113,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     private var defaultTextColor = 0
     private var highlightTextColor = 0
     private var highlightTlTextColor = 0
+    private var customActiveColor: Int? = null
     private val defaultTextPaint = TextPaint().apply {
         color = Color.RED
     }
@@ -125,7 +129,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     private var gradientTlSpanPool = mutableListOf<MyGradientSpan>()
     private val cachedNodes = if (hasRenderNodes()) SparseArray<RenderNode>() else null
     private val activeLyricsColor: Int
-        get() = if (appleEffectsEnabled) Color.WHITE else highlightTextColor
+        get() = customActiveColor ?: if (appleEffectsEnabled) Color.WHITE else highlightTextColor
 
     private fun makeGradientSpan() =
         MyGradientSpan(grdWidth, defaultTextColor, activeLyricsColor)
@@ -144,6 +148,18 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         fun isPlaying(): Boolean
         fun speed(): Float
         fun destroy()
+    }
+
+    fun setCustomActiveColor(color: Int?) {
+        if (customActiveColor == color) return
+        customActiveColor = color
+        wordActiveSpan.color = activeLyricsColor
+        gradientSpanPool.clear()
+        repeat(3) { gradientSpanPool.add(makeGradientSpan()) }
+        spForRender?.second?.forEach { item ->
+            item.text.getSpans<MyGradientSpan>().forEach { item.text.removeSpan(it) }
+        }
+        invalidateDeeply()
     }
 
     fun updateTextColor(
@@ -404,7 +420,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     else animPos >= animPosReal)
                     stateOverrides.remove(i)
             }
-            val scrollTarget = !it.isAttributionFooter &&
+            val scrollTarget = !it.isAttributionFooter && it.speaker?.isBackground != true &&
                 posForRender in fadeInStart..(lastTs - timeOffsetForUse.toULong())
             val scaleInProgress = if (it.line == null) 1f else lerpInv(
                 fadeInStart.toFloat(), fadeInEnd.toFloat(),
@@ -509,7 +525,10 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             }
             canvas.translate(0f, it.paddingTop.toFloat() + delayedScrollOffset -
                     (it.layout.height.toFloat() / hlScaleFactor - it.layout.height.toFloat()) / 2)
-            val culled = culledDown || scrollY - paddingTop > heightSoFar +
+            val backgroundVisible = it.line?.let { line ->
+                lyricBackgroundVisible(line, (lyrics as? SemanticLyrics.SyncedLyrics)?.text.orEmpty(), posForRender)
+            } ?: true
+            val culled = !backgroundVisible || culledDown || scrollY - paddingTop > heightSoFar +
                     it.layout.height.toFloat() + it.paddingBottom
             if (!culled) {
                 if (highlight) {
@@ -676,7 +695,27 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 val backgroundSave = if (it.speaker?.isBackground == true) {
                     canvas.saveLayerAlpha(0f, 0f, width, it.layout.height.toFloat(), 192)
                 } else null
-                if (hasRenderNodes()) {
+                val activeWord = wordIdx?.let { index -> it.theWords?.get(index) }
+                val wordScale = activeWordScale(activeWord, posForRender, lyricAnimTime > 0f)
+                if (activeWord != null && isPlaying &&
+                    posForRender >= activeWord.begin && posForRender <= (activeWord.endInclusive ?: 0uL)
+                ) animating = true
+                if (wordScale > 1f && activeWord != null) {
+                    val path = Path()
+                    it.layout.getSelectionPath(activeWord.charRange.first, activeWord.charRange.last + 1, path)
+                    val bounds = RectF()
+                    path.computeBounds(bounds, true)
+                    canvas.save()
+                    @Suppress("DEPRECATION")
+                    canvas.clipPath(path, Region.Op.DIFFERENCE)
+                    it.layout.draw(canvas)
+                    canvas.restore()
+                    canvas.save()
+                    canvas.scale(wordScale, wordScale, bounds.centerX(), bounds.centerY())
+                    canvas.clipPath(path)
+                    it.layout.draw(canvas)
+                    canvas.restore()
+                } else if (hasRenderNodes()) {
                     if (!hasValidCachedNode) {
                         node!!.setPosition(0, 0, width.toInt(),
                             it.layout.height)

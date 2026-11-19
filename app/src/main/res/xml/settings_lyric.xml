@@ -36,6 +36,49 @@
         android:widgetLayout="@layout/preference_switch_widget"
         app:iconSpaceReserved="false" />
 
+    <SwitchPreferenceCompat
+        android:defaultValue="false"
+        android:key="lyric_custom_active_enabled"
+        android:title="@string/settings_lyric_custom_active"
+        android:summary="@string/settings_lyric_custom_color_summary"
+        app:iconSpaceReserved="false" />
+    <EditTextPreference
+        android:defaultValue="#FFFFFF"
+        android:dependency="lyric_custom_active_enabled"
+        android:key="lyric_custom_active_color"
+        android:title="@string/settings_lyric_active_color"
+        app:useSimpleSummaryProvider="true"
+        app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat
+        android:defaultValue="false"
+        android:key="lyric_custom_inactive_enabled"
+        android:title="@string/settings_lyric_custom_inactive"
+        android:summary="@string/settings_lyric_custom_color_summary"
+        app:iconSpaceReserved="false" />
+    <EditTextPreference
+        android:defaultValue="#BDBDBD"
+        android:dependency="lyric_custom_inactive_enabled"
+        android:key="lyric_custom_inactive_color"
+        android:title="@string/settings_lyric_inactive_color"
+        app:useSimpleSummaryProvider="true"
+        app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat
+        android:defaultValue="false"
+        android:dependency="lyric_apple_music_effects"
+        android:key="lyric_custom_brightness_enabled"
+        android:title="@string/settings_lyric_custom_brightness"
+        android:summary="@string/settings_lyric_custom_brightness_summary"
+        app:iconSpaceReserved="false" />
+    <SeekBarPreference
+        android:defaultValue="70"
+        android:dependency="lyric_custom_brightness_enabled"
+        android:key="lyric_custom_brightness"
+        android:max="100"
+        android:title="@string/settings_lyric_brightness"
+        app:min="0"
+        app:showSeekBarValue="true"
+        app:iconSpaceReserved="false" />
+
     <SeekBarPreference
         android:defaultValue="34"
         android:icon="@drawable/ic_font_size"

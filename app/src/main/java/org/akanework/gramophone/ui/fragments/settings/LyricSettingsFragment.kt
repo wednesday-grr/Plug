@@ -18,6 +18,8 @@
 package org.akanework.gramophone.ui.fragments.settings
 
 import android.os.Bundle
+import android.widget.Toast
+import androidx.preference.EditTextPreference
 import org.akanework.gramophone.R
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingsActivity
@@ -29,5 +31,13 @@ class LyricSettingsActivity : BaseSettingsActivity(
 class LyricSettingsFragment : BasePreferenceFragment() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_lyric, rootKey)
+        listOf("lyric_custom_active_color", "lyric_custom_inactive_color").forEach { key ->
+            findPreference<EditTextPreference>(key)!!.setOnPreferenceChangeListener { _, value ->
+                val valid = (value as? String)?.matches(Regex("#[0-9a-fA-F]{6}")) == true
+                if (!valid)
+                    Toast.makeText(requireContext(), R.string.settings_lyric_invalid_color, Toast.LENGTH_SHORT).show()
+                valid
+            }
+        }
     }
 }

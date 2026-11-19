@@ -58,6 +58,15 @@
     <string name="lyrics_maker">Maker: %1$s</string>
     <string name="settings_lyrics_apple_music_effects">Apple Music-style lyrics effects</string>
     <string name="settings_lyrics_apple_music_effects_summary">Show a blurred album-art backdrop and progressive focus on the active lyric line.</string>
+    <string name="settings_lyric_custom_active">Custom active lyrics color</string>
+    <string name="settings_lyric_custom_inactive">Custom inactive lyrics color</string>
+    <string name="settings_lyric_custom_color_summary">When off, use automatic colors.</string>
+    <string name="settings_lyric_active_color">Active color (#RRGGBB)</string>
+    <string name="settings_lyric_inactive_color">Inactive color (#RRGGBB)</string>
+    <string name="settings_lyric_invalid_color">Enter a color in #RRGGBB format.</string>
+    <string name="settings_lyric_custom_brightness">Custom background brightness</string>
+    <string name="settings_lyric_custom_brightness_summary">When off, use automatic album-art backdrop brightness.</string>
+    <string name="settings_lyric_brightness">Background brightness (%)</string>
     <string name="settings_spicy_lyrics_title">Spicy Lyrics Online Lookup</string>
     <string name="settings_spicy_lyrics_summary">Look up lyrics online when no local lyrics are available. Disabled by default.</string>
     <string name="settings_spicy_lyrics_api_key_title">Spicy Lyrics API key</string>

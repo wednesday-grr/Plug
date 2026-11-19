@@ -60,27 +60,22 @@ internal const val LYRICS_ART_ALPHA = 0.56f
 internal const val LYRICS_ART_BRIGHTNESS = 0.7f
 internal const val LYRICS_SCRIM_COLOR = 0x66000000
 
-internal fun darkenLyricsSurface(color: Int): Int {
+internal fun darkenLyricsSurface(color: Int, brightness: Float = 0.7f, maxValue: Float = 0.45f): Int {
     val hsv = FloatArray(3)
     Color.colorToHSV(color, hsv)
-    hsv[2] = (hsv[2] * 0.7f).coerceAtMost(0.45f)
+    hsv[2] = (hsv[2] * brightness).coerceAtMost(maxValue)
     return Color.HSVToColor(Color.alpha(color), hsv)
 }
 
-internal fun lyricsArtworkColorFilter() = ColorMatrixColorFilter(floatArrayOf(
-    LYRICS_ART_BRIGHTNESS, 0f, 0f, 0f, 0f,
-    0f, LYRICS_ART_BRIGHTNESS, 0f, 0f, 0f,
-    0f, 0f, LYRICS_ART_BRIGHTNESS, 0f, 0f,
+internal fun lyricsArtworkColorFilter(brightness: Float = LYRICS_ART_BRIGHTNESS) = ColorMatrixColorFilter(floatArrayOf(
+    brightness, 0f, 0f, 0f, 0f,
+    0f, brightness, 0f, 0f, 0f,
+    0f, 0f, brightness, 0f, 0f,
     0f, 0f, 0f, 1f, 0f
 ))
 
 class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, attrs),
     SharedPreferences.OnSharedPreferenceChangeListener {
-
-    companion object {
-        private const val INACTIVE_LYRICS_COLOR = 0xFFBDBDBD.toInt()
-        private const val TRANSLATION_LYRICS_COLOR = 0xFFE0E0E0.toInt()
-    }
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
     private var recyclerView: MyRecyclerView? = null
@@ -323,8 +318,13 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     private fun applySurfaceColor() {
+        val custom = prefs.getBoolean("lyric_custom_brightness_enabled", false)
+        val brightness = if (custom)
+            prefs.getInt("lyric_custom_brightness", 70).coerceIn(0, 100) / 100f
+        else LYRICS_ART_BRIGHTNESS
+        albumArtBackgrounds.forEach { it.colorFilter = lyricsArtworkColorFilter(brightness) }
         val color = if (prefs.getBooleanStrict("lyric_apple_music_effects", true)) {
-            darkenLyricsSurface(lyricSurfaceColor)
+            darkenLyricsSurface(lyricSurfaceColor, brightness, if (custom) 1f else 0.45f)
         } else lyricSurfaceColor
         setBackgroundColor(color)
     }
@@ -392,10 +392,16 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             newView?.onPrefsChanged(key)
         else if (key == "lyric_ui_v2")
             createView()
-        if (key == "lyric_apple_music_effects") {
-            applyTextColors()
+        if (key == "lyric_apple_music_effects")
             updateAlbumArtBackground()
+        if (key == "lyric_custom_active_enabled" || key == "lyric_custom_active_color" ||
+            key == "lyric_custom_inactive_enabled" || key == "lyric_custom_inactive_color"
+        ) {
+            appliedTextColors = null
+            applyTextColors()
         }
+        if (key == "lyric_custom_brightness_enabled" || key == "lyric_custom_brightness")
+            applySurfaceColor()
     }
 
     fun updateLyricPositionFromPlaybackPos() {
@@ -453,14 +459,15 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     private fun applyTextColors() {
-        val effects = prefs.getBooleanStrict("lyric_apple_music_effects", true)
-        val default = if (effects) INACTIVE_LYRICS_COLOR else defaultTextColor
-        val highlight = if (effects) Color.WHITE else highlightTextColor
-        val translation = if (effects) TRANSLATION_LYRICS_COLOR else highlightTlTextColor
-        val colors = Triple(default, highlight, translation)
+        val active = customLyricColor(prefs, true)
+        val inactive = customLyricColor(prefs, false) ?: defaultTextColor
+        val highlight = active ?: highlightTextColor
+        val translation = active ?: highlightTlTextColor
+        val colors = Triple(inactive, highlight, translation)
         if (appliedTextColors == colors) return
         appliedTextColors = colors
-        adapter?.updateTextColor(default, highlight)
-        newView?.updateTextColor(default, highlight, translation)
+        adapter?.updateTextColor(inactive, highlight, active != null)
+        newView?.setCustomActiveColor(active)
+        newView?.updateTextColor(inactive, highlight, translation)
     }
 }

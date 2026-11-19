@@ -16,6 +16,9 @@ import android.view.View.VISIBLE
 import android.view.ViewGroup
 import android.view.animation.PathInterpolator
 import android.widget.TextView
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.RelativeSizeSpan
 import androidx.core.animation.doOnEnd
 import androidx.core.graphics.TypefaceCompat
 import androidx.core.content.res.ResourcesCompat
@@ -54,6 +57,9 @@ class LegacyLyricsAdapter(
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
     private var defaultTextColor = 0
     private var highlightTextColor = 0
+    private var customHighlight = false
+    private var playbackPosition = 0uL
+    private var playbackStyles = emptyMap<Int, Triple<Boolean, Int, Int>>()
     private val interpolator = PathInterpolator(0.4f, 0.2f, 0f, 1f)
     private val lyricList = mutableListOf<Lyric>()
     var currentFocusPos = -1
@@ -99,6 +105,18 @@ class LegacyLyricsAdapter(
             setTextIsSelectable(false)
             customSelectionActionModeCallback = null
             text = lyric.content
+            val word = lyric.line?.words?.lastOrNull {
+                it.begin <= playbackPosition && playbackPosition <= (it.endInclusive ?: it.begin)
+            }
+            val scale = activeWordScale(word, playbackPosition, !forceNoAnimation)
+            if (word != null && scale > 1f && word.charRange.first >= 0 &&
+                word.charRange.last < lyric.content.length
+            ) {
+                text = SpannableString(lyric.content).apply {
+                    setSpan(RelativeSizeSpan(scale), word.charRange.first, word.charRange.last + 1,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
             gravity = when {
                 lyric.isAttributionFooter -> Gravity.START
                 isLyricCentered || lyric.speaker?.isGroup == true -> Gravity.CENTER
@@ -172,9 +190,11 @@ class LegacyLyricsAdapter(
                 }
             }
             val active = position == currentFocusPos
-            alpha = if (lyric.isBackground) 0.75f else 1f
+            alpha = if (lyric.isBackground && lyric.line != null &&
+                !lyricBackgroundVisible(lyric.line, lyricList.mapNotNull { it.line }, playbackPosition)
+            ) 0f else if (lyric.isBackground) 0.75f else 1f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setRenderEffect(null)
-            if (active && !lyric.isTranslation) setTextColor(Color.WHITE)
+            if (active && !lyric.isTranslation) setTextColor(if (customHighlight) highlightTextColor else Color.WHITE)
             if (active) scaleText(1.03f)
         }
     }
@@ -339,6 +359,25 @@ class LegacyLyricsAdapter(
     }
 
     fun updateLyricPositionFromPlaybackPos() {
+        playbackPosition = callback?.getCurrentPosition() ?: 0uL
+        val lines = lyricList.mapNotNull { it.line }
+        val newStyles = lyricList.mapIndexedNotNull { index, lyric ->
+            val line = lyric.line ?: return@mapIndexedNotNull null
+            val word = line.words?.lastOrNull {
+                it.begin <= playbackPosition && playbackPosition <= (it.endInclusive ?: it.begin)
+            }
+            val scale = activeWordScale(word, playbackPosition, !forceNoAnimation)
+            if (lyric.isBackground || word != null)
+                index to Triple(
+                    lyricBackgroundVisible(line, lines, playbackPosition),
+                    word?.charRange?.first ?: -1, (scale * 100).toInt()
+                )
+            else null
+        }.toMap()
+        (playbackStyles.keys + newStyles.keys).forEach {
+            if (playbackStyles[it] != newStyles[it]) notifyItemChanged(it)
+        }
+        playbackStyles = newStyles
         if (lyricList.isNotEmpty()) {
             val newIndex = updateNewIndex()
 
@@ -395,6 +434,7 @@ class LegacyLyricsAdapter(
         )
         buildAttributionLyric(attribution)?.let(updatedLyrics::add)
         if (lyricList != updatedLyrics) {
+            playbackStyles = emptyMap()
             lyricList.clear()
             lyricList.addAll(updatedLyrics)
             @SuppressLint("NotifyDataSetChanged")
@@ -404,9 +444,10 @@ class LegacyLyricsAdapter(
         }
     }
 
-    fun updateTextColor(newColor: Int, newHighlightColor: Int) {
+    fun updateTextColor(newColor: Int, newHighlightColor: Int, isCustomHighlight: Boolean = false) {
         defaultTextColor = newColor
         highlightTextColor = newHighlightColor
+        customHighlight = isCustomHighlight
         @SuppressLint("NotifyDataSetChanged")
         notifyDataSetChanged()
     }
@@ -418,7 +459,8 @@ class LegacyLyricsAdapter(
         var isAttributionFooter: Boolean = false,
         var endTime: Long? = null,
         var speaker: SpeakerEntity? = null,
-        var isBackground: Boolean = speaker?.isBackground == true
+        var isBackground: Boolean = speaker?.isBackground == true,
+        val line: SemanticLyrics.LyricLine? = null
     )
 
     private fun Lyric.isInstrumentalBreak(): Boolean {
@@ -449,7 +491,8 @@ class LegacyLyricsAdapter(
                     isTranslation = it.isTranslated,
                     endTime = it.end.toLong(),
                     speaker = it.speaker,
-                    isBackground = it.speaker?.isBackground == true
+                    isBackground = it.speaker?.isBackground == true,
+                    line = it
                 )
             }.toMutableList()
         }
