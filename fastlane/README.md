@@ -1,64 +1,39 @@
-fastlane documentation
-----
+# Fastlane
 
-# Installation
+This repository uses Fastlane for Android testing and release automation. The
+Fastlane dependencies are declared in the root `Gemfile`.
 
-Make sure you have the latest version of the Xcode command line tools installed:
+## Setup
 
-```sh
-xcode-select --install
-```
-
-For _fastlane_ installation instructions, see [Installing _fastlane_](https://docs.fastlane.tools/#installing-fastlane)
-
-# Available Actions
-
-## Android
-
-### android test
+Install Ruby and Bundler, then install the project gems from the repository root:
 
 ```sh
-[bundle exec] fastlane android test
+bundle install
 ```
 
-Runs all the tests
+Android lanes also require JDK 21, the Android SDK, and the repository's Git
+submodules. See [the project build guide](../readme.md) for SDK and Gradle
+requirements.
 
-### android googleplay
+## Android lanes
+
+Run a lane from the repository root with `bundle exec fastlane android <lane>`:
+
+| Lane | Action |
+| --- | --- |
+| `test` | Runs Gradle's `test` task. |
+| `buildrel` | Builds the release APK with `:app:assembleRelease`. |
+| `googleplay` | Builds the Google Play release bundle and uploads it to the beta track as a draft. |
+| `gitrel` | Builds a release and creates a draft GitHub release. |
+| `preprel` | Interactive maintainer workflow for preparing a release. |
+
+For example:
 
 ```sh
-[bundle exec] fastlane android googleplay
+bundle exec fastlane android test
 ```
 
-Deploy a new version to the Google Play
-
-### android buildrel
-
-```sh
-[bundle exec] fastlane android buildrel
-```
-
-Build release
-
-### android gitrel
-
-```sh
-[bundle exec] fastlane android gitrel
-```
-
-Build & push release to Git
-
-### android preprel
-
-```sh
-[bundle exec] fastlane android preprel
-```
-
-Prepare release
-
-----
-
-This README.md is auto-generated and will be re-generated every time [_fastlane_](https://fastlane.tools) is run.
-
-More information about _fastlane_ can be found on [fastlane.tools](https://fastlane.tools).
-
-The documentation of _fastlane_ can be found on [docs.fastlane.tools](https://docs.fastlane.tools).
+Release lanes are maintainer workflows. They require the configured signing,
+Google Play, or GitHub credentials as applicable, and `buildrel` and `googleplay`
+require a clean checkout of the `beta` branch. Review `fastlane/Fastfile` before
+running them for the currently configured metadata paths and credentials.
