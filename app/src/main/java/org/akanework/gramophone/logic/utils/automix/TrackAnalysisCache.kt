@@ -35,19 +35,21 @@ data class AnalysisKey(val mediaId: String, val modified: Long, val uri: String)
     }
 }
 
-class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 1) {
+class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 2) {
     private val memory = ConcurrentHashMap<AnalysisKey, TrackAnalysis>()
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE analysis (
             media_id TEXT NOT NULL, modified INTEGER NOT NULL, uri TEXT NOT NULL,
             bpm REAL, camelot TEXT, beat_offset REAL, confidence REAL NOT NULL,
-            window_start INTEGER NOT NULL, window_end INTEGER NOT NULL,
+            window_start INTEGER NOT NULL, window_end INTEGER NOT NULL, vocal_energy REAL,
             PRIMARY KEY(media_id, modified, uri))""")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        error("Unsupported analysis database upgrade $oldVersion to $newVersion")
+        if (oldVersion < 2 && newVersion >= 2) {
+            db.execSQL("ALTER TABLE analysis ADD COLUMN vocal_energy REAL")
+        }
     }
 
     fun peek(key: AnalysisKey): TrackAnalysis? = memory[key]
@@ -56,7 +58,10 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
     fun load(key: AnalysisKey): TrackAnalysis? {
         memory[key]?.let { return it }
         readableDatabase.query(
-            "analysis", arrayOf("bpm", "camelot", "beat_offset", "confidence", "window_start", "window_end"),
+            "analysis", arrayOf(
+                "bpm", "camelot", "beat_offset", "confidence", "window_start", "window_end",
+                "vocal_energy"
+            ),
             "media_id=? AND modified=? AND uri=?", arrayOf(key.mediaId, key.modified.toString(), key.uri),
             null, null, null
         ).use { cursor ->
@@ -65,7 +70,8 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                 if (cursor.isNull(0)) null else cursor.getFloat(0),
                 if (cursor.isNull(1)) null else cursor.getString(1),
                 if (cursor.isNull(2)) null else cursor.getDouble(2),
-                cursor.getFloat(3), cursor.getLong(4), cursor.getLong(5)
+                cursor.getFloat(3), cursor.getLong(4), cursor.getLong(5),
+                if (cursor.isNull(6)) null else cursor.getFloat(6),
             )
             memory[key] = result
             return result
@@ -79,6 +85,7 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             put("bpm", result.bpm); put("camelot", result.camelotKey)
             put("beat_offset", result.beatOffsetMs); put("confidence", result.confidence)
             put("window_start", result.windowStartMs); put("window_end", result.windowEndMs)
+            put("vocal_energy", result.vocalEnergy)
         }
         val db = writableDatabase
         db.beginTransaction()

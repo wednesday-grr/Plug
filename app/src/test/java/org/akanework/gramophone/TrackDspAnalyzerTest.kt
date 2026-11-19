@@ -75,4 +75,18 @@ class TrackDspAnalyzerTest {
         }
         assertEquals("8B", TrackDspAnalyzer.analyze(samples, 0).camelotKey)
     }
+
+    @Test
+    fun estimatesEnergyInVocalFrequencyBand() = runBlocking {
+        val rate = TrackDspAnalyzer.SAMPLE_RATE
+        val vocal = FloatArray(rate * 6) { index ->
+            sin(2 * PI * 1000 * index / rate).toFloat()
+        }
+        val bass = FloatArray(rate * 6) { index ->
+            sin(2 * PI * 100 * index / rate).toFloat()
+        }
+
+        assertTrue(TrackDspAnalyzer.analyze(vocal, 0).vocalEnergy!! > 0.9f)
+        assertTrue(TrackDspAnalyzer.analyze(bass, 0).vocalEnergy!! < 0.1f)
+    }
 }

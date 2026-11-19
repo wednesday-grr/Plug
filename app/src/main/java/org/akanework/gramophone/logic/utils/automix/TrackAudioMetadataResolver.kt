@@ -23,6 +23,7 @@ data class ResolvedTrackAudioMetadata(
     val bpm: Float?,
     val camelotKey: String?,
     val beatGrid: BeatPhaseAligner.Grid?,
+    val vocalEnergy: Float? = null,
 )
 
 object TrackAudioMetadataResolver {
@@ -46,6 +47,8 @@ object TrackAudioMetadataResolver {
             kotlin.math.abs(bpm - cached.bpm) < 0.001f && cached.beatOffsetMs != null &&
             positionMs in cached.windowStartMs..cached.windowEndMs
         ) BeatPhaseAligner.Grid(60_000.0 / bpm, cached.beatOffsetMs, cached.confidence) else null
-        return ResolvedTrackAudioMetadata(bpm, taggedKey ?: cached?.camelotKey, grid)
+        return ResolvedTrackAudioMetadata(
+            bpm, taggedKey ?: cached?.camelotKey, grid, cached?.vocalEnergy
+        )
     }
 }

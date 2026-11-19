@@ -34,6 +34,7 @@ data class TrackAnalysis(
     val confidence: Float,
     val windowStartMs: Long,
     val windowEndMs: Long,
+    val vocalEnergy: Float? = null,
 )
 
 /** Offline analysis; beat grids describe only the analyzed window, not a bar or a whole song. */
@@ -53,6 +54,8 @@ object TrackDspAnalyzer {
         val count = 1 + (samples.size - FFT_SIZE) / HOP
         val flux = DoubleArray(count)
         val chroma = DoubleArray(12)
+        var vocalBandEnergy = 0.0
+        var analyzedBandEnergy = 0.0
         val previous = DoubleArray(FFT_SIZE / 2)
         val real = DoubleArray(FFT_SIZE)
         val imag = DoubleArray(FFT_SIZE)
@@ -70,8 +73,13 @@ object TrackDspAnalyzer {
                 val compressed = ln(1.0 + magnitude)
                 flux[frame] += (compressed - previous[bin]).coerceAtLeast(0.0)
                 previous[bin] = compressed
+                val hz = bin.toDouble() * SAMPLE_RATE / FFT_SIZE
+                if (hz in 80.0..8000.0) {
+                    val energy = magnitude * magnitude
+                    analyzedBandEnergy += energy
+                    if (hz in VOCAL_LOW_HZ..VOCAL_HIGH_HZ) vocalBandEnergy += energy
+                }
                 if (frame % 4 == 0) {
-                    val hz = bin.toDouble() * SAMPLE_RATE / FFT_SIZE
                     if (hz in 65.0..2100.0) {
                         val midi = (69 + 12 * ln(hz / 440.0) / ln(2.0)).roundToInt()
                         chroma[((midi % 12) + 12) % 12] += magnitude
@@ -81,7 +89,12 @@ object TrackDspAnalyzer {
         }
         val tempo = tempo(flux, startMs)
         val key = detectKey(chroma)
-        return TrackAnalysis(tempo?.first, key, tempo?.second, tempo?.third ?: 0f, startMs, endMs)
+        val vocalEnergy = if (analyzedBandEnergy > 0.0) {
+            (vocalBandEnergy / analyzedBandEnergy).toFloat().coerceIn(0f, 1f)
+        } else null
+        return TrackAnalysis(
+            tempo?.first, key, tempo?.second, tempo?.third ?: 0f, startMs, endMs, vocalEnergy
+        )
     }
 
     private fun tempo(envelope: DoubleArray, startMs: Long): Triple<Float, Double, Float>? {
@@ -175,6 +188,9 @@ object TrackDspAnalyzer {
         return MusicalKey.parse(notes[bestNote] + if (bestMinor) "m" else " major")?.camelot
     }
 
+    private const val VOCAL_LOW_HZ = 250.0
+    private const val VOCAL_HIGH_HZ = 4000.0
+
     private fun fft(real: DoubleArray, imag: DoubleArray) {
         val size = real.size
         var j = 0
@@ -185,6 +201,7 @@ object TrackDspAnalyzer {
             if (i < j) {
                 val tmp = real[i]; real[i] = real[j]; real[j] = tmp
             }
+
         }
         var length = 2
         while (length <= size) {

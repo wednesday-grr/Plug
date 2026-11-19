@@ -60,6 +60,34 @@ import kotlin.math.ceil
 import kotlin.math.pow
 import kotlin.random.Random
 
+internal object AutomixEffectSelector {
+    private const val STEEP_DROP_RATIO = 0.8f
+    private const val CLOSE_BPM_DIFFERENCE = 0.06f
+    private const val MODERATE_BPM_DIFFERENCE = 0.12f
+    private const val HIGH_VOCAL_ENERGY = 0.55f
+
+    fun select(
+        outgoingBpm: Float?,
+        incomingBpm: Float?,
+        phaseConfident: Boolean,
+        outgoingVocalEnergy: Float?,
+        incomingVocalEnergy: Float?,
+    ): String {
+        val out = outgoingBpm?.takeIf { it.isFinite() && it in 30f..300f }
+        val incoming = incomingBpm?.takeIf { it.isFinite() && it in 30f..300f }
+        if (out == null || incoming == null) return "echo_out"
+        if (incoming <= out * STEEP_DROP_RATIO) return "vinyl_brake"
+
+        val difference = kotlin.math.abs(incoming / out - 1f)
+        if (difference <= CLOSE_BPM_DIFFERENCE && phaseConfident) {
+            return if ((outgoingVocalEnergy ?: 0f) >= HIGH_VOCAL_ENERGY &&
+                (incomingVocalEnergy ?: 0f) >= HIGH_VOCAL_ENERGY
+            ) "vocal_swap" else "bass_swap"
+        }
+        return if (difference <= MODERATE_BPM_DIFFERENCE) "filter_sweep" else "echo_out"
+    }
+}
+
 /**
  * Standalone dual-deck player. All public methods and callbacks use the application looper.
  * The owner must supply the actual next queue item and update it after queue edits.
@@ -104,11 +132,17 @@ class AutomixPlayer private constructor(
         private const val END_MARGIN_MS = 150L
         private const val VINYL_BRAKE_DURATION_MS = 1000L
         private const val VINYL_BRAKE_MIN_SPEED = 0.15f
-        private const val SMART_AUTO_BPM_DROP_RATIO = 0.8f
+        private const val ECHO_OUT_DURATION_MS = 3500L
+        private const val ECHO_OUT_WET_MIX = 0.65f
+        private const val ECHO_OUT_DRY_MUTE_START = 0.65f
+        private const val ECHO_OUT_FEEDBACK = 0.45f
+        private const val DEFAULT_ECHO_DELAY_MS = 375f
+        private const val VOCAL_SWAP_ATTENUATION = 1f
         private const val FILTER_OUT_START_HZ = 20f
         private const val FILTER_OUT_END_HZ = 3500f
         private const val FILTER_IN_START_HZ = 300f
         private const val FILTER_IN_END_HZ = 20_000f
+        private const val BASS_SWAP_MIDPOINT = 0.5f
 
         private fun createDecks(
             context: Context,
@@ -191,7 +225,9 @@ class AutomixPlayer private constructor(
     private var enabled = false
     private var beatmatchEnabled = true
     private var transitionStyle = "auto"
+    private var activeTransitionStyle = "auto"
     private var vinylBrakeTransition = false
+    private var echoDelayMs = DEFAULT_ECHO_DELAY_MS
     private var activeFadeDurationMs = 0L
     private var durationMs = 5000L
     private var userVolume = 1f
@@ -728,7 +764,7 @@ class AutomixPlayer private constructor(
             val now = SystemClock.elapsedRealtime()
             transition.resume(now)
             val progress = transition.progress(now)
-            if (transitionStyle == "filter_sweep") {
+            if (activeTransitionStyle == "filter_sweep") {
                 activeDjFilter.setFilter(
                     DjTransitionAudioProcessor.Type.HIGH_PASS,
                     exponentialCutoff(FILTER_OUT_START_HZ, FILTER_OUT_END_HZ, progress)
@@ -736,6 +772,33 @@ class AutomixPlayer private constructor(
                 standbyDjFilter.setFilter(
                     DjTransitionAudioProcessor.Type.LOW_PASS,
                     exponentialCutoff(FILTER_IN_START_HZ, FILTER_IN_END_HZ, progress)
+                )
+            } else if (activeTransitionStyle == "bass_swap") {
+                val bassSwapProgress = ((progress - BASS_SWAP_MIDPOINT) /
+                    (1f - BASS_SWAP_MIDPOINT)).coerceIn(0f, 1f)
+                val smoothSwap = bassSwapProgress * bassSwapProgress *
+                    (3f - 2f * bassSwapProgress)
+                activeDjFilter.setBassGain(1f - smoothSwap)
+                standbyDjFilter.setBassGain(smoothSwap)
+            } else if (activeTransitionStyle == "vocal_swap") {
+                val vocalSwapProgress = ((progress - BASS_SWAP_MIDPOINT) /
+                    (1f - BASS_SWAP_MIDPOINT)).coerceIn(0f, 1f)
+                val smoothSwap = vocalSwapProgress * vocalSwapProgress *
+                    (3f - 2f * vocalSwapProgress)
+                activeDjFilter.setVocalAttenuation(smoothSwap * VOCAL_SWAP_ATTENUATION)
+                standbyDjFilter.setVocalAttenuation(
+                    (1f - smoothSwap) * VOCAL_SWAP_ATTENUATION
+                )
+            } else if (activeTransitionStyle == "echo_out") {
+                val dryMuteProgress = ((progress - ECHO_OUT_DRY_MUTE_START) /
+                    (1f - ECHO_OUT_DRY_MUTE_START)).coerceIn(0f, 1f)
+                val smoothDryMute = dryMuteProgress * dryMuteProgress *
+                    (3f - 2f * dryMuteProgress)
+                activeDjFilter.setEcho(
+                    echoDelayMs,
+                    feedback = ECHO_OUT_FEEDBACK,
+                    wetMix = ECHO_OUT_WET_MIX * progress,
+                    dryGain = 1f - smoothDryMute,
                 )
             }
             if (vinylBrakeTransition) {
@@ -786,10 +849,28 @@ class AutomixPlayer private constructor(
         val incoming = audioMetadata(standby)
         val outBpm = outgoing.bpm
         val inBpm = incoming.bpm
-        vinylBrakeTransition = transitionStyle == "vinyl_brake" ||
-            (transitionStyle == "auto" && outBpm != null && inBpm != null &&
-                inBpm <= outBpm * SMART_AUTO_BPM_DROP_RATIO)
-        val requestedFadeDuration = if (vinylBrakeTransition) VINYL_BRAKE_DURATION_MS else durationMs
+        val outgoingSamples = if (transition.activeDeck == DeckTransition.Deck.A) samplesA else samplesB
+        val incomingSamples = if (transition.standbyDeck == DeckTransition.Deck.A) samplesA else samplesB
+        val outgoingGrid = outgoing.beatGrid?.takeIf { it.confidence >= 0.8f }
+            ?: BeatPhaseAligner.estimate(outBpm, outgoingSamples.toList())
+        val incomingGrid = incoming.beatGrid?.takeIf { it.confidence >= 0.8f }
+            ?: BeatPhaseAligner.estimate(inBpm, incomingSamples.toList())
+        val phaseAlignment = BeatPhaseAligner.align(
+            outBpm, inBpm, outgoingGrid, incomingGrid,
+            active.currentPosition.toDouble(), standby.currentPosition.toDouble()
+        )
+        activeTransitionStyle = if (transitionStyle == "auto") {
+            AutomixEffectSelector.select(
+                outBpm, inBpm, phaseAlignment != null,
+                outgoing.vocalEnergy, incoming.vocalEnergy
+            )
+        } else transitionStyle
+        vinylBrakeTransition = activeTransitionStyle == "vinyl_brake"
+        val requestedFadeDuration = when {
+            vinylBrakeTransition -> VINYL_BRAKE_DURATION_MS
+            activeTransitionStyle == "echo_out" -> ECHO_OUT_DURATION_MS
+            else -> durationMs
+        }
         if (remaining > requestedFadeDuration + END_MARGIN_MS || remaining <= END_MARGIN_MS) return
 
         val activeSession = active.audioSessionId
@@ -803,16 +884,7 @@ class AutomixPlayer private constructor(
         }
 
         if (pendingStartPositionMs == null) {
-            val outgoingSamples = if (transition.activeDeck == DeckTransition.Deck.A) samplesA else samplesB
-            val incomingSamples = if (transition.standbyDeck == DeckTransition.Deck.A) samplesA else samplesB
-            val alignment = if (beatmatchEnabled && !vinylBrakeTransition) BeatPhaseAligner.align(
-                outBpm, inBpm,
-                outgoing.beatGrid?.takeIf { it.confidence >= 0.8f }
-                    ?: BeatPhaseAligner.estimate(outBpm, outgoingSamples.toList()),
-                incoming.beatGrid?.takeIf { it.confidence >= 0.8f }
-                    ?: BeatPhaseAligner.estimate(inBpm, incomingSamples.toList()),
-                active.currentPosition.toDouble(), standby.currentPosition.toDouble()
-            ) else null
+            val alignment = if (beatmatchEnabled && !vinylBrakeTransition) phaseAlignment else null
             matchedSpeed = if (vinylBrakeTransition) 1f else alignment?.incomingSpeed ?: 1f
             val delayMs = alignment?.startDelayMs?.let { ceil(it).toLong() } ?: 0L
             pendingStartPositionMs = active.currentPosition +
@@ -837,13 +909,30 @@ class AutomixPlayer private constructor(
             if (vinylBrakeTransition) 1f else matchedSpeed,
             active.playbackParameters.pitch
         )
-        if (transitionStyle == "filter_sweep") {
+        if (activeTransitionStyle == "filter_sweep") {
             activeDjFilter.setFilter(
                 DjTransitionAudioProcessor.Type.HIGH_PASS, FILTER_OUT_START_HZ
             )
             standbyDjFilter.setFilter(
                 DjTransitionAudioProcessor.Type.LOW_PASS, FILTER_IN_START_HZ
             )
+        } else if (activeTransitionStyle == "bass_swap") {
+            activeDjFilter.setBassGain(1f)
+            standbyDjFilter.setBassGain(0f)
+        } else if (activeTransitionStyle == "vocal_swap") {
+            activeDjFilter.setVocalAttenuation(0f)
+            standbyDjFilter.setVocalAttenuation(VOCAL_SWAP_ATTENUATION)
+        } else if (activeTransitionStyle == "echo_out") {
+            echoDelayMs = outBpm?.takeIf { it in 30f..300f }?.let {
+                60_000f / it * 0.75f
+            } ?: DEFAULT_ECHO_DELAY_MS
+            activeDjFilter.setEcho(
+                echoDelayMs,
+                feedback = ECHO_OUT_FEEDBACK,
+                wetMix = 0f,
+                dryGain = 1f,
+            )
+            standbyDjFilter.bypass()
         }
         activeFadeDurationMs = fadeDuration
         transition.start(fadeDuration, SystemClock.elapsedRealtime())

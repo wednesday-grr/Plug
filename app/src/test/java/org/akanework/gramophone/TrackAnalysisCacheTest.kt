@@ -39,7 +39,7 @@ class TrackAnalysisCacheTest {
     fun persistsAndInvalidatesByModificationAndUri() {
         val context = RuntimeEnvironment.getApplication()
         val id = AnalysisKey("cache-test", 1, "content://media/track/1")
-        val value = TrackAnalysis(120f, "8A", 500.0, 0.9f, 100, 50_000)
+        val value = TrackAnalysis(120f, "8A", 500.0, 0.9f, 100, 50_000, 0.72f)
         val initial = TrackAnalysisCache(context)
         try {
             initial.store(id, value)

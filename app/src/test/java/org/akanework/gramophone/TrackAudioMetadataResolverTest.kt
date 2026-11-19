@@ -26,7 +26,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TrackAudioMetadataResolverTest {
-    private val analysis = TrackAnalysis(120f, "8A", 10_100.0, 0.9f, 10_000, 70_000)
+    private val analysis = TrackAnalysis(120f, "8A", 10_100.0, 0.9f, 10_000, 70_000, 0.72f)
 
     @Test
     fun tagsWinIndependentlyAndDifferentTempoInvalidatesGrid() {
@@ -45,6 +45,7 @@ class TrackAudioMetadataResolverTest {
         val inside = TrackAudioMetadataResolver.resolve(emptyList(), analysis, 30_000)
         assertEquals(120f, inside.bpm!!, 0f)
         assertEquals("8A", inside.camelotKey)
+        assertEquals(0.72f, inside.vocalEnergy!!, 0f)
         assertNotNull(inside.beatGrid)
         assertNull(TrackAudioMetadataResolver.resolve(emptyList(), analysis, 1000).beatGrid)
     }
