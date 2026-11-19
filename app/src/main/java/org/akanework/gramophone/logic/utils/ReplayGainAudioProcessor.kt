@@ -287,6 +287,12 @@ class ReplayGainAudioProcessor : BaseAudioProcessor() {
         toFloatPcmAudioProcessor.flush(streamMetadata)
         if (!applyGain())
             Log.d(TAG, "raced between flush and configure, do nothing for now")
+        compressor?.init(
+            inputAudioFormat.sampleRate,
+            ReplayGainUtil.TAU_ATTACK,
+            ReplayGainUtil.TAU_RELEASE,
+            ReplayGainUtil.RATIO
+        )
     }
 
     override fun onReset() {

@@ -29,7 +29,9 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /** Per-deck stereo PCM effects processor. Setters publish configuration to the audio thread. */
-class DjTransitionAudioProcessor : BaseAudioProcessor() {
+class DjTransitionAudioProcessor(
+    private val forcePcm16Output: Boolean = false,
+) : BaseAudioProcessor() {
     enum class Type { HIGH_PASS, LOW_PASS }
 
     private data class Request(
@@ -43,6 +45,7 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
         val wetMix: Float,
         val dryGain: Float,
         val vocalAttenuation: Float,
+        val outputGain: Float,
         val version: Long,
         val stateVersion: Long,
         val bassStateVersion: Long,
@@ -60,7 +63,7 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
 
     @Volatile
     private var request = Request(
-        null, 0f, 0f, 1f, false, 375f, 0.45f, 0f, 1f, 0f,
+        null, 0f, 0f, 1f, false, 375f, 0.45f, 0f, 1f, 0f, 1f,
         0L, 0L, 0L, 0L, 0L,
     )
     private var appliedVersion = -1L
@@ -158,13 +161,21 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
         )
     }
 
+    fun setOutputGain(outputGain: Float) {
+        require(outputGain.isFinite() && outputGain in 0f..1f)
+        val previous = request
+        if (previous.outputGain == outputGain) return
+        request = previous.copy(outputGain = outputGain, version = previous.version + 1)
+    }
+
     fun bypass() {
         val previous = request
         if (previous.type == null && previous.intensity == 0f && previous.bassGain == 1f &&
-            !previous.echoEnabled && previous.vocalAttenuation == 0f
+            !previous.echoEnabled && previous.vocalAttenuation == 0f &&
+            previous.outputGain == 1f
         ) return
         request = Request(
-            null, 0f, 0f, 1f, false, 375f, DEFAULT_ECHO_FEEDBACK, 0f, 1f, 0f,
+            null, 0f, 0f, 1f, false, 375f, DEFAULT_ECHO_FEEDBACK, 0f, 1f, 0f, 1f,
             previous.version + 1, previous.stateVersion + 1,
             previous.bassStateVersion + 1, previous.echoStateVersion + 1,
             previous.vocalStateVersion + 1,
@@ -172,10 +183,13 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
-        return if (inputAudioFormat.sampleRate > 0 && inputAudioFormat.channelCount == 2 &&
-            (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT ||
-                inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT)
-        ) inputAudioFormat else AudioProcessor.AudioFormat.NOT_SET
+        if (inputAudioFormat.sampleRate <= 0 || inputAudioFormat.channelCount != 2 ||
+            (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
+                inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT)
+        ) return AudioProcessor.AudioFormat.NOT_SET
+        return if (forcePcm16Output) {
+            AudioProcessor.AudioFormat(inputAudioFormat.sampleRate, 2, C.ENCODING_PCM_16BIT)
+        } else inputAudioFormat
     }
 
     override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
@@ -197,6 +211,9 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
     override fun queueInput(inputBuffer: ByteBuffer) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
+        val inputBytesPerFrame = inputAudioFormat.bytesPerFrame
+        require(remaining % inputBytesPerFrame == 0) { "PCM input must contain complete frames" }
+        val frameCount = remaining / inputBytesPerFrame
 
         val current = request
         if (current.version != appliedVersion) {
@@ -246,12 +263,14 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
             appliedVocalStateVersion = current.vocalStateVersion
         }
 
-        val output = replaceOutputBuffer(remaining).order(ByteOrder.nativeOrder())
+        val output = replaceOutputBuffer(frameCount * outputAudioFormat.bytesPerFrame)
+            .order(ByteOrder.nativeOrder())
         val filter = coefficients
         val bassFilter = bassCoefficients
         if ((filter == null || current.intensity == 0f) &&
             (bassFilter == null || current.bassGain == 1f) &&
-            !current.echoEnabled && current.vocalAttenuation == 0f
+            !current.echoEnabled && current.vocalAttenuation == 0f &&
+            current.outputGain == 1f && outputAudioFormat == inputAudioFormat
         ) {
             output.put(inputBuffer).flip()
             return
@@ -296,7 +315,9 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
                 delayPosition++
                 if (delayPosition == appliedDelayFrames) delayPosition = 0
             }
-            when (inputAudioFormat.encoding) {
+            processedLeft = (processedLeft * current.outputGain).coerceIn(-1.0, 1.0)
+            processedRight = (processedRight * current.outputGain).coerceIn(-1.0, 1.0)
+            when (outputAudioFormat.encoding) {
                 C.ENCODING_PCM_16BIT -> {
                     output.putShort(toPcm16(processedLeft))
                     output.putShort(toPcm16(processedRight))
@@ -307,6 +328,7 @@ class DjTransitionAudioProcessor : BaseAudioProcessor() {
                 }
             }
         }
+        inputBuffer.position(input.position())
         output.flip()
     }
 

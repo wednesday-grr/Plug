@@ -56,7 +56,7 @@ class PlugRenderFactory(
         require(pcmMixing || onPcmTransient == null) { "PCM capture requires PCM mixing mode" }
     }
     val replayGainAudioProcessor = ReplayGainAudioProcessor()
-    val djTransitionAudioProcessor = DjTransitionAudioProcessor()
+    val djTransitionAudioProcessor = DjTransitionAudioProcessor(forcePcm16Output = pcmMixing)
     private var audioSinkCreated = false
 
     override fun buildTextRenderers(
@@ -134,7 +134,7 @@ class PlugRenderFactory(
             sessionBoostCoordinator, deckId)
         builder.setAudioOutputProvider(aop)
         builder.setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams && !pcmMixing)
-        builder.setEnableHighResolutionPcmOutput(pcmEncodingRestrictionLifted)
+        builder.setEnableHighResolutionPcmOutput(pcmEncodingRestrictionLifted && !pcmMixing)
         builder.setAudioProcessorChain(object : AudioProcessorChain {
             override fun getAudioProcessors(inputFormat: Format): Array<out AudioProcessor> {
                 rgAp.setRootFormat(inputFormat)

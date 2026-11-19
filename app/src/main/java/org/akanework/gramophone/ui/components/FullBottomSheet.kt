@@ -887,7 +887,7 @@ class FullBottomSheet
         djScope = null
         djTicker = null
         djRequest = null
-        djDisplayState.showDj(SystemClock.elapsedRealtime(), false, C.TIME_UNSET, 0)
+        djDisplayState.reset()
     }
 
     override fun onDetachedFromWindow() {
@@ -1024,10 +1024,11 @@ class FullBottomSheet
         val position = player?.contentPosition ?: 0L
         val showDj = djDisplayState.showDj(
             SystemClock.elapsedRealtime(), player?.isPlaying == true && djScope != null && enableQualityInfo,
-            duration, position
+            duration, position, player?.currentMediaItem?.mediaId
         )
-        val finalSection = duration > 15_000L && duration - position.coerceAtLeast(0) <= 15_000L
-        djText = djStatusText ?: if (finalSection && nextDjAvailable && nextDjText.isNotEmpty()) {
+        djText = djStatusText ?: if (djDisplayState.isFinalSectionLocked &&
+            nextDjAvailable && nextDjText.isNotEmpty()
+        ) {
             nextDjText
         } else {
             currentDjText
@@ -1050,7 +1051,9 @@ class FullBottomSheet
         displayedDj = target
         bottomSheetFullQualityDetails.animate().cancel()
         djTransitioning = false
-        if (immediate || finalSection && target == true || !bottomSheetFullQualityDetails.isVisible) {
+        if (immediate || djDisplayState.isFinalSectionLocked && target == true ||
+            !bottomSheetFullQualityDetails.isVisible
+        ) {
             bottomSheetFullQualityDetails.alpha = 1f
             applyDisplayedInfo(target)
         } else {
@@ -1118,13 +1121,18 @@ class FullBottomSheet
                     data.getString("next_key"), data.getFloat("next_speed", 1f)
                 ) else ""
                 val effect = context.getString(R.string.dj_crossfade)
-                val beatmatch = if (data.getBoolean("beatmatch"))
-                    context.getString(R.string.dj_beatmatch_suffix) else ""
+                val beatmatch = data.getBoolean("beatmatch")
                 djStatusText = when {
                     data.getBoolean("mixing") ->
-                        context.getString(R.string.dj_mixing, effect, beatmatch)
+                        context.getString(
+                            if (beatmatch) R.string.dj_mixing_beatmatch else R.string.dj_mixing,
+                            effect
+                        )
                     data.getBoolean("mixed") ->
-                        context.getString(R.string.dj_mixed, effect, beatmatch)
+                        context.getString(
+                            if (beatmatch) R.string.dj_mixed_beatmatch else R.string.dj_mixed,
+                            effect
+                        )
                     else -> null
                 }
                 updateDjDisplay()

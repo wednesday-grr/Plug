@@ -20,6 +20,7 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import org.akanework.gramophone.logic.utils.automix.DjTransitionAudioProcessor
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -49,6 +50,34 @@ class DjTransitionAudioProcessorTest {
             processor.output.get(output)
             assertArrayEquals(expected, output)
         }
+    }
+
+    @Test
+    fun pcmMixingModeConvertsFloatStereoToPcm16AndAppliesOverlapHeadroom() {
+        val processor = DjTransitionAudioProcessor(forcePcm16Output = true)
+        val inputFormat = AudioProcessor.AudioFormat(48_000, 2, C.ENCODING_PCM_FLOAT)
+        assertEquals(
+            AudioProcessor.AudioFormat(48_000, 2, C.ENCODING_PCM_16BIT),
+            processor.configure(inputFormat)
+        )
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        processor.setOutputGain(0.5f)
+        val input = ByteBuffer.allocate(16).order(ByteOrder.nativeOrder()).apply {
+            putFloat(0.8f)
+            putFloat(-0.8f)
+            putFloat(0.4f)
+            putFloat(-0.4f)
+            flip()
+        }
+
+        processor.queueInput(input)
+        assertEquals(input.limit(), input.position())
+        val output = processor.output.order(ByteOrder.nativeOrder())
+        assertEquals(4, output.remaining() / Short.SIZE_BYTES)
+        assertTrue(kotlin.math.abs(output.short / 32768f - 0.4f) < 0.001f)
+        assertTrue(kotlin.math.abs(output.short / 32768f + 0.4f) < 0.001f)
+        assertTrue(kotlin.math.abs(output.short / 32768f - 0.2f) < 0.001f)
+        assertTrue(kotlin.math.abs(output.short / 32768f + 0.2f) < 0.001f)
     }
 
     @Test
@@ -135,6 +164,29 @@ class DjTransitionAudioProcessorTest {
         val dryOutput = ByteArray(expected.size)
         processor.output.get(dryOutput)
         assertArrayEquals(expected, dryOutput)
+    }
+
+    @Test
+    fun flushClearsEchoDelayLineBeforeNewTrackAudio() {
+        val processor = configured(C.ENCODING_PCM_FLOAT)
+        processor.setEcho(delayMs = 100f, wetMix = 1f, dryGain = 0f)
+        val impulse = ByteBuffer.allocate(1000 * 2 * 4).order(ByteOrder.nativeOrder()).apply {
+            putFloat(1f)
+            putFloat(1f)
+            repeat(1998) { putFloat(0f) }
+            flip()
+        }
+        processor.queueInput(impulse)
+        processor.output.position(processor.output.limit())
+
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        val silence = ByteBuffer.allocate(5000 * 2 * 4).order(ByteOrder.nativeOrder()).apply {
+            repeat(10_000) { putFloat(0f) }
+            flip()
+        }
+        processor.queueInput(silence)
+        val output = processor.output.order(ByteOrder.nativeOrder())
+        while (output.hasRemaining()) assertTrue(kotlin.math.abs(output.float) < 0.0001f)
     }
 
     @Test

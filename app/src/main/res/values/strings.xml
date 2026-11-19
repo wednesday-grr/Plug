@@ -14,9 +14,10 @@
     <string name="app_name">Plug</string>
     <string name="dj_metrics">%1$s BPM / %2$s / %3$sx</string>
     <string name="dj_crossfade">Crossfade</string>
-    <string name="dj_beatmatch_suffix"> / Beatmatch</string>
-    <string name="dj_mixing">Mixing: %1$s%2$s</string>
-    <string name="dj_mixed">Mixed: %1$s%2$s</string>
+    <string name="dj_mixing">Mixing: %1$s</string>
+    <string name="dj_mixing_beatmatch">Mixing: %1$s / Beatmatch</string>
+    <string name="dj_mixed">Mixed: %1$s</string>
+    <string name="dj_mixed_beatmatch">Mixed: %1$s / Beatmatch</string>
     <!-- Menu item in home screen -->
     <string name="home_menu_search">Search</string>
     <!-- Menu item in home screen -->

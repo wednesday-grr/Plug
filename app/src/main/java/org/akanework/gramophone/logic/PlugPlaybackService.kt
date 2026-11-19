@@ -1038,7 +1038,6 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 }
             },
             onSinkCreated = { isA, sink -> trackers[if (isA) 0 else 1].setAudioSink(sink) },
-            audioSessionId = oldPlayer.audioSessionId,
             analysisCache = audioAnalysis.cache,
         ) else null
         val renderFactory = if (newAutomix == null) createRenderFactory(newTracker, false) else null

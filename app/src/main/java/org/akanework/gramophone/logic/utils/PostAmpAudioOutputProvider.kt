@@ -187,6 +187,7 @@ class PostAmpAudioOutputProvider(
 
     override fun getFormatSupport(formatConfig: AudioOutputProvider.FormatConfig): AudioOutputProvider.FormatSupport {
         if (pcmMixing && (formatConfig.format.sampleMimeType != MimeTypes.AUDIO_RAW ||
+                    formatConfig.format.channelCount != 2 ||
                     formatConfig.format.pcmEncoding != C.ENCODING_PCM_16BIT &&
                     formatConfig.format.pcmEncoding != C.ENCODING_PCM_FLOAT)
         ) {
@@ -202,6 +203,7 @@ class PostAmpAudioOutputProvider(
 
     override fun getOutputConfig(formatConfig: AudioOutputProvider.FormatConfig): AudioOutputProvider.OutputConfig {
         if (pcmMixing && (formatConfig.format.sampleMimeType != MimeTypes.AUDIO_RAW ||
+                    formatConfig.format.channelCount != 2 ||
                     formatConfig.format.pcmEncoding != C.ENCODING_PCM_16BIT &&
                     formatConfig.format.pcmEncoding != C.ENCODING_PCM_FLOAT)
         ) {

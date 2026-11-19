@@ -47,6 +47,7 @@ class PcmTransientAudioProcessor(
     }
 
     override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) {
+        samples.fill(0f)
         periodUid = streamMetadata.periodUid
         startPositionUs = streamMetadata.positionOffsetUs
         blockStartFrame = 0
@@ -88,6 +89,7 @@ class PcmTransientAudioProcessor(
 
     override fun onReset() {
         periodUid = null
+        samples.fill(0f)
         samples = FloatArray(0)
         sampleCount = 0
         blockStartFrame = 0

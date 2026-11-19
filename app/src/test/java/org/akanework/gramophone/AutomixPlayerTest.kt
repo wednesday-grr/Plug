@@ -43,19 +43,20 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class, sdk = [25])
 class AutomixPlayerTest {
     @Test
-    fun bothDecksUseTheRequestedSession() {
+    fun automixDecksUseIndependentSessions() {
         val context = RuntimeEnvironment.getApplication()
         shadowOf(context).grantPermissions("${context.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
-        val sessionId = (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
-            .generateAudioSessionId()
         val player = AutomixPlayer(
-            context, ReplayGainAudioProcessor().snapshotSettings(), audioSessionId = sessionId
+            context, ReplayGainAudioProcessor().snapshotSettings()
         )
         try {
-            assertEquals(sessionId to sessionId, player.deckAudioSessionIds())
+            val (deckA, deckB) = player.deckAudioSessionIds()
+            assertTrue(deckA > 0)
+            assertTrue(deckB > 0)
+            assertTrue(deckA != deckB)
             player.updateAutomixConfig(true, false, 5)
             player.stop()
-            assertEquals(sessionId to sessionId, player.deckAudioSessionIds())
+            assertEquals(deckA to deckB, player.deckAudioSessionIds())
         } finally {
             player.release()
         }

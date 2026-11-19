@@ -27,6 +27,17 @@ class DjInfoDisplayStateTest {
     }
 
     @Test
+    fun finalSectionLockIgnoresThresholdJitterAndResetsForNextTrack() {
+        val state = DjInfoDisplayState()
+        assertFalse(state.showDj(0, true, 60_000, 44_999, "first"))
+        assertTrue(state.showDj(1, true, 60_000, 45_001, "first"))
+        assertTrue(state.showDj(2, true, 60_000, 44_999, "first"))
+        assertTrue(state.isFinalSectionLocked)
+        assertFalse(state.showDj(3, true, 60_000, 10_000, "second"))
+        assertFalse(state.isFinalSectionLocked)
+    }
+
+    @Test
     fun shortAndUnknownDurationsDoNotLockAndNewTracksReset() {
         val state = DjInfoDisplayState()
         assertFalse(state.showDj(0, true, 15_000, 14_999))

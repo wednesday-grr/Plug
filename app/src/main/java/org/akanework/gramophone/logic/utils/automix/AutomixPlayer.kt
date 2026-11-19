@@ -51,7 +51,6 @@ import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.ReplayGainUtil
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
-import org.akanework.gramophone.logic.utils.SessionBoostCoordinator
 import androidx.media3.common.Format
 import org.akanework.gramophone.logic.utils.exoplayer.PlugRenderFactory
 import org.akanework.gramophone.logic.utils.exoplayer.PlugExtractorsFactory
@@ -102,9 +101,8 @@ class AutomixPlayer private constructor(
         playbackLooper: Looper? = null,
         onFormatChanged: (Boolean, Format?) -> Unit = { _, _ -> },
         onSinkCreated: (Boolean, PostAmpAudioOutputProvider) -> Unit = { _, _ -> },
-        audioSessionId: Int = C.AUDIO_SESSION_ID_UNSET,
         analysisCache: TrackAnalysisCache? = null,
-    ) : this(createDecks(context, replayGainSettings, playbackLooper, onFormatChanged, onSinkCreated, audioSessionId, analysisCache))
+    ) : this(createDecks(context, replayGainSettings, playbackLooper, onFormatChanged, onSinkCreated, analysisCache))
 
     private constructor(decks: Decks) : this(decks, SwappableDeckPlayer(decks.a))
 
@@ -115,8 +113,6 @@ class AutomixPlayer private constructor(
         val factoryA: PlugRenderFactory,
         val factoryB: PlugRenderFactory,
         val capture: Capture,
-        val boostCoordinator: SessionBoostCoordinator,
-        val audioSessionId: Int,
         val analysisCache: TrackAnalysisCache?,
     )
 
@@ -137,6 +133,7 @@ class AutomixPlayer private constructor(
         private const val ECHO_OUT_DRY_MUTE_START = 0.65f
         private const val ECHO_OUT_FEEDBACK = 0.45f
         private const val DEFAULT_ECHO_DELAY_MS = 375f
+        private const val OVERLAP_HEADROOM = 0.5f
         private const val VOCAL_SWAP_ATTENUATION = 1f
         private const val FILTER_OUT_START_HZ = 20f
         private const val FILTER_OUT_END_HZ = 3500f
@@ -150,24 +147,27 @@ class AutomixPlayer private constructor(
             playbackLooper: Looper?,
             onFormatChanged: (Boolean, Format?) -> Unit,
             onSinkCreated: (Boolean, PostAmpAudioOutputProvider) -> Unit,
-            requestedSessionId: Int,
             analysisCache: TrackAnalysisCache?,
         ): Decks {
             val app = context.applicationContext
             val capture = Capture()
-            val sessionId = if (requestedSessionId != C.AUDIO_SESSION_ID_UNSET) requestedSessionId
-                else Util.generateAudioSessionId(app)
-            check(sessionId > 0) { "Unable to generate an audio session ID" }
-            val coordinator = SessionBoostCoordinator(Handler(Looper.myLooper()!!), sessionId)
-            coordinator.registerDeck("deckA")
-            coordinator.registerDeck("deckB")
+            val sessionIdA = Util.generateAudioSessionId(app)
+            check(sessionIdA > 0) { "Unable to generate an audio session ID for deck A" }
+            var sessionIdB = C.AUDIO_SESSION_ID_UNSET
+            repeat(8) {
+                if (sessionIdB == C.AUDIO_SESSION_ID_UNSET || sessionIdB == sessionIdA) {
+                    sessionIdB = Util.generateAudioSessionId(app)
+                }
+            }
+            check(sessionIdB > 0 && sessionIdB != sessionIdA) {
+                "Unable to generate independent audio session IDs for Automix decks"
+            }
             fun factory(isA: Boolean) = PlugRenderFactory(
                 app, { onFormatChanged(isA, it) }, { onSinkCreated(isA, it) }, pcmMixing = true,
                 onPcmTransient = { capture.listener?.invoke(isA, it) },
-                sessionBoostCoordinator = coordinator, deckId = if (isA) "deckA" else "deckB",
             ).apply {
                 replayGainAudioProcessor.applySettings(settings)
-                setEnableHighResolutionPcmOutput(true)
+                setEnableHighResolutionPcmOutput(false)
                 setEnableDecoderFallback(true)
                 setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             }
@@ -192,19 +192,17 @@ class AutomixPlayer private constructor(
                 player(bFactory)
             } catch (e: RuntimeException) {
                 a.release()
-                coordinator.release()
                 throw e
             }
             try {
-                a.setAudioSessionId(sessionId)
-                b.setAudioSessionId(sessionId)
+                a.setAudioSessionId(sessionIdA)
+                b.setAudioSessionId(sessionIdB)
             } catch (e: RuntimeException) {
                 b.release()
                 a.release()
-                coordinator.release()
                 throw e
             }
-            return Decks(app, a, b, aFactory, bFactory, capture, coordinator, sessionId, analysisCache)
+            return Decks(app, a, b, aFactory, bFactory, capture, analysisCache)
         }
     }
 
@@ -498,7 +496,6 @@ class AutomixPlayer private constructor(
         abandonFocus()
         standby.release()
         forwarding.release()
-        decks.boostCoordinator.release()
     }
 
     override fun seekTo(positionMs: Long) {
@@ -616,11 +613,11 @@ class AutomixPlayer private constructor(
     }
 
     private fun applyVolumes() {
-        decks.boostCoordinator.updateFadeWeights(
-            if (transition.activeDeck == DeckTransition.Deck.A) "deckA" else "deckB", activeGain,
-            if (transition.standbyDeck == DeckTransition.Deck.A) "deckA" else "deckB", standbyGain,
-            transition.phase == DeckTransition.Phase.FADING
-        )
+        val outputGain = if (transition.phase == DeckTransition.Phase.FADING) {
+            OVERLAP_HEADROOM
+        } else 1f
+        decks.factoryA.djTransitionAudioProcessor.setOutputGain(outputGain)
+        decks.factoryB.djTransitionAudioProcessor.setOutputGain(outputGain)
         active.volume = userVolume * focusVolume * activeGain
         standby.volume = userVolume * focusVolume * standbyGain
     }
@@ -740,9 +737,10 @@ class AutomixPlayer private constructor(
                 cancelTransition()
                 return
             }
-            if (active.audioSessionId != decks.audioSessionId ||
-                standby.audioSessionId != decks.audioSessionId) {
-                Log.e(TAG, "Deck audio sessions diverged during crossfade")
+            if (active.audioSessionId == C.AUDIO_SESSION_ID_UNSET ||
+                standby.audioSessionId == C.AUDIO_SESSION_ID_UNSET ||
+                active.audioSessionId == standby.audioSessionId) {
+                Log.e(TAG, "Automix decks require independent audio sessions")
                 cancelTransition()
                 nextItem = null
                 return
@@ -876,8 +874,8 @@ class AutomixPlayer private constructor(
         val activeSession = active.audioSessionId
         val standbySession = standby.audioSessionId
         if (activeSession == C.AUDIO_SESSION_ID_UNSET || standbySession == C.AUDIO_SESSION_ID_UNSET) return
-        if (activeSession != decks.audioSessionId || standbySession != decks.audioSessionId) {
-            Log.e(TAG, "Deck audio sessions do not match; cancelling crossfade")
+        if (activeSession == standbySession) {
+            Log.e(TAG, "Automix decks require independent audio sessions; cancelling crossfade")
             cancelTransition()
             nextItem = null
             return
