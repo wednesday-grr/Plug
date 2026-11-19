@@ -28,6 +28,7 @@ data class AutomixSettings(
     val enabled: Boolean,
     val beatmatchEnabled: Boolean,
     val durationSeconds: Int,
+    val transitionStyle: String = "auto",
 )
 
 class AutomixSettingsStore(private val preferences: SharedPreferences) {
@@ -36,13 +37,19 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
         private const val ENABLED = "automix_enabled"
         private const val BEATMATCH_ENABLED = "automix_beatmatch_enabled"
         private const val DURATION = "automix_duration_sec"
+        private const val TRANSITION_STYLE = "automix_transition_style"
+        private val TRANSITION_STYLES = setOf(
+            "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out"
+        )
     }
 
     private val mutableSettings = MutableStateFlow(readSettings())
     val settings = mutableSettings.asStateFlow()
 
     fun onPreferenceChanged(key: String?) {
-        if (key == null || key == ENABLED || key == BEATMATCH_ENABLED || key == DURATION) {
+        if (key == null || key == ENABLED || key == BEATMATCH_ENABLED || key == DURATION ||
+            key == TRANSITION_STYLE
+        ) {
             mutableSettings.value = readSettings()
         }
     }
@@ -52,10 +59,15 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
         if (duration !in 1..15) {
             Log.w(TAG, "Crossfade duration $duration is outside 1..15 seconds; clamping")
         }
+        val transitionStyle = preferences.getString(TRANSITION_STYLE, "auto") ?: "auto"
+        if (transitionStyle !in TRANSITION_STYLES) {
+            Log.w(TAG, "Unknown transition style $transitionStyle; using auto")
+        }
         return AutomixSettings(
             enabled = preferences.getBooleanStrict(ENABLED, false),
             beatmatchEnabled = preferences.getBooleanStrict(BEATMATCH_ENABLED, true),
             durationSeconds = duration.coerceIn(1, 15),
+            transitionStyle = transitionStyle.takeIf { it in TRANSITION_STYLES } ?: "auto",
         )
     }
 }

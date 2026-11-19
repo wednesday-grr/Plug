@@ -180,6 +180,10 @@ class FullBottomSheet
     private var displayedDj: Boolean? = null
     private var djTransitioning = false
     private var djText = ""
+    private var currentDjText = ""
+    private var nextDjText = ""
+    private var nextDjAvailable = false
+    private var djStatusText: String? = null
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
     private var currentFormat: AudioFormatDetector.AudioFormats? = null
@@ -1023,10 +1027,20 @@ class FullBottomSheet
             duration, position
         )
         val finalSection = duration > 15_000L && duration - position.coerceAtLeast(0) <= 15_000L
+        djText = djStatusText ?: if (finalSection && nextDjAvailable && nextDjText.isNotEmpty()) {
+            nextDjText
+        } else {
+            currentDjText
+        }
         val target = if (!enableQualityInfo || player?.currentMediaItem == null) null
-            else if (showDj) true else if (qualityInfo != null) false else null
-        if (target == true) {
-            if (djText.isEmpty()) djText = formatDjMetrics(null, null, player?.playbackParameters?.speed ?: 1f)
+            else if (djStatusText != null || showDj) true else if (qualityInfo != null) false else null
+        val timestampsVisibility = if (target == true) View.INVISIBLE else View.VISIBLE
+        bottomSheetFullPosition.visibility = timestampsVisibility
+        bottomSheetFullDuration.visibility = timestampsVisibility
+        if (target == true && djText.isEmpty()) {
+            djText = formatDjMetrics(null, null, player?.playbackParameters?.speed ?: 1f)
+        }
+        if (enableQualityInfo && player?.isPlaying == true && djScope != null) {
             requestDjMetrics()
         }
         if (target == displayedDj && !immediate) {
@@ -1094,11 +1108,26 @@ class FullBottomSheet
                     player.currentMediaItemIndex != index || player.currentMediaItem?.mediaId != mediaId ||
                     data.getInt("index", C.INDEX_UNSET) != index || data.getString("media_id") != mediaId
                 ) return@launch
-                djText = formatDjMetrics(
+                currentDjText = formatDjMetrics(
                     if (data.containsKey("bpm")) data.getFloat("bpm") else null,
                     data.getString("key"), data.getFloat("speed", 1f)
                 )
-                if (displayedDj == true && !djTransitioning) applyDisplayedInfo(true)
+                nextDjAvailable = data.getBoolean("next_available")
+                nextDjText = if (nextDjAvailable) formatDjMetrics(
+                    if (data.containsKey("next_bpm")) data.getFloat("next_bpm") else null,
+                    data.getString("next_key"), data.getFloat("next_speed", 1f)
+                ) else ""
+                val effect = context.getString(R.string.dj_crossfade)
+                val beatmatch = if (data.getBoolean("beatmatch"))
+                    context.getString(R.string.dj_beatmatch_suffix) else ""
+                djStatusText = when {
+                    data.getBoolean("mixing") ->
+                        context.getString(R.string.dj_mixing, effect, beatmatch)
+                    data.getBoolean("mixed") ->
+                        context.getString(R.string.dj_mixed, effect, beatmatch)
+                    else -> null
+                }
+                updateDjDisplay()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1559,6 +1588,10 @@ class FullBottomSheet
         djRequest?.cancel()
         djRequest = null
         djText = ""
+        currentDjText = ""
+        nextDjText = ""
+        nextDjAvailable = false
+        djStatusText = null
         djDisplayState.reset()
         updateDjDisplay(immediate = true)
         if (instance?.mediaItemCount != 0) {

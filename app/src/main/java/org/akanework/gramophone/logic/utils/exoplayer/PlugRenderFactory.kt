@@ -38,6 +38,7 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
 import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.SessionBoostCoordinator
+import org.akanework.gramophone.logic.utils.automix.DjTransitionAudioProcessor
 import org.akanework.gramophone.logic.utils.automix.PcmTransientAudioProcessor
 import org.nift4.alacdecoder.AlacRenderer
 
@@ -55,6 +56,7 @@ class PlugRenderFactory(
         require(pcmMixing || onPcmTransient == null) { "PCM capture requires PCM mixing mode" }
     }
     val replayGainAudioProcessor = ReplayGainAudioProcessor()
+    val djTransitionAudioProcessor = DjTransitionAudioProcessor()
     private var audioSinkCreated = false
 
     override fun buildTextRenderers(
@@ -138,8 +140,8 @@ class PlugRenderFactory(
                 rgAp.setRootFormat(inputFormat)
                 return when {
                     sonic == null -> arrayOf(rgAp)
-                    pcmTap == null -> arrayOf(rgAp, sonic)
-                    else -> arrayOf(pcmTap, rgAp, sonic)
+                    pcmTap == null -> arrayOf(rgAp, djTransitionAudioProcessor, sonic)
+                    else -> arrayOf(pcmTap, rgAp, djTransitionAudioProcessor, sonic)
                 }
             }
 

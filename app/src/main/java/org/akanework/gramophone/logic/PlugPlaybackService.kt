@@ -909,10 +909,13 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         automixSettings.onPreferenceChanged(key)
         if (key == "automix_enabled") {
             rebuildPlayerForAudioMode(automixSettings.settings.value.enabled)
-        } else if (key == "automix_beatmatch_enabled" || key == "automix_duration_sec") {
+        } else if (key == "automix_beatmatch_enabled" || key == "automix_duration_sec" ||
+            key == "automix_transition_style"
+        ) {
             automixSettings.settings.value.let { settings ->
                 automixPlayer?.updateAutomixConfig(
-                    settings.enabled, settings.beatmatchEnabled, settings.durationSeconds
+                    settings.enabled, settings.beatmatchEnabled, settings.durationSeconds,
+                    settings.transitionStyle
                 )
             }
         } else if (key == "offload") {
@@ -1081,7 +1084,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true
             )
             automixSettings.settings.value.let {
-                newAutomix.updateAutomixConfig(it.enabled, it.beatmatchEnabled, it.durationSeconds)
+                newAutomix.updateAutomixConfig(
+                    it.enabled, it.beatmatchEnabled, it.durationSeconds, it.transitionStyle
+                )
             }
             newAutomix.onActiveDeckChanged = { outgoing, incoming ->
                 val deckIndex = if (incoming === initialDeck) 0 else 1
@@ -1289,20 +1294,48 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 val item = player.currentMediaItem
                     ?: return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
                 val index = player.currentMediaItemIndex
+                val engine = wrapper.playbackEngine as? AutomixPlayer
+                val nextItem = engine?.upcomingMediaItem
                 val key = AnalysisKey.from(item)
                 key?.let { audioAnalysis.loadCachedForDisplay(it)?.join() }
+                val nextKey = nextItem?.let(AnalysisKey::from)
+                nextKey?.let { audioAnalysis.loadCachedForDisplay(it)?.join() }
                 if (endedWorkaroundPlayer !== wrapper || wrapper.exoPlayer !== player ||
-                    player.currentMediaItemIndex != index || player.currentMediaItem != item
+                    player.currentMediaItemIndex != index || player.currentMediaItem != item ||
+                    (wrapper.playbackEngine as? AutomixPlayer) !== engine ||
+                    engine?.upcomingMediaItem != nextItem
                 ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
                 val metadata = TrackAudioMetadataResolver.resolvePlayer(
                     player, key?.let(audioAnalysis.cache::peek)
                 )
+                val standby = engine?.upcomingStandbyPlayer
+                val nextMetadata = if (nextItem != null) {
+                    standby?.let {
+                        TrackAudioMetadataResolver.resolvePlayer(it, nextKey?.let(audioAnalysis.cache::peek))
+                    } ?: TrackAudioMetadataResolver.resolve(
+                        emptyList(), nextKey?.let(audioAnalysis.cache::peek), 0
+                    )
+                } else null
+                val now = SystemClock.elapsedRealtime()
+                val lastHandoff = engine?.lastHandoffElapsedRealtimeMs
                 SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
                     res.extras.putString("media_id", item.mediaId)
                     res.extras.putInt("index", index)
                     metadata.bpm?.let { res.extras.putFloat("bpm", it) }
                     res.extras.putString("key", metadata.camelotKey)
                     res.extras.putFloat("speed", player.playbackParameters.speed)
+                    res.extras.putBoolean("next_available", nextItem != null)
+                    nextMetadata?.bpm?.let { res.extras.putFloat("next_bpm", it) }
+                    res.extras.putString("next_key", nextMetadata?.camelotKey)
+                    if (nextItem != null) {
+                        res.extras.putFloat("next_speed", engine.upcomingPlaybackSpeed)
+                    }
+                    res.extras.putBoolean("mixing", engine?.isCrossfading == true)
+                    res.extras.putBoolean(
+                        "mixed",
+                        lastHandoff != null && now - lastHandoff in 0 until 6_000L
+                    )
+                    res.extras.putBoolean("beatmatch", engine?.isBeatmatchEnabled == true)
                 }
             }
         }

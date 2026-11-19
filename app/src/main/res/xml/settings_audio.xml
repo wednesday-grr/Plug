@@ -42,6 +42,16 @@
             android:widgetLayout="@layout/preference_switch_widget"
             app:iconSpaceReserved="true" />
 
+        <ListPreference
+            android:defaultValue="auto"
+            android:dependency="automix_enabled"
+            android:entries="@array/automix_transition_styles"
+            android:entryValues="@array/automix_transition_style_values"
+            android:key="automix_transition_style"
+            android:layout="@layout/preference_basic"
+            android:title="@string/settings_automix_transition_style"
+            app:iconSpaceReserved="true" />
+
         <SeekBarPreference
             android:defaultValue="5"
             android:dependency="automix_enabled"

@@ -39,8 +39,12 @@ class AutomixSettingsTest {
 
         prefs.edit().putBoolean("automix_enabled", true)
             .putBoolean("automix_beatmatch_enabled", false)
-            .putInt("automix_duration_sec", 12).commit()
-        assertEquals(AutomixSettings(true, false, 12), AutomixSettingsStore(prefs).settings.value)
+            .putInt("automix_duration_sec", 12)
+            .putString("automix_transition_style", "vinyl_brake").commit()
+        assertEquals(
+            AutomixSettings(true, false, 12, "vinyl_brake"),
+            AutomixSettingsStore(prefs).settings.value
+        )
     }
 
     @Test
@@ -62,8 +66,10 @@ class AutomixSettingsTest {
             assertEquals(15, store.settings.value.durationSeconds)
             prefs.edit().putInt("automix_duration_sec", 7).commit()
             assertEquals(7, store.settings.value.durationSeconds)
+            prefs.edit().putString("automix_transition_style", "vinyl_brake").commit()
+            assertEquals("vinyl_brake", store.settings.value.transitionStyle)
             prefs.edit().putBoolean("automix_enabled", false).commit()
-            assertEquals(AutomixSettings(false, false, 7), store.settings.value)
+            assertEquals(AutomixSettings(false, false, 7, "vinyl_brake"), store.settings.value)
         } finally {
             prefs.unregisterOnSharedPreferenceChangeListener(listener)
         }

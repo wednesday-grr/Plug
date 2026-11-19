@@ -57,6 +57,7 @@ import org.akanework.gramophone.logic.utils.exoplayer.PlugRenderFactory
 import org.akanework.gramophone.logic.utils.exoplayer.PlugExtractorsFactory
 import org.akanework.gramophone.logic.utils.exoplayer.PlugMediaSourceFactory
 import kotlin.math.ceil
+import kotlin.math.pow
 import kotlin.random.Random
 
 /**
@@ -101,6 +102,13 @@ class AutomixPlayer private constructor(
         private const val PREBUFFER_LEAD_MS = 5000L
         private const val TICK_MS = 25L
         private const val END_MARGIN_MS = 150L
+        private const val VINYL_BRAKE_DURATION_MS = 1000L
+        private const val VINYL_BRAKE_MIN_SPEED = 0.15f
+        private const val SMART_AUTO_BPM_DROP_RATIO = 0.8f
+        private const val FILTER_OUT_START_HZ = 20f
+        private const val FILTER_OUT_END_HZ = 3500f
+        private const val FILTER_IN_START_HZ = 300f
+        private const val FILTER_IN_END_HZ = 20_000f
 
         private fun createDecks(
             context: Context,
@@ -182,6 +190,9 @@ class AutomixPlayer private constructor(
     private var preparedQueue: QueueSnapshot? = null
     private var enabled = false
     private var beatmatchEnabled = true
+    private var transitionStyle = "auto"
+    private var vinylBrakeTransition = false
+    private var activeFadeDurationMs = 0L
     private var durationMs = 5000L
     private var userVolume = 1f
     private var unmuteVolume = 1f
@@ -195,6 +206,8 @@ class AutomixPlayer private constructor(
     private var focusRequest: AudioFocusRequestCompat? = null
     private var released = false
     private var matchedSpeed = 1f
+    var lastHandoffElapsedRealtimeMs: Long? = null
+        private set
     private var pendingStartPositionMs: Long? = null
     private val samplesA = ArrayDeque<Long>()
     private val samplesB = ArrayDeque<Long>()
@@ -214,6 +227,12 @@ class AutomixPlayer private constructor(
     private val standbyProcessor: ReplayGainAudioProcessor
         get() = if (transition.standbyDeck == DeckTransition.Deck.A)
             decks.factoryA.replayGainAudioProcessor else decks.factoryB.replayGainAudioProcessor
+    private val activeDjFilter: DjTransitionAudioProcessor
+        get() = if (transition.activeDeck == DeckTransition.Deck.A)
+            decks.factoryA.djTransitionAudioProcessor else decks.factoryB.djTransitionAudioProcessor
+    private val standbyDjFilter: DjTransitionAudioProcessor
+        get() = if (transition.standbyDeck == DeckTransition.Deck.A)
+            decks.factoryA.djTransitionAudioProcessor else decks.factoryB.djTransitionAudioProcessor
 
     fun applyReplayGainSettings(settings: ReplayGainAudioProcessor.Settings): Boolean {
         assertThread()
@@ -284,6 +303,13 @@ class AutomixPlayer private constructor(
     }
 
     val isCrossfading: Boolean get() = transition.phase == DeckTransition.Phase.FADING
+    val isAutomixEnabled: Boolean get() = enabled
+    val isBeatmatchEnabled: Boolean get() = beatmatchEnabled
+    val upcomingMediaItem: MediaItem? get() = nextItem?.takeIf { enabled }
+    val upcomingStandbyPlayer: ExoPlayer?
+        get() = upcomingMediaItem?.takeIf { standby.currentMediaItem == it }?.let { standby }
+    val upcomingPlaybackSpeed: Float
+        get() = upcomingStandbyPlayer?.playbackParameters?.speed ?: matchedSpeed
 
     fun setNextMediaItem(mediaItem: MediaItem?) {
         assertThread()
@@ -308,15 +334,24 @@ class AutomixPlayer private constructor(
         )
     }
 
-    fun updateAutomixConfig(enabled: Boolean, beatmatchEnabled: Boolean, durationSec: Int) {
+    fun updateAutomixConfig(
+        enabled: Boolean,
+        beatmatchEnabled: Boolean,
+        durationSec: Int,
+        transitionStyle: String = "auto",
+    ) {
         assertThread()
         require(durationSec in 1..15)
+        require(transitionStyle in setOf(
+            "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out"
+        ))
         if (this.enabled != enabled || this.beatmatchEnabled != beatmatchEnabled ||
-            durationMs != durationSec * 1000L
+            durationMs != durationSec * 1000L || this.transitionStyle != transitionStyle
         ) cancelTransition()
         this.enabled = enabled
         this.beatmatchEnabled = beatmatchEnabled
         durationMs = durationSec * 1000L
+        this.transitionStyle = transitionStyle
     }
 
     override fun setAudioAttributes(audioAttributes: AudioAttributes, handleAudioFocus: Boolean) {
@@ -579,7 +614,14 @@ class AutomixPlayer private constructor(
     }
 
     private fun cancelTransition() {
+        decks.factoryA.djTransitionAudioProcessor.bypass()
+        decks.factoryB.djTransitionAudioProcessor.bypass()
+        if (vinylBrakeTransition) {
+            active.playbackParameters = PlaybackParameters(1f, active.playbackParameters.pitch)
+        }
         transition.cancel()
+        vinylBrakeTransition = false
+        activeFadeDurationMs = 0L
         pendingStartPositionMs = null
         preparedItem = null
         preparedQueue = null
@@ -588,6 +630,7 @@ class AutomixPlayer private constructor(
         standby.shuffleOrder = ShuffleOrder.DefaultShuffleOrder(standby.mediaItemCount)
         standby.clearMediaItems()
         standby.playbackParameters = PlaybackParameters.DEFAULT
+        matchedSpeed = 1f
         activeGain = 1f
         standbyGain = 0f
         applyVolumes()
@@ -685,13 +728,41 @@ class AutomixPlayer private constructor(
             val now = SystemClock.elapsedRealtime()
             transition.resume(now)
             val progress = transition.progress(now)
-            val gains = AutomixMath.equalPower(progress)
-            activeGain = gains.outgoing
-            standbyGain = gains.incoming
+            if (transitionStyle == "filter_sweep") {
+                activeDjFilter.setFilter(
+                    DjTransitionAudioProcessor.Type.HIGH_PASS,
+                    exponentialCutoff(FILTER_OUT_START_HZ, FILTER_OUT_END_HZ, progress)
+                )
+                standbyDjFilter.setFilter(
+                    DjTransitionAudioProcessor.Type.LOW_PASS,
+                    exponentialCutoff(FILTER_IN_START_HZ, FILTER_IN_END_HZ, progress)
+                )
+            }
+            if (vinylBrakeTransition) {
+                val brakeDuration = minOf(VINYL_BRAKE_DURATION_MS, activeFadeDurationMs)
+                    .coerceAtLeast(800L)
+                val brakeStart = ((activeFadeDurationMs - brakeDuration).toFloat() /
+                    activeFadeDurationMs).coerceIn(0f, 1f)
+                val brakeProgress = ((progress - brakeStart) / (1f - brakeStart))
+                    .coerceIn(0f, 1f)
+                val outgoingSpeed = 1f + (VINYL_BRAKE_MIN_SPEED - 1f) * brakeProgress
+                activeGain = 1f - brakeProgress
+                standbyGain = 0f
+                active.playbackParameters = PlaybackParameters(
+                    outgoingSpeed, active.playbackParameters.pitch
+                )
+                standby.playbackParameters = PlaybackParameters(
+                    1f, active.playbackParameters.pitch
+                )
+            } else {
+                val gains = AutomixMath.equalPower(progress)
+                activeGain = gains.outgoing
+                standbyGain = gains.incoming
+                standby.playbackParameters = PlaybackParameters(
+                    AutomixMath.rampSpeed(matchedSpeed, progress), active.playbackParameters.pitch
+                )
+            }
             applyVolumes()
-            standby.playbackParameters = PlaybackParameters(
-                AutomixMath.rampSpeed(matchedSpeed, progress), active.playbackParameters.pitch
-            )
             if (progress >= 1f) handoff(now)
             return
         }
@@ -701,15 +772,26 @@ class AutomixPlayer private constructor(
         ) return
         val remaining = active.duration - active.currentPosition
         if (remaining <= 0) return
-        if (transition.phase == DeckTransition.Phase.IDLE && remaining <= durationMs + PREBUFFER_LEAD_MS) {
+        if (transition.phase == DeckTransition.Phase.IDLE &&
+            remaining <= maxOf(durationMs + PREBUFFER_LEAD_MS, 15_000L)
+        ) {
             prepareStandby(nextItem ?: return)
         }
         if (transition.phase == DeckTransition.Phase.PREPARING &&
             standby.playbackState == Player.STATE_READY
         ) transition.markReady()
-        if (transition.phase != DeckTransition.Phase.READY ||
-            remaining > durationMs + END_MARGIN_MS || remaining <= END_MARGIN_MS
-        ) return
+        if (transition.phase != DeckTransition.Phase.READY) return
+
+        val outgoing = audioMetadata(active)
+        val incoming = audioMetadata(standby)
+        val outBpm = outgoing.bpm
+        val inBpm = incoming.bpm
+        vinylBrakeTransition = transitionStyle == "vinyl_brake" ||
+            (transitionStyle == "auto" && outBpm != null && inBpm != null &&
+                inBpm <= outBpm * SMART_AUTO_BPM_DROP_RATIO)
+        val requestedFadeDuration = if (vinylBrakeTransition) VINYL_BRAKE_DURATION_MS else durationMs
+        if (remaining > requestedFadeDuration + END_MARGIN_MS || remaining <= END_MARGIN_MS) return
+
         val activeSession = active.audioSessionId
         val standbySession = standby.audioSessionId
         if (activeSession == C.AUDIO_SESSION_ID_UNSET || standbySession == C.AUDIO_SESSION_ID_UNSET) return
@@ -721,13 +803,9 @@ class AutomixPlayer private constructor(
         }
 
         if (pendingStartPositionMs == null) {
-            val outgoing = audioMetadata(active)
-            val incoming = audioMetadata(standby)
-            val outBpm = outgoing.bpm
-            val inBpm = incoming.bpm
             val outgoingSamples = if (transition.activeDeck == DeckTransition.Deck.A) samplesA else samplesB
             val incomingSamples = if (transition.standbyDeck == DeckTransition.Deck.A) samplesA else samplesB
-            val alignment = if (beatmatchEnabled) BeatPhaseAligner.align(
+            val alignment = if (beatmatchEnabled && !vinylBrakeTransition) BeatPhaseAligner.align(
                 outBpm, inBpm,
                 outgoing.beatGrid?.takeIf { it.confidence >= 0.8f }
                     ?: BeatPhaseAligner.estimate(outBpm, outgoingSamples.toList()),
@@ -735,13 +813,14 @@ class AutomixPlayer private constructor(
                     ?: BeatPhaseAligner.estimate(inBpm, incomingSamples.toList()),
                 active.currentPosition.toDouble(), standby.currentPosition.toDouble()
             ) else null
-            matchedSpeed = alignment?.incomingSpeed ?: 1f
+            matchedSpeed = if (vinylBrakeTransition) 1f else alignment?.incomingSpeed ?: 1f
             val delayMs = alignment?.startDelayMs?.let { ceil(it).toLong() } ?: 0L
             pendingStartPositionMs = active.currentPosition +
                 delayMs.coerceAtMost(remaining - END_MARGIN_MS - 1)
         }
         if (active.currentPosition < pendingStartPositionMs!!) return
-        var fadeDuration = (active.duration - active.currentPosition - END_MARGIN_MS).coerceAtMost(durationMs)
+        var fadeDuration = (active.duration - active.currentPosition - END_MARGIN_MS)
+            .coerceAtMost(requestedFadeDuration)
         if (standby.duration != C.TIME_UNSET) {
             val incomingRemaining = standby.duration - standby.currentPosition - END_MARGIN_MS
             fadeDuration = fadeDuration.coerceAtMost(
@@ -754,7 +833,19 @@ class AutomixPlayer private constructor(
             nextItem = null
             return
         }
-        standby.playbackParameters = PlaybackParameters(matchedSpeed, active.playbackParameters.pitch)
+        standby.playbackParameters = PlaybackParameters(
+            if (vinylBrakeTransition) 1f else matchedSpeed,
+            active.playbackParameters.pitch
+        )
+        if (transitionStyle == "filter_sweep") {
+            activeDjFilter.setFilter(
+                DjTransitionAudioProcessor.Type.HIGH_PASS, FILTER_OUT_START_HZ
+            )
+            standbyDjFilter.setFilter(
+                DjTransitionAudioProcessor.Type.LOW_PASS, FILTER_IN_START_HZ
+            )
+        }
+        activeFadeDurationMs = fadeDuration
         transition.start(fadeDuration, SystemClock.elapsedRealtime())
         transition.pause(SystemClock.elapsedRealtime())
         applyVolumes()
@@ -764,14 +855,22 @@ class AutomixPlayer private constructor(
     private fun handoff(now: Long) {
         val outgoing = active
         val incoming = standby
-        incoming.playbackParameters = outgoing.playbackParameters
+        incoming.playbackParameters = PlaybackParameters(
+            if (vinylBrakeTransition) 1f else outgoing.playbackParameters.speed,
+            outgoing.playbackParameters.pitch
+        )
         transition.complete(now)
+        decks.factoryA.djTransitionAudioProcessor.bypass()
+        decks.factoryB.djTransitionAudioProcessor.bypass()
         activeGain = 1f
         standbyGain = 0f
         nextItem = null
         preparedItem = null
         preparedQueue = null
         pendingStartPositionMs = null
+        lastHandoffElapsedRealtimeMs = now
+        vinylBrakeTransition = false
+        activeFadeDurationMs = 0L
         applyVolumes()
         onActiveDeckChanged?.invoke(outgoing, incoming)
         forwarding.handoff(incoming)
@@ -780,6 +879,9 @@ class AutomixPlayer private constructor(
         outgoing.shuffleOrder = ShuffleOrder.DefaultShuffleOrder(outgoing.mediaItemCount)
         outgoing.clearMediaItems()
     }
+
+    private fun exponentialCutoff(startHz: Float, endHz: Float, progress: Float): Float =
+        startHz * (endHz / startHz).toDouble().pow(progress.coerceIn(0f, 1f).toDouble()).toFloat()
 }
 
 /**
