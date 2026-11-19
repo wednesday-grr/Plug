@@ -4,6 +4,9 @@ import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Color
+import android.os.Build
+import android.text.method.LinkMovementMethod
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -15,8 +18,7 @@ import android.view.animation.PathInterpolator
 import android.widget.TextView
 import androidx.core.animation.doOnEnd
 import androidx.core.graphics.TypefaceCompat
-import androidx.core.view.HapticFeedbackConstantsCompat
-import androidx.core.view.ViewCompat
+import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.doOnLayout
 import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -28,8 +30,11 @@ import org.akanework.gramophone.logic.getBooleanStrict
 import org.akanework.gramophone.logic.ui.CustomSmoothScroller
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.logic.utils.SemanticLyrics
+import org.akanework.gramophone.logic.utils.SpeakerEntity
+import org.akanework.gramophone.logic.utils.SpicyLyricsAttribution
 import org.akanework.gramophone.logic.utils.SemanticLyrics.SyncedLyrics
 import org.akanework.gramophone.ui.MainActivity
+import kotlin.math.abs
 
 class LegacyLyricsAdapter(
     private val context: Context,
@@ -54,9 +59,9 @@ class LegacyLyricsAdapter(
     var currentFocusPos = -1
         private set
     private var currentTranslationPos = -1
-    private var isBoldEnabled = false
     private var isLyricCentered = false
     private var forceNoAnimation = false
+    private var lyricsAttribution: SpicyLyricsAttribution? = null
     private val sizeFactor = 1f
     private val defaultSizeFactor = .97f
 
@@ -84,40 +89,48 @@ class LegacyLyricsAdapter(
             payloads.isNotEmpty() && (payloads[0] == LYRIC_SET_HIGHLIGHT || payloads[0] == LYRIC_REMOVE_HIGHLIGHT)
 
         with(holder.lyricCard) {
-            setOnClickListener {
-                lyric.timeStamp?.let { it1 ->
-                    ViewCompat.performHapticFeedback(
-                        it,
-                        HapticFeedbackConstantsCompat.CONTEXT_CLICK
-                    )
-                    callback?.setPlayWhenReady(true)
-                    callback?.seekTo(it1.toULong())
-                }
-            }
+            setOnClickListener(null)
+            isClickable = false
+            isFocusable = false
         }
 
         with(holder.lyricTextView) {
             visibility = if (lyric.content.isNotEmpty()) VISIBLE else GONE
+            setTextIsSelectable(false)
+            customSelectionActionModeCallback = null
             text = lyric.content
-            gravity = if (isLyricCentered) Gravity.CENTER else Gravity.START
+            gravity = when {
+                lyric.isAttributionFooter -> Gravity.START
+                isLyricCentered || lyric.speaker?.isGroup == true -> Gravity.CENTER
+                lyric.speaker?.isVoice2 == true -> Gravity.END
+                else -> Gravity.START
+            }
+            textAlignment = View.TEXT_ALIGNMENT_GRAVITY
             translationY = 0f
 
-            val textSize = if (lyric.isTranslation) 20f else 34.25f
-            val paddingTop = if (lyric.isTranslation) 2 else 18
-            val paddingBottom =
-                if (position + 1 < lyricList.size && lyricList[position + 1].isTranslation) 2 else 18
-
-            if (isBoldEnabled) {
-                this.typeface = TypefaceCompat.create(context, null, 700, false)
-            } else {
-                this.typeface = TypefaceCompat.create(context, null, 500, false)
+            val textSize = when {
+                lyric.isAttributionFooter -> 16f
+                lyric.isBackground -> 20f
+                lyric.isTranslation -> 20f
+                else -> 34.25f
+            }
+            val paddingTop = when {
+                lyric.isAttributionFooter -> 32
+                lyric.isTranslation -> 2
+                else -> 18
+            }
+            val paddingBottom = when {
+                lyric.isAttributionFooter -> 64
+                position + 1 < lyricList.size && lyricList[position + 1].isTranslation -> 2
+                else -> 18
             }
 
-            if (isLyricCentered) {
-                this.gravity = Gravity.CENTER
-            } else {
-                this.gravity = Gravity.START
-            }
+            this.typeface = ResourcesCompat.getFont(context, R.font.dongle_bold)
+                ?: TypefaceCompat.create(context, null, 700, false)
+            movementMethod = if (lyric.isAttributionFooter) LinkMovementMethod.getInstance() else null
+            isClickable = lyric.isAttributionFooter
+            isFocusable = lyric.isAttributionFooter
+            isLongClickable = false
 
             setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
             setPadding(
@@ -133,6 +146,10 @@ class LegacyLyricsAdapter(
             }
 
             when {
+                lyric.isAttributionFooter -> {
+                    scaleText(1f)
+                    setTextColor(LYRICS_ATTRIBUTION_COLOR)
+                }
                 isHighlightPayload -> {
                     val targetScale =
                         if (payloads[0] == LYRIC_SET_HIGHLIGHT) sizeFactor else defaultSizeFactor
@@ -154,6 +171,11 @@ class LegacyLyricsAdapter(
                     setTextColor(defaultTextColor)
                 }
             }
+            val active = position == currentFocusPos
+            alpha = if (lyric.isBackground) 0.75f else 1f
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setRenderEffect(null)
+            if (active && !lyric.isTranslation) setTextColor(Color.WHITE)
+            if (active) scaleText(1.03f)
         }
     }
 
@@ -195,7 +217,6 @@ class LegacyLyricsAdapter(
     }
 
     fun updateLyricStatus() {
-        isBoldEnabled = prefs.getBooleanStrict("lyric_bold", false)
         isLyricCentered = prefs.getBooleanStrict("lyric_center", false)
         forceNoAnimation = prefs.getBooleanStrict("lyric_no_animation", false)
     }
@@ -210,30 +231,23 @@ class LegacyLyricsAdapter(
     }
 
     fun updateHighlight(position: Int) {
-        if (currentFocusPos == position) return
-        if (position >= 0) {
-            currentFocusPos.let {
-                notifyItemChanged(it, LYRIC_REMOVE_HIGHLIGHT)
-                currentFocusPos = position
-                notifyItemChanged(currentFocusPos, LYRIC_SET_HIGHLIGHT)
+        val newFocus = position.takeIf { it in lyricList.indices }
+        val newTranslation = newFocus?.let { focus ->
+            lyricList.indices.firstOrNull {
+                lyricList[it].isTranslation &&
+                    lyricList[it].timeStamp == lyricList[focus].timeStamp
             }
-
-            if (position + 1 < lyricList.size &&
-                lyricList[position + 1].isTranslation
-            ) {
-                currentTranslationPos.let {
-                    notifyItemChanged(it, LYRIC_REMOVE_HIGHLIGHT)
-                    currentTranslationPos = position + 1
-                    notifyItemChanged(currentTranslationPos, LYRIC_SET_HIGHLIGHT)
-                }
-            } else if (currentTranslationPos != -1) {
-                notifyItemChanged(currentTranslationPos, LYRIC_REMOVE_HIGHLIGHT)
-                currentTranslationPos = -1
-            }
-        } else {
-            currentFocusPos = -1
-            currentTranslationPos = -1
-        }
+        } ?: -1
+        if (currentFocusPos == newFocus && currentTranslationPos == newTranslation) return
+        val changedPositions = setOf(
+            currentFocusPos,
+            currentTranslationPos,
+            newFocus ?: -1,
+            newTranslation
+        ).filter { it in lyricList.indices }.toMutableSet()
+        currentFocusPos = newFocus ?: -1
+        currentTranslationPos = newTranslation
+        changedPositions.forEach { notifyItemChanged(it) }
     }
 
     private fun createSmoothScroller(noAnimation: Boolean): RecyclerView.SmoothScroller {
@@ -341,33 +355,48 @@ class LegacyLyricsAdapter(
     }
 
     private fun updateNewIndex(): Int {
-        val filteredList = lyricList.filterIndexed { _, lyric ->
-            (lyric.timeStamp ?: 0) <= (callback?.getCurrentPosition()?.toLong() ?: 0L)
+        val position = callback?.getCurrentPosition()?.toLong() ?: 0L
+        val primaryLines = lyricList.indices.filter(::isPrimaryVocalLine)
+        if (primaryLines.isEmpty()) return -1
+        val previous = primaryLines.lastOrNull {
+            lyricList[it].timeStamp!! <= position
         }
-
-        return if (filteredList.isNotEmpty()) {
-            filteredList.indices.maxBy {
-                filteredList[it].timeStamp ?: 0
+        val next = primaryLines.firstOrNull {
+            lyricList[it].timeStamp!! > position
+        }
+        val activeInstrumentalBreak = lyricList.indices.lastOrNull { index ->
+            val lyric = lyricList[index]
+            lyric.isInstrumentalBreak() && lyric.timeStamp!! <= position &&
+                lyric.endTime?.let { it >= position } == true
+        }
+        val previousEnded = previous?.let {
+            lyricList[it].endTime?.let { end -> end < position } == true
+        } == true
+        if (activeInstrumentalBreak != null) {
+            val breakStart = lyricList[activeInstrumentalBreak].timeStamp!!
+            val upcomingAfterBreak = primaryLines.firstOrNull {
+                lyricList[it].timeStamp!! > breakStart
             }
-        } else {
-            -1
+            if (previous != null && lyricList[previous].timeStamp!! >= breakStart)
+                return previous
+            return upcomingAfterBreak ?: previous ?: -1
         }
+        return if (previousEnded && next != null) next else previous ?: next ?: -1
     }
 
-    fun updateLyrics(newLyric: SemanticLyrics?) {
+    fun updateLyrics(
+        newLyric: SemanticLyrics?,
+        attribution: SpicyLyricsAttribution? = lyricsAttribution
+    ) {
+        lyricsAttribution = attribution
         val parsedLyrics = newLyric.convertForLegacy()
-        if (lyricList != parsedLyrics) {
+        val updatedLyrics = parsedLyrics ?: mutableListOf(
+            Lyric(null, context.getString(R.string.no_lyric_found))
+        )
+        buildAttributionLyric(attribution)?.let(updatedLyrics::add)
+        if (lyricList != updatedLyrics) {
             lyricList.clear()
-            if (parsedLyrics?.isEmpty() != false) {
-                lyricList.add(
-                    Lyric(
-                        null,
-                        context.getString(R.string.no_lyric_found)
-                    )
-                )
-            } else {
-                lyricList.addAll(parsedLyrics)
-            }
+            lyricList.addAll(updatedLyrics)
             @SuppressLint("NotifyDataSetChanged")
             notifyDataSetChanged()
             smoothScrollTo(0)
@@ -384,15 +413,44 @@ class LegacyLyricsAdapter(
 
     private data class Lyric(
         val timeStamp: Long? = null,
-        val content: String = "",
-        var isTranslation: Boolean = false
+        val content: CharSequence = "",
+        var isTranslation: Boolean = false,
+        var isAttributionFooter: Boolean = false,
+        var endTime: Long? = null,
+        var speaker: SpeakerEntity? = null,
+        var isBackground: Boolean = speaker?.isBackground == true
     )
+
+    private fun Lyric.isInstrumentalBreak(): Boolean {
+        if (isAttributionFooter || timeStamp == null) return false
+        val visibleText = content.toString().filterNot(Char::isWhitespace)
+        return visibleText.isNotEmpty() && visibleText.all { it == '•' || it == '·' }
+    }
+
+    private fun isPrimaryVocalLine(position: Int): Boolean {
+        val lyric = lyricList[position]
+        return !lyric.isAttributionFooter && !lyric.isTranslation &&
+            lyric.timeStamp != null && !lyric.isBackground &&
+            lyric.content.isNotBlank() && !lyric.isInstrumentalBreak()
+    }
+
+    private fun buildAttributionLyric(attribution: SpicyLyricsAttribution?): Lyric? {
+        attribution ?: return null
+        return Lyric(content = buildLyricsAttribution(context, attribution), isAttributionFooter = true)
+    }
 
     private fun SemanticLyrics?.convertForLegacy(): MutableList<Lyric>? {
         if (this == null) return null
         if (this is SyncedLyrics) {
             return this.text.map {
-                Lyric(it.start.toLong(), it.text, it.isTranslated)
+                Lyric(
+                    timeStamp = it.start.toLong(),
+                    content = it.text,
+                    isTranslation = it.isTranslated,
+                    endTime = it.end.toLong(),
+                    speaker = it.speaker,
+                    isBackground = it.speaker?.isBackground == true
+                )
             }.toMutableList()
         }
         return mutableListOf(
@@ -402,4 +460,5 @@ class LegacyLyricsAdapter(
         )
         )
     }
+
 }

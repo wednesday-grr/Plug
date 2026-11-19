@@ -28,15 +28,19 @@ import android.text.Layout
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.StaticLayout
+import android.text.TextDirectionHeuristics
 import android.text.TextPaint
+import android.text.style.ClickableSpan
 import android.util.AttributeSet
 import android.util.SparseArray
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.View
 import android.view.animation.AnimationUtils
 import android.view.animation.PathInterpolator
 import androidx.core.graphics.ColorUtils
+import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.TypefaceCompat
 import androidx.core.text.getSpans
 import androidx.core.util.forEach
@@ -54,6 +58,7 @@ import org.akanework.gramophone.logic.utils.CalculationUtils.lerp
 import org.akanework.gramophone.logic.utils.CalculationUtils.lerpInv
 import org.akanework.gramophone.logic.utils.Flags
 import org.akanework.gramophone.logic.utils.SemanticLyrics
+import org.akanework.gramophone.logic.utils.SpicyLyricsAttribution
 import org.akanework.gramophone.logic.utils.SpeakerEntity
 import org.akanework.gramophone.logic.utils.findBidirectionalBarriers
 import kotlin.math.abs
@@ -90,6 +95,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     private var spForRender: Pair<IntArray, List<SbItem>>? = null
     private var spForMeasure: Pair<IntArray, List<SbItem>>? = null
     private var lyrics: SemanticLyrics? = null
+    private var lyricsAttribution: SpicyLyricsAttribution? = null
+    private var appleEffectsEnabled = prefs.getBooleanStrict("lyric_apple_music_effects", true)
     private var posForRender = 0uL
     lateinit var instance: Callbacks
     private val gestureDetector = GestureDetector(context, this)
@@ -117,8 +124,11 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     private var gradientSpanPool = mutableListOf<MyGradientSpan>()
     private var gradientTlSpanPool = mutableListOf<MyGradientSpan>()
     private val cachedNodes = if (hasRenderNodes()) SparseArray<RenderNode>() else null
+    private val activeLyricsColor: Int
+        get() = if (appleEffectsEnabled) Color.WHITE else highlightTextColor
+
     private fun makeGradientSpan() =
-        MyGradientSpan(grdWidth, defaultTextColor, highlightTextColor)
+        MyGradientSpan(grdWidth, defaultTextColor, activeLyricsColor)
 
     private fun makeGradientTlSpan() =
         MyGradientSpan(grdWidth, defaultTextColor, highlightTlTextColor)
@@ -132,8 +142,6 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     interface Callbacks {
         fun getCurrentPosition(): ULong
         fun isPlaying(): Boolean
-        fun seekTo(position: ULong)
-        fun setPlayWhenReady(play: Boolean)
         fun speed(): Float
         fun destroy()
     }
@@ -153,7 +161,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         }
         if (highlightTextColor != newHighlightColor) {
             highlightTextColor = newHighlightColor
-            wordActiveSpan.color = highlightTextColor
+            wordActiveSpan.color = activeLyricsColor
             changed = true
         }
         if (highlightTlTextColor != newHighlightTlColor) {
@@ -199,7 +207,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     fun updateHighlightColor(newHighlightColor: Int) {
         if (highlightTextColor != newHighlightColor) {
             highlightTextColor = newHighlightColor
-            wordActiveSpan.color = highlightTextColor
+            wordActiveSpan.color = activeLyricsColor
             gradientSpanPool.clear()
             repeat(3) { gradientSpanPool.add(makeGradientSpan()) }
             spForRender?.second?.forEach {
@@ -230,10 +238,20 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         requestLayout()
         lyrics = parsedLyrics
         stateOverrides.clear()
+        invalidateDeeply()
+    }
+
+    fun updateAttribution(attribution: SpicyLyricsAttribution?) {
+        lyricsAttribution = attribution
+        spForRender = null
+        spForMeasure = null
+        requestLayout()
+        invalidateDeeply()
     }
 
     fun updateLyricPositionFromPlaybackPos() {
-        if (instance.getCurrentPosition() != posForRender && lyrics is SemanticLyrics.SyncedLyrics)
+        val playbackPosition = instance.getCurrentPosition()
+        if (playbackPosition != posForRender && lyrics is SemanticLyrics.SyncedLyrics)
             postInvalidateOnAnimation() // if not playing, might stay same
     }
 
@@ -242,10 +260,14 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             loadLyricAnimTime()
             return
         }
-        if (key == "lyric_bold")
-            applyTypefaces()
         if (key == "lyric_text_size")
             applySize()
+        if (key == "lyric_apple_music_effects") {
+            appleEffectsEnabled = prefs.getBooleanStrict("lyric_apple_music_effects", true)
+            wordActiveSpan.color = activeLyricsColor
+            gradientSpanPool.clear()
+            repeat(3) { gradientSpanPool.add(makeGradientSpan()) }
+        }
         spForRender = null
         spForMeasure = null
         requestLayout()
@@ -270,24 +292,22 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     }
 
     private fun applyTypefaces() {
-        typeface = if (prefs.getBooleanStrict("lyric_bold", false)) {
-            TypefaceCompat.create(context, null, 700, false)
-        } else {
-            TypefaceCompat.create(context, null, 500, false)
-        }
+        typeface = ResourcesCompat.getFont(context, R.font.dongle_bold)
+            ?: TypefaceCompat.create(context, null, Typeface.BOLD, false)
         defaultTextPaint.typeface = typeface
         translationTextPaint.typeface = typeface
         translationBackgroundTextPaint.typeface = typeface
     }
 
     override fun onDrawForChild(canvas: Canvas) {
-        posForRender = instance.getCurrentPosition().also {
-            if (posForRender > it && posForRender - it < 1000uL)
-                Log.w(
-                    TAG,
-                    "regressing position by ${posForRender - it}ms from $posForRender to $it!"
-                )
-        }
+        val playbackPosition = instance.getCurrentPosition()
+        if (posForRender > playbackPosition && posForRender - playbackPosition < 1000uL)
+            Log.w(
+                TAG,
+                "regressing position by ${posForRender - playbackPosition}ms " +
+                    "from $posForRender to $playbackPosition!"
+            )
+        posForRender = playbackPosition
         val isPlaying = instance.isPlaying()
         if (spForRender == null) {
             requestLayout()
@@ -315,9 +335,10 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             var realGradientEnd = -1
             var wordIdx: Int? = null
             var gradientProgress = Float.NEGATIVE_INFINITY
-            val firstTs = it.line?.start ?: ULong.MIN_VALUE
-            var lastTs = min(it.line?.end ?: Int.MAX_VALUE.toULong(), Int.MAX_VALUE.toULong())
-            var endIsImplicit = it.line?.endIsImplicit != false
+            val firstTs = if (it.isAttributionFooter) 0uL else it.line?.start ?: ULong.MIN_VALUE
+            var lastTs = if (it.isAttributionFooter) 0uL else
+                min(it.line?.end ?: Int.MAX_VALUE.toULong(), Int.MAX_VALUE.toULong())
+            var endIsImplicit = !it.isAttributionFooter && it.line?.endIsImplicit != false
             if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.line?.start != null && (!it.line.isTranslated
                         && it.theWords == null || it.line.isTranslated && spForRender!!.second
                     .subList(0, i).find { l -> l.line?.start == it.line.start }?.theWords == null)) {
@@ -349,14 +370,14 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             val fadeOutEnd = if (!endIsImplicit)
                 lastTs + (timeOffsetForUse * 2).toULong()
             else lastTs + timeOffsetForUse.toULong()
-            val highlightReal = posForRender in fadeInStart..fadeOutEnd
+            val highlightReal = !it.isAttributionFooter && posForRender in fadeInStart..fadeOutEnd
             val override = stateOverrides[i]
             val overridePos = override?.let {
                 if (it >= 0f)
                     it.toULong() + posForRender - stateTime
                 else (-it).toULong() // negative signals freeze
             } ?: posForRender
-            val highlight = overridePos in fadeInStart..fadeOutEnd
+            val highlight = !it.isAttributionFooter && overridePos in fadeInStart..fadeOutEnd
             if (override != null) {
                 val animPosReal = if (!highlightReal) 0f else if (posForRender >= fadeInEnd)
                     min(
@@ -383,7 +404,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     else animPos >= animPosReal)
                     stateOverrides.remove(i)
             }
-            val scrollTarget = posForRender in fadeInStart..(lastTs - timeOffsetForUse.toULong())
+            val scrollTarget = !it.isAttributionFooter &&
+                posForRender in fadeInStart..(lastTs - timeOffsetForUse.toULong())
             val scaleInProgress = if (it.line == null) 1f else lerpInv(
                 fadeInStart.toFloat(), fadeInEnd.toFloat(),
                 overridePos.toFloat()
@@ -428,7 +450,9 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 timeOffsetForUse > 0f && it.line != null && isPlaying
             )
                 animating = true
-            if (it.line?.isTranslated != true && it.speaker?.isBackground != true) {
+            if (!it.isAttributionFooter &&
+                it.line?.isTranslated != true && it.speaker?.isBackground != true
+            ) {
                 if (determineTimeUntilNext) {
                     determineTimeUntilNext = false
                     timeUntilNext = max(0uL, (it.line?.start ?: 0uL) - posForRender)
@@ -440,7 +464,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 firstScrollTargetIdx = i
                 determineTimeUntilNext = true
             }
-            if (posForRender >= fadeInStart && it.line?.isTranslated != true
+            if (!it.isAttributionFooter && posForRender >= fadeInStart && it.line?.isTranslated != true
                 && it.speaker?.isBackground != true
             ) {
                 lastScrollTarget = heightSoFar.toInt()
@@ -561,7 +585,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 wordActiveTlSpan else wordActiveSpan
             val col = if (!culled) {
                 val highlightColorForLine = if (it.line?.isTranslated == true)
-                    highlightTlTextColor else highlightTextColor
+                    highlightTlTextColor else activeLyricsColor
                 if (inColorAnim) ColorUtils.blendARGB(
                     if (scaleOutProgress in 0f..1f) highlightColorForLine else
                         defaultTextColor,
@@ -649,6 +673,9 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                         hasValidCachedNode = false
                     }
                 }
+                val backgroundSave = if (it.speaker?.isBackground == true) {
+                    canvas.saveLayerAlpha(0f, 0f, width, it.layout.height.toFloat(), 192)
+                } else null
                 if (hasRenderNodes()) {
                     if (!hasValidCachedNode) {
                         node!!.setPosition(0, 0, width.toInt(),
@@ -661,9 +688,11 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 } else {
                     it.layout.draw(canvas)
                 }
+                if (backgroundSave != null) canvas.restoreToCount(backgroundSave)
                 if (highlight || !alignmentNormal)
                     canvas.restore()
             }
+
             canvas.translate(0f, (it.layout.height.toFloat()) / hlScaleFactor -
                     (it.layout.height.toFloat() / hlScaleFactor - it.layout.height.toFloat()) / 2
                     + it.paddingBottom.toFloat() - delayedScrollOffset)
@@ -755,10 +784,12 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     ) else null
             val sb = SpannableStringBuilder(it.first)
             val speaker = syncedLine?.speaker ?: it.second
+            val paragraphRtl = TextDirectionHeuristics.FIRSTSTRONG_LTR.isRtl(sb, 0, sb.length)
+            val alignRight = (speaker?.isVoice2 == true) != (layoutDirection == View.LAYOUT_DIRECTION_RTL)
             val align =
                 if (prefs.getBooleanStrict("lyric_center", false) || speaker?.isGroup == true)
                     Layout.Alignment.ALIGN_CENTER
-                else if (speaker?.isVoice2 == true)
+                else if (alignRight != paragraphRtl)
                     Layout.Alignment.ALIGN_OPPOSITE
                 else Layout.Alignment.ALIGN_NORMAL
             val tl = syncedLine?.isTranslated == true
@@ -776,8 +807,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     else -> defaultTextPaint
                 }, (width * smallSizeFactor).toInt() - globalPaddingHorizontal.toInt() * 2
             ).setAlignment(align).build()
-            val paragraphRtl = layout.getParagraphDirection(0) == Layout.DIR_RIGHT_TO_LEFT
-            val alignmentNormal = if (paragraphRtl) align == Layout.Alignment.ALIGN_OPPOSITE
+            val layoutRtl = layout.getParagraphDirection(0) == Layout.DIR_RIGHT_TO_LEFT
+            val alignmentNormal = if (layoutRtl) align == Layout.Alignment.ALIGN_OPPOSITE
             else align == Layout.Alignment.ALIGN_NORMAL
             var l: StaticLayout? = null
             val lineOffsets = words?.map {
@@ -791,7 +822,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                         lineEnd--
                     val firstInLine = max(it.charRange.first, lineStart)
                     val lastInLineExcl = min(it.charRange.last + 1, lineEnd)
-                    val horizontalStart = if (paragraphRtl == it.isRtl)
+                    val horizontalStart = if (layoutRtl == it.isRtl)
                         layout.getPrimaryHorizontal(firstInLine)
                     else layout.getSecondaryHorizontal(firstInLine)
                     // Recycle the layout if we have multiple words in one line.
@@ -854,16 +885,17 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     }.flatten()
                 }, speaker, syncedLine
             )
-        }
+        }.toMutableList()
+        buildAttributionItem(width)?.let(spLines::add)
         val viewportHeight = measuredHeight - paddingBottom - paddingTop
         val heights = spLines.map { it.layout.height + it.paddingTop + it.paddingBottom }
         val globalPaddingTop = if (lyrics is SemanticLyrics.SyncedLyrics) viewportHeight / 6 else
             context.resources.getDimensionPixelSize(R.dimen.lyric_top_padding)
-        val lastIdx = spLines.indexOfLast { it.speaker?.isBackground != true &&
+        val lastIdx = spLines.indexOfLast { !it.isAttributionFooter && it.speaker?.isBackground != true &&
                 it.line?.isTranslated != true }.takeIf { it != -1 }
         val globalPaddingBottom = if (lyrics is SemanticLyrics.SyncedLyrics) max(0,
             (viewportHeight * (5f / 6f)).toInt() -
-                    (lastIdx?.let { heights.subList(it, heights.size).sum() } ?: 0))
+                    (lastIdx?.let { heights[it] } ?: 0))
         else if (lyrics != null) context.resources.getDimensionPixelSize(R.dimen.lyric_bottom_padding) else 0
         return Pair(
             intArrayOf(
@@ -875,34 +907,64 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         )
     }
 
+    private fun buildAttributionItem(width: Int): SbItem? {
+        val attribution = lyricsAttribution ?: return null
+        val text = buildLyricsAttribution(context, attribution)
+        val paint = TextPaint(defaultTextPaint).apply {
+            textSize = TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_SP,
+                16f,
+                context.resources.displayMetrics
+            )
+            color = LYRICS_ATTRIBUTION_COLOR
+        }
+        val layout = StaticLayoutBuilderCompat.obtain(
+            text,
+            paint,
+            (width * smallSizeFactor).toInt() - globalPaddingHorizontal.toInt() * 2
+        ).setAlignment(Layout.Alignment.ALIGN_NORMAL).build()
+        return SbItem(
+            layout = layout,
+            text = text,
+            paddingTop = 32f.dpToPx(context).toInt(),
+            paddingBottom = 64f.dpToPx(context).toInt(),
+            theWords = null,
+            words = null,
+            rlm = null,
+            speaker = null,
+            line = null,
+            isAttributionFooter = true
+        )
+    }
+
     override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
         if (spForRender == null) {
             requestLayout()
             return true
         }
         val y = e.y
-        var foundItem: SemanticLyrics.LyricLine? = null
-        if (lyrics is SemanticLyrics.SyncedLyrics) {
-            var heightSoFar = spForRender!!.first[2]
-            spForRender!!.second.forEach {
-                val myHeight = it.paddingTop + it.layout.height + it.paddingBottom
-                if (y >= heightSoFar && y <= heightSoFar + myHeight && it.line!!.isClickable)
-                    foundItem = it.line
-                heightSoFar += myHeight
+        val x = e.x - globalPaddingHorizontal
+        var heightSoFar = spForRender!!.first[2]
+        spForRender!!.second.forEach { item ->
+            val rowTop = heightSoFar + item.paddingTop
+            val rowBottom = rowTop + item.layout.height
+            if (item.isAttributionFooter && y in rowTop.toFloat()..rowBottom.toFloat()) {
+                val lineIndex = item.layout.getLineForVertical((y - rowTop).toInt())
+                if (x >= item.layout.getLineLeft(lineIndex) && x <= item.layout.getLineRight(lineIndex)) {
+                    val offset = item.layout.getOffsetForHorizontal(lineIndex, x)
+                    item.text.getSpans(offset, offset, ClickableSpan::class.java)
+                        .firstOrNull { offset >= item.text.getSpanStart(it) && offset < item.text.getSpanEnd(it) }
+                        ?.onClick(this)
+                }
             }
-        }
-        handler.removeCallbacks(invalidateCallback)
-        isCallbackQueued = false
-        if (foundItem != null) {
-            instance.seekTo(foundItem.start)
-            instance.setPlayWhenReady(true)
-            performClick()
+            heightSoFar += item.paddingTop + item.layout.height + item.paddingBottom
         }
         return true
     }
 
     fun handleSeek(from: ULong, to: ULong) {
         spForRender?.second?.forEachIndexed { i, it ->
+            if (it.isAttributionFooter) return@forEachIndexed
             val firstTs = it.line?.start ?: ULong.MIN_VALUE
             var lastTs = min(it.line?.end ?: Int.MAX_VALUE.toULong(), Int.MAX_VALUE.toULong())
             var endIsImplicit = it.line?.endIsImplicit != false
@@ -1059,7 +1121,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         val layout: StaticLayout, val text: SpannableStringBuilder,
         val paddingTop: Int, val paddingBottom: Int, val theWords: List<SemanticLyrics.Word>?,
         val words: List<List<Int>>?, val rlm: List<Int>?, val speaker: SpeakerEntity?,
-        val line: SemanticLyrics.LyricLine?
+        val line: SemanticLyrics.LyricLine?,
+        val isAttributionFooter: Boolean = false
     )
 
 }

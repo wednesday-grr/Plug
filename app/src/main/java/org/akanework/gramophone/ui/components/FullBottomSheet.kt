@@ -113,6 +113,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.PlugPlaybackService
+import org.akanework.gramophone.logic.getLyricsAndAttribution
 import org.akanework.gramophone.logic.clone
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.fadInAnimation
@@ -328,8 +329,9 @@ class FullBottomSheet
                 PlugPlaybackService.SERVICE_TIMER_CHANGED -> updateTimer()
 
                 PlugPlaybackService.SERVICE_GET_LYRICS -> {
-                    val parsedLyrics = instance?.getLyrics()
-                    bottomSheetFullLyricView.updateLyrics(parsedLyrics)
+                    val (parsedLyrics, attribution) =
+                        instance?.getLyricsAndAttribution() ?: (null to null)
+                    bottomSheetFullLyricView.updateLyrics(parsedLyrics, attribution)
                 }
 
                 PlugPlaybackService.SERVICE_GET_AUDIO_FORMAT -> {

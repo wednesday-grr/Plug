@@ -359,6 +359,22 @@ fun MediaController.getLyrics(): SemanticLyrics? =
         BundleCompat.getParcelable(it, "lyrics", SemanticLyrics::class.java)
     }
 
+fun MediaController.getLyricsAndAttribution(): Pair<
+    SemanticLyrics?,
+    org.akanework.gramophone.logic.utils.SpicyLyricsAttribution?
+    > =
+    sendCustomCommand(
+        SessionCommand(SERVICE_GET_LYRICS, Bundle.EMPTY),
+        Bundle.EMPTY
+    ).get().extras.let {
+        BundleCompat.getParcelable(it, "lyrics", SemanticLyrics::class.java) to
+            BundleCompat.getParcelable(
+                it,
+                "lyrics_attribution",
+                org.akanework.gramophone.logic.utils.SpicyLyricsAttribution::class.java
+            )
+    }
+
 fun MediaController.getAudioFormat(): AudioFormatDetector.AudioFormats =
     sendCustomCommand(
         SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),

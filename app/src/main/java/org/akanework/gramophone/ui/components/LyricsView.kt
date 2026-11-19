@@ -19,10 +19,18 @@ package org.akanework.gramophone.ui.components
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Color
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.util.AttributeSet
-import android.view.ViewGroup
+import android.view.View
 import android.widget.FrameLayout
+import android.view.ViewGroup
+import android.widget.ImageView
 import androidx.core.graphics.Insets
+import androidx.core.graphics.ColorUtils
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -31,15 +39,22 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.media3.common.Player
 import androidx.preference.PreferenceManager
 import org.akanework.gramophone.R
-import org.akanework.gramophone.logic.PlugPlaybackService
+import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.getBooleanStrict
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.logic.utils.SemanticLyrics
+import org.akanework.gramophone.logic.utils.SpicyLyricsAttribution
 import org.akanework.gramophone.ui.MainActivity
-import org.akanework.gramophone.ui.MediaControllerViewModel
-import kotlin.math.max
 import androidx.core.view.isVisible
-import org.akanework.gramophone.logic.updateMargin
+import coil3.asDrawable
+import coil3.dispose
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.allowConversionToBitmap
+import coil3.request.allowHardware
+import coil3.size.Scale
+import coil3.request.Disposable
+import com.google.android.material.color.MaterialColors
 
 class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, attrs),
     SharedPreferences.OnSharedPreferenceChangeListener {
@@ -48,6 +63,9 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
     private var recyclerView: MyRecyclerView? = null
     private var newView: NewLyricsView? = null
+    private var albumArtBackground: ImageView? = null
+    private var backgroundTint: android.view.View? = null
+    private var backgroundRequest: Disposable? = null
     private val adapter
         get() = recyclerView?.adapter as LegacyLyricsAdapter?
     var defaultTextColor = 0
@@ -57,6 +75,11 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     var highlightTlTextColor = 0
         private set
     private var lyrics: SemanticLyrics? = null
+    private var lyricsAttribution: SpicyLyricsAttribution? = null
+    private var contentPaddingLeft = 0
+    private var contentPaddingTop = 0
+    private var contentPaddingRight = 0
+    private var contentPaddingBottom = 0
     private val fullPlayer by lazy { (parent.parent as ViewGroup)
         .findViewById<FullBottomSheet>(R.id.full_player)!! }
 
@@ -87,13 +110,20 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         val oldPaddingBottom = newView?.paddingBottom ?: recyclerView?.paddingBottom ?: 0
         val oldPaddingLeft = newView?.paddingLeft ?: recyclerView?.paddingLeft ?: 0
         val oldPaddingRight = newView?.paddingRight ?: recyclerView?.paddingRight ?: 0
+        contentPaddingLeft = oldPaddingLeft
+        contentPaddingTop = oldPaddingTop
+        contentPaddingRight = oldPaddingRight
+        contentPaddingBottom = oldPaddingBottom
         adapter?.callback?.destroy()
         newView?.instance?.destroy()
         recyclerView = null
         newView = null
+        backgroundRequest?.dispose()
+        backgroundRequest = null
+        createBackgroundLayers()
         val cb = object : NewLyricsView.Callbacks, Player.Listener, LifecycleOwner {
-            private var waitingForSeek = 0
-            private var waitingForSeekPos = 0uL
+            private val activePlayer
+                get() = (context as MainActivity).getPlayer()
             override val lifecycle = LifecycleRegistry(this)
 
             init {
@@ -102,33 +132,17 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                     lifecycle, this) {}
             }
 
-            // TODO https://github.com/androidx/media/issues/1578
             override fun getCurrentPosition(): ULong =
-                if (waitingForSeek > 0) waitingForSeekPos else
-                PlugPlaybackService.instanceForWidgetAndLyricsOnly
-                    ?.endedWorkaroundPlayer?.currentPosition?.toULong()
-                    ?: (context as MainActivity).getPlayer()?.currentPosition?.toULong() ?: 0uL
+                activePlayer?.currentPosition?.coerceAtLeast(0L)?.toULong() ?: 0uL
 
-            override fun isPlaying() = (context as MainActivity).getPlayer()?.isPlaying == true
-
-            override fun seekTo(position: ULong) {
-                // TODO: call handleSeek from onPositionDiscontinuity once there is a synchronized
-                //  way of getting position (ie not relying on ExoPlayer and MediaController both
-                //  anymore) - we can't call handleSeek a single frame too early or late from
-                //  changing getCurrentPosition() or there are visible glitches
-                newView?.handleSeek(getCurrentPosition(), position)
-                waitingForSeek = max(0, waitingForSeek) + 1
-                waitingForSeekPos = position
-                (PlugPlaybackService.instanceForWidgetAndLyricsOnly?.endedWorkaroundPlayer
-                    ?: (context as MainActivity).getPlayer())?.seekTo(position.toLong())
-            }
-
-            override fun setPlayWhenReady(play: Boolean) {
-                (context as MainActivity).getPlayer()?.playWhenReady = play
-            }
+            override fun isPlaying() = activePlayer?.isPlaying == true
 
             override fun speed(): Float {
-                return (context as MainActivity).getPlayer()?.playbackParameters?.speed ?: 1f
+                return activePlayer?.playbackParameters?.speed ?: 1f
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                updateLyricPositionFromPlaybackPos()
             }
 
             override fun onPositionDiscontinuity(
@@ -136,9 +150,14 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 newPosition: Player.PositionInfo,
                 reason: @Player.DiscontinuityReason Int
             ) {
-                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                    waitingForSeek--
-                }
+                updateLyricPositionFromPlaybackPos()
+            }
+
+            override fun onMediaItemTransition(
+                mediaItem: androidx.media3.common.MediaItem?,
+                reason: Int
+            ) {
+                updateAlbumArtBackground()
             }
 
             override fun destroy() {
@@ -154,6 +173,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 defaultTextColor, highlightTextColor, highlightTlTextColor
             )
             newView!!.updateLyrics(lyrics)
+            newView!!.updateAttribution(lyricsAttribution)
         } else {
             inflate(context, R.layout.lyric_view, this)
             recyclerView = findViewById(R.id.recycler_view)
@@ -168,8 +188,98 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             }
             recyclerView!!.addItemDecoration(LyricPaddingDecoration(context))
             adapter!!.callback = cb
-            adapter!!.updateLyrics(lyrics)
+            adapter!!.updateLyrics(lyrics, lyricsAttribution)
         }
+        updateAlbumArtBackground()
+    }
+
+    private fun createBackgroundLayers() {
+        val art = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0.56f
+            visibility = GONE
+        }
+        albumArtBackground = art
+        addView(
+            art,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        val tintColor = MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorSurface,
+            Color.BLACK
+        )
+        val tint = android.view.View(context).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    ColorUtils.setAlphaComponent(tintColor, 36),
+                    ColorUtils.setAlphaComponent(tintColor, 62),
+                    ColorUtils.setAlphaComponent(tintColor, 92)
+                )
+            )
+            visibility = GONE
+        }
+        backgroundTint = tint
+        addView(
+            tint,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+    }
+
+    private fun updateAlbumArtBackground() {
+        val enabled = prefs.getBooleanStrict("lyric_apple_music_effects", true)
+        val art = albumArtBackground ?: return
+        val tint = backgroundTint ?: return
+        backgroundRequest?.dispose()
+        backgroundRequest = null
+        art.setImageDrawable(null)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) art.setRenderEffect(null)
+        if (!enabled) {
+            art.visibility = GONE
+            tint.visibility = GONE
+            return
+        }
+        val artworkUri = (context as? MainActivity)?.getPlayer()?.currentMediaItem
+            ?.mediaMetadata?.artworkUri
+        if (artworkUri == null) {
+            art.visibility = GONE
+            tint.visibility = GONE
+            return
+        }
+        art.visibility = VISIBLE
+        tint.visibility = VISIBLE
+        backgroundRequest = context.imageLoader.enqueue(
+            ImageRequest.Builder(context)
+                .data(artworkUri)
+                .size(480, 800)
+                .scale(Scale.FILL)
+                .allowConversionToBitmap(true)
+                .allowHardware(false)
+                .target(onSuccess = { drawable ->
+                    art.setImageDrawable(drawable.asDrawable(context.resources))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val radius = 48f.dpToPx(context)
+                        art.setRenderEffect(
+                            RenderEffect.createBlurEffect(
+                                radius,
+                                radius,
+                                Shader.TileMode.CLAMP
+                            )
+                        )
+                    }
+                }, onError = {
+                    art.visibility = GONE
+                    tint.visibility = GONE
+                })
+                .build()
+        )
     }
 
     private fun updateFullPlayerVisibility() {
@@ -226,14 +336,17 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        if (key == "lyric_center" || key == "lyric_bold")
+        if (key == "lyric_center" || key == "lyric_apple_music_effects")
             adapter?.onPrefsChanged()
-        if (key == "lyric_center" || key == "lyric_bold" || key == "lyric_no_animation" ||
-            key == "translation_auto_word" || key == "lyric_text_size"
+        if (key == "lyric_center" || key == "lyric_no_animation" ||
+            key == "translation_auto_word" || key == "lyric_text_size" ||
+            key == "lyric_apple_music_effects"
         )
             newView?.onPrefsChanged(key)
         else if (key == "lyric_ui_v2")
             createView()
+        if (key == "lyric_apple_music_effects")
+            updateAlbumArtBackground()
     }
 
     fun updateLyricPositionFromPlaybackPos() {
@@ -243,13 +356,27 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
 
     fun updateLyrics(parsedLyrics: SemanticLyrics?) {
         lyrics = parsedLyrics
-        adapter?.updateLyrics(lyrics)
+        adapter?.updateLyrics(lyrics, lyricsAttribution)
         newView?.updateLyrics(lyrics)
     }
 
+    fun updateLyrics(parsedLyrics: SemanticLyrics?, attribution: SpicyLyricsAttribution?) {
+        lyricsAttribution = attribution
+        updateLyrics(parsedLyrics)
+        newView?.updateAttribution(attribution)
+    }
+
+    private fun applyRendererPadding() {
+        recyclerView?.setPadding(contentPaddingLeft, contentPaddingTop, contentPaddingRight, contentPaddingBottom)
+        newView?.setPadding(contentPaddingLeft, contentPaddingTop, contentPaddingRight, contentPaddingBottom)
+    }
+
     override fun setPadding(left: Int, top: Int, right: Int, bottom: Int) {
-        recyclerView?.setPadding(left, top, right, bottom)
-        newView?.setPadding(left, top, right, bottom)
+        contentPaddingLeft = left
+        contentPaddingTop = top
+        contentPaddingRight = right
+        contentPaddingBottom = bottom
+        applyRendererPadding()
     }
 
     fun updateTextColor(

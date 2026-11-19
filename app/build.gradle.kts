@@ -254,7 +254,24 @@ android {
         includeInApk = false
         includeInBundle = false
     }
-    testOptions.unitTests.isIncludeAndroidResources = true
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                it.jvmArgs(
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.net=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                    "--add-opens=java.base/java.text=ALL-UNNAMED",
+                    "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
+                )
+            }
+        }
+    }
+
 }
 
 resourcePlaceholders {
@@ -318,6 +335,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.collection:collection-ktx:1.5.0")
     implementation("androidx.concurrent:concurrent-futures-ktx:1.3.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.1")

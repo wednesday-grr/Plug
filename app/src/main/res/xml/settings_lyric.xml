@@ -20,19 +20,19 @@
 
     <SwitchPreferenceCompat
         android:defaultValue="false"
-        android:key="lyric_bold"
-        android:layout="@layout/preference_switch"
-        android:summary="@string/settings_lyrics_bold_summary"
-        android:title="@string/settings_lyrics_bold"
-        android:widgetLayout="@layout/preference_switch_widget"
-        app:iconSpaceReserved="false" />
-
-    <SwitchPreferenceCompat
-        android:defaultValue="false"
         android:key="lyric_center"
         android:layout="@layout/preference_switch"
         android:summary="@string/settings_lyrics_center_summary"
         android:title="@string/settings_lyrics_center"
+        android:widgetLayout="@layout/preference_switch_widget"
+        app:iconSpaceReserved="false" />
+
+    <SwitchPreferenceCompat
+        android:defaultValue="true"
+        android:key="lyric_apple_music_effects"
+        android:layout="@layout/preference_switch"
+        android:summary="@string/settings_lyrics_apple_music_effects_summary"
+        android:title="@string/settings_lyrics_apple_music_effects"
         android:widgetLayout="@layout/preference_switch_widget"
         app:iconSpaceReserved="false" />
 
@@ -89,6 +89,25 @@
         android:summary="@string/settings_translation_auto_word_summary"
         android:title="@string/settings_translation_auto_word"
         android:widgetLayout="@layout/preference_switch_widget"
+        app:iconSpaceReserved="false" />
+
+    <SwitchPreferenceCompat
+        android:defaultValue="false"
+        android:key="spicy_lyrics_enabled"
+        android:layout="@layout/preference_switch"
+        android:summary="@string/settings_spicy_lyrics_summary"
+        android:title="@string/settings_spicy_lyrics_title"
+        android:widgetLayout="@layout/preference_switch_widget"
+        app:iconSpaceReserved="false" />
+
+    <EditTextPreference
+        android:dependency="spicy_lyrics_enabled"
+        android:defaultValue="sl_pk_xbRfEl3A28te21Eq9Kd7B6hU14DrdKx79ISGiWCXpvk"
+        android:dialogTitle="@string/settings_spicy_lyrics_api_key_dialog"
+        android:key="spicy_lyrics_api_key"
+        android:inputType="textPassword"
+        android:summary="@string/settings_spicy_lyrics_api_key_summary"
+        android:title="@string/settings_spicy_lyrics_api_key_title"
         app:iconSpaceReserved="false" />
 
 </PreferenceScreen>

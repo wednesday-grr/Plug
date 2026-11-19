@@ -1,5 +1,17 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <resources>
+    <string name="music_store">ร้านค้าเพลง</string>
+    <string name="music_store_qobuz_formats">Hi-Res และ CD Lossless</string>
+    <string name="music_store_bandcamp_formats">ศิลปินอิสระ</string>
+    <string name="music_store_7digital_formats">อัลบั้มและซิงเกิลดิจิทัล</string>
+    <string name="music_store_ototoy_formats">J-Pop, อนิเมะ และ Hi-Res</string>
+    <string name="music_store_scan">สแกนหาเพลงที่ดาวน์โหลดใหม่</string>
+    <string name="music_store_scan_hint">สแกนไฟล์เสียงที่เข้าถึงได้ในโฟลเดอร์ Music และ Download รวมถึงโฟลเดอร์ย่อย โปรดแตกไฟล์บีบอัดก่อน ข้อจำกัดพื้นที่จัดเก็บของ Android และตัวกรองคลังเพลงอาจซ่อนไฟล์บางไฟล์</string>
+    <string name="music_store_scanning">กำลังสแกนหาไฟล์ที่ดาวน์โหลด…</string>
+    <string name="music_store_scan_complete">สแกนเสร็จแล้วและรีเฟรชคลังเพลงแล้ว</string>
+    <string name="music_store_scan_partial">รีเฟรชคลังเพลงแล้ว แต่ไม่สามารถสแกนบางไฟล์หรือโฟลเดอร์ได้</string>
+    <string name="music_store_scan_permission">อนุญาตให้เข้าถึงเพลงในการตั้งค่าแอปเพื่อสแกนไฟล์ที่ดาวน์โหลด</string>
+    <string name="music_store_no_browser">ไม่พบเบราว์เซอร์สำหรับเปิดร้านค้า</string>
     <string name="equalizer_not_found">ไม่พบอีควอไลเซอร์</string>
     <string name="settings_version">เวอร์ชัน</string>
     <string name="spk_encoding_lhdc_ll">LLAC (LHDC-LL)</string>

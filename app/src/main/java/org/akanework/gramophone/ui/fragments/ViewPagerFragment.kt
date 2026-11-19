@@ -57,6 +57,7 @@ import org.akanework.gramophone.logic.setMediaItemsWithTitle
 import org.akanework.gramophone.ui.MainActivity
 import org.akanework.gramophone.ui.adapters.ViewPager2Adapter
 import org.akanework.gramophone.ui.components.PlayerBottomSheet
+import org.akanework.gramophone.ui.components.MusicStoreBottomSheet
 import org.akanework.gramophone.ui.fragments.settings.MainSettingsActivity
 import org.nift4.mediastorecompat.MediaStoreCompat
 
@@ -189,6 +190,10 @@ class ViewPagerFragment : BaseFragment(true) {
 
                 R.id.settings -> {
                     activity.startActivity(Intent(activity, MainSettingsActivity::class.java))
+                }
+
+                R.id.music_store -> {
+                    MusicStoreBottomSheet(activity).show()
                 }
 
                 R.id.shuffle -> {

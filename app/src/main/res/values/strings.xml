@@ -12,6 +12,22 @@
 
     <!-- Plug is the application name and should not be translated. -->
     <string name="app_name">Plug</string>
+    <string name="music_store">Music Store</string>
+    <string name="music_store_qobuz" translatable="false">Qobuz Download Store</string>
+    <string name="music_store_bandcamp" translatable="false">Bandcamp</string>
+    <string name="music_store_7digital" translatable="false">7digital</string>
+    <string name="music_store_ototoy" translatable="false">OTOTOY</string>
+    <string name="music_store_qobuz_formats">Hi-Res &amp; CD Lossless</string>
+    <string name="music_store_bandcamp_formats">Independent Artists</string>
+    <string name="music_store_7digital_formats">Digital Albums &amp; Singles</string>
+    <string name="music_store_ototoy_formats">J-Pop, Anime &amp; Hi-Res</string>
+    <string name="music_store_scan">Scan for New Downloads</string>
+    <string name="music_store_scan_hint">Scans accessible audio files in Music and Download, including subfolders. Downloads in archives must be extracted first. Android storage restrictions and library filters may hide some files.</string>
+    <string name="music_store_scanning">Scanning for downloads…</string>
+    <string name="music_store_scan_complete">Scan complete. Library refreshed.</string>
+    <string name="music_store_scan_partial">Library refreshed, but some files or folders could not be scanned.</string>
+    <string name="music_store_scan_permission">Allow music access in app settings to scan downloads.</string>
+    <string name="music_store_no_browser">No browser available to open the store.</string>
     <string name="dj_metrics">%1$s BPM / %2$s / %3$sx</string>
     <string name="dj_crossfade">Crossfade</string>
     <string name="dj_bass_swap">Bass-Swap</string>
@@ -19,6 +35,17 @@
     <string name="dj_echo_out">Echo Out</string>
     <string name="dj_vinyl_brake">Vinyl Brake</string>
     <string name="dj_vocal_swap">Vocal-Swap</string>
+    <string name="lyrics_provided_by">Lyrics provided by %1$s</string>
+    <string name="lyrics_songwriters">Songwriters: %1$s</string>
+    <string name="lyrics_uploader">Uploader: %1$s</string>
+    <string name="lyrics_maker">Maker: %1$s</string>
+    <string name="settings_lyrics_apple_music_effects">Apple Music-style lyrics effects</string>
+    <string name="settings_lyrics_apple_music_effects_summary">Show a blurred album-art backdrop and progressive focus on the active lyric line.</string>
+    <string name="settings_spicy_lyrics_title">Spicy Lyrics Online Lookup</string>
+    <string name="settings_spicy_lyrics_summary">Look up lyrics online when no local lyrics are available. Disabled by default.</string>
+    <string name="settings_spicy_lyrics_api_key_title">Spicy Lyrics API key</string>
+    <string name="settings_spicy_lyrics_api_key_summary">Paste your own sl_pk_ or sl_sk_ key. The key is stored in private app settings.</string>
+    <string name="settings_spicy_lyrics_api_key_dialog">Enter your Spicy Lyrics API key</string>
     <string name="dj_mixing">Mixing: %1$s</string>
     <string name="dj_mixing_beatmatch">Mixing: %1$s / Beatmatch</string>
     <string name="dj_mixed">Mixed: %1$s</string>

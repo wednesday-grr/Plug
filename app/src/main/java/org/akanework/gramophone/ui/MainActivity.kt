@@ -71,6 +71,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -114,6 +115,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * @author AkaneTan, nift4
  */
 class MainActivity : BaseActivity() {
+    internal var musicStoreScanJob: Job? = null
 
     companion object {
         private const val PERMISSION_READ_MEDIA_AUDIO = 100
