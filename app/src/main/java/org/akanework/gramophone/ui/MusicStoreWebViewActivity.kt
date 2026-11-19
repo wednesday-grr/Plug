@@ -23,6 +23,7 @@ import android.view.View
 import android.webkit.CookieManager
 import android.webkit.URLUtil
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -49,6 +50,19 @@ import org.akanework.gramophone.logic.utils.MusicStoreDownloads
 import java.net.URISyntaxException
 import java.util.Locale
 import java.util.UUID
+
+internal fun upgradeStoreUrl(uri: Uri): Uri =
+    if (uri.scheme.equals("http", true)) uri.buildUpon().scheme("https").build() else uri
+
+internal fun mobileChromeUserAgent(userAgent: String): String =
+    userAgent.replace("; wv", "").replace("Version/4.0 ", "")
+
+internal fun shouldRetryStoreUrl(
+    request: WebResourceRequest, errorCode: Int, description: CharSequence
+): Boolean = request.isForMainFrame && request.method.equals("GET", true) &&
+    request.url.scheme.equals("http", true) &&
+    (errorCode == WebViewClient.ERROR_UNSAFE_RESOURCE ||
+        description.contains("ERR_CLEARTEXT_NOT_PERMITTED", true))
 
 class MusicStoreWebViewActivity : BaseActivity() {
     companion object {
@@ -113,6 +127,7 @@ class MusicStoreWebViewActivity : BaseActivity() {
         webView.settings.domStorageEnabled = true
         webView.settings.allowFileAccess = false
         webView.settings.allowContentAccess = false
+        webView.settings.userAgentString = mobileChromeUserAgent(webView.settings.userAgentString)
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
@@ -121,9 +136,22 @@ class MusicStoreWebViewActivity : BaseActivity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame) return false
                 val uri = request.url
-                if (uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) return false
+                if (uri.scheme.equals("http", true)) {
+                    view.loadUrl(upgradeStoreUrl(uri).toString())
+                    return true
+                }
+                if (uri.scheme.equals("https", true)) return false
                 openExternal(uri)
                 return true
+            }
+
+            override fun onReceivedError(
+                view: WebView, request: WebResourceRequest, error: WebResourceError
+            ) {
+                super.onReceivedError(view, request, error)
+                if (shouldRetryStoreUrl(request, error.errorCode, error.description)) {
+                    view.loadUrl(upgradeStoreUrl(request.url).toString())
+                }
             }
 
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
@@ -161,7 +189,7 @@ class MusicStoreWebViewActivity : BaseActivity() {
                 finish()
                 return
             }
-            webView.loadUrl(url)
+            webView.loadUrl(upgradeStoreUrl(uri).toString())
         }
         updateNavigation()
     }
@@ -185,16 +213,17 @@ class MusicStoreWebViewActivity : BaseActivity() {
             Log.w("MusicStore", "Invalid external link", e)
             null
         }
-        val scheme = target?.scheme?.lowercase(Locale.ROOT)
+        val safeTarget = target?.let(::upgradeStoreUrl)
+        val scheme = safeTarget?.scheme?.lowercase(Locale.ROOT)
         if (target != null && scheme in setOf("http", "https") && targetPackage == null) {
-            webView.loadUrl(target.toString())
+            webView.loadUrl(safeTarget.toString())
             return
         }
         if (target != null && scheme != null &&
             scheme !in setOf("file", "content", "javascript", "intent")
         ) {
             try {
-                startActivity(Intent(Intent.ACTION_VIEW, target).apply {
+                startActivity(Intent(Intent.ACTION_VIEW, safeTarget).apply {
                     addCategory(Intent.CATEGORY_BROWSABLE)
                     `package` = targetPackage
                 })
@@ -209,9 +238,9 @@ class MusicStoreWebViewActivity : BaseActivity() {
         if (fallbackUri != null &&
             (fallbackUri.scheme.equals("http", true) || fallbackUri.scheme.equals("https", true))
         ) {
-            webView.loadUrl(fallbackUri.toString())
+            webView.loadUrl(upgradeStoreUrl(fallbackUri).toString())
         } else if (target != null && scheme in setOf("http", "https")) {
-            webView.loadUrl(target.toString())
+            webView.loadUrl(safeTarget.toString())
         } else {
             toast(R.string.music_store_external_unavailable)
         }

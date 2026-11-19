@@ -20,9 +20,11 @@ package org.akanework.gramophone.ui.components
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.RenderEffect
 import android.graphics.Shader
-import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.ColorDrawable
+import android.net.Uri
 import android.os.Build
 import android.util.AttributeSet
 import android.view.View
@@ -30,7 +32,6 @@ import android.widget.FrameLayout
 import android.view.ViewGroup
 import android.widget.ImageView
 import androidx.core.graphics.Insets
-import androidx.core.graphics.ColorUtils
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -54,18 +55,42 @@ import coil3.request.allowConversionToBitmap
 import coil3.request.allowHardware
 import coil3.size.Scale
 import coil3.request.Disposable
-import com.google.android.material.color.MaterialColors
+
+internal const val LYRICS_ART_ALPHA = 0.56f
+internal const val LYRICS_ART_BRIGHTNESS = 0.7f
+internal const val LYRICS_SCRIM_COLOR = 0x66000000
+
+internal fun darkenLyricsSurface(color: Int): Int {
+    val hsv = FloatArray(3)
+    Color.colorToHSV(color, hsv)
+    hsv[2] = (hsv[2] * 0.7f).coerceAtMost(0.45f)
+    return Color.HSVToColor(Color.alpha(color), hsv)
+}
+
+internal fun lyricsArtworkColorFilter() = ColorMatrixColorFilter(floatArrayOf(
+    LYRICS_ART_BRIGHTNESS, 0f, 0f, 0f, 0f,
+    0f, LYRICS_ART_BRIGHTNESS, 0f, 0f, 0f,
+    0f, 0f, LYRICS_ART_BRIGHTNESS, 0f, 0f,
+    0f, 0f, 0f, 1f, 0f
+))
 
 class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, attrs),
     SharedPreferences.OnSharedPreferenceChangeListener {
 
+    companion object {
+        private const val INACTIVE_LYRICS_COLOR = 0xFFBDBDBD.toInt()
+        private const val TRANSLATION_LYRICS_COLOR = 0xFFE0E0E0.toInt()
+    }
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
     private var recyclerView: MyRecyclerView? = null
     private var newView: NewLyricsView? = null
-    private var albumArtBackground: ImageView? = null
-    private var backgroundTint: android.view.View? = null
+    private val albumArtBackgrounds = mutableListOf<ImageView>()
+    private var backgroundScrim: View? = null
     private var backgroundRequest: Disposable? = null
+    private var requestedArtworkUri: Uri? = null
+    private var lyricSurfaceColor = (background as? ColorDrawable)?.color ?: Color.BLACK
+    private var appliedTextColors: Triple<Int, Int, Int>? = null
     private val adapter
         get() = recyclerView?.adapter as LegacyLyricsAdapter?
     var defaultTextColor = 0
@@ -105,6 +130,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     private fun createView() {
+        albumArtBackgrounds.forEach { it.animate().cancel() }
         removeAllViews()
         val oldPaddingTop = newView?.paddingTop ?: recyclerView?.paddingTop ?: 0
         val oldPaddingBottom = newView?.paddingBottom ?: recyclerView?.paddingBottom ?: 0
@@ -118,8 +144,10 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         newView?.instance?.destroy()
         recyclerView = null
         newView = null
+        appliedTextColors = null
         backgroundRequest?.dispose()
         backgroundRequest = null
+        requestedArtworkUri = null
         createBackgroundLayers()
         val cb = object : NewLyricsView.Callbacks, Player.Listener, LifecycleOwner {
             private val activePlayer
@@ -160,6 +188,10 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 updateAlbumArtBackground()
             }
 
+            override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) {
+                updateAlbumArtBackground()
+            }
+
             override fun destroy() {
                 lifecycle.currentState = Lifecycle.State.DESTROYED
             }
@@ -169,9 +201,6 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             newView = findViewById(R.id.lyric_view)!!
             newView!!.setPadding(oldPaddingLeft, oldPaddingTop, oldPaddingRight, oldPaddingBottom)
             newView!!.instance = cb
-            newView!!.updateTextColor(
-                defaultTextColor, highlightTextColor, highlightTlTextColor
-            )
             newView!!.updateLyrics(lyrics)
             newView!!.updateAttribution(lyricsAttribution)
         } else {
@@ -183,49 +212,43 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 oldPaddingRight,
                 oldPaddingBottom
             )
-            recyclerView!!.adapter = LegacyLyricsAdapter(context).also {
-                it.updateTextColor(defaultTextColor, highlightTextColor)
-            }
+            recyclerView!!.adapter = LegacyLyricsAdapter(context)
             recyclerView!!.addItemDecoration(LyricPaddingDecoration(context))
             adapter!!.callback = cb
             adapter!!.updateLyrics(lyrics, lyricsAttribution)
         }
+        applyTextColors()
         updateAlbumArtBackground()
     }
 
     private fun createBackgroundLayers() {
-        val art = ImageView(context).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            alpha = 0.56f
-            visibility = GONE
-        }
-        albumArtBackground = art
-        addView(
-            art,
-            ViewGroup.LayoutParams(
+        albumArtBackgrounds.clear()
+        repeat(2) {
+            val art = ImageView(context).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                alpha = 0f
+                visibility = GONE
+                colorFilter = lyricsArtworkColorFilter()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val radius = 48f.dpToPx(context)
+                    setRenderEffect(RenderEffect.createBlurEffect(
+                        radius, radius, Shader.TileMode.CLAMP
+                    ))
+                }
+            }
+            albumArtBackgrounds.add(art)
+            addView(art, ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-        val tintColor = MaterialColors.getColor(
-            this,
-            com.google.android.material.R.attr.colorSurface,
-            Color.BLACK
-        )
-        val tint = android.view.View(context).apply {
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(
-                    ColorUtils.setAlphaComponent(tintColor, 36),
-                    ColorUtils.setAlphaComponent(tintColor, 62),
-                    ColorUtils.setAlphaComponent(tintColor, 92)
-                )
-            )
+            ))
+        }
+        val scrim = View(context).apply {
+            setBackgroundColor(LYRICS_SCRIM_COLOR)
             visibility = GONE
         }
-        backgroundTint = tint
+        backgroundScrim = scrim
         addView(
-            tint,
+            scrim,
             ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -235,26 +258,28 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
 
     private fun updateAlbumArtBackground() {
         val enabled = prefs.getBooleanStrict("lyric_apple_music_effects", true)
-        val art = albumArtBackground ?: return
-        val tint = backgroundTint ?: return
+        val artworkUri = if (enabled) {
+            (context as? MainActivity)?.getPlayer()?.currentMediaItem?.mediaMetadata?.artworkUri
+        } else null
+        applySurfaceColor()
+        backgroundScrim?.visibility = if (enabled) VISIBLE else GONE
+        if (artworkUri != null && artworkUri == requestedArtworkUri) return
         backgroundRequest?.dispose()
         backgroundRequest = null
-        art.setImageDrawable(null)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) art.setRenderEffect(null)
+        requestedArtworkUri = artworkUri
         if (!enabled) {
-            art.visibility = GONE
-            tint.visibility = GONE
+            albumArtBackgrounds.forEach {
+                it.animate().cancel()
+                it.alpha = 0f
+                it.visibility = GONE
+                it.setImageDrawable(null)
+            }
             return
         }
-        val artworkUri = (context as? MainActivity)?.getPlayer()?.currentMediaItem
-            ?.mediaMetadata?.artworkUri
         if (artworkUri == null) {
-            art.visibility = GONE
-            tint.visibility = GONE
+            fadeOutArtwork()
             return
         }
-        art.visibility = VISIBLE
-        tint.visibility = VISIBLE
         backgroundRequest = context.imageLoader.enqueue(
             ImageRequest.Builder(context)
                 .data(artworkUri)
@@ -263,23 +288,45 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 .allowConversionToBitmap(true)
                 .allowHardware(false)
                 .target(onSuccess = { drawable ->
-                    art.setImageDrawable(drawable.asDrawable(context.resources))
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val radius = 48f.dpToPx(context)
-                        art.setRenderEffect(
-                            RenderEffect.createBlurEffect(
-                                radius,
-                                radius,
-                                Shader.TileMode.CLAMP
-                            )
-                        )
-                    }
+                    albumArtBackgrounds.forEach { it.animate().cancel() }
+                    val oldArt = albumArtBackgrounds.maxBy { it.alpha }
+                    val newArt = albumArtBackgrounds.first { it !== oldArt }
+                    newArt.alpha = 0f
+                    newArt.setImageDrawable(drawable.asDrawable(context.resources))
+                    newArt.visibility = VISIBLE
+                    newArt.animate().alpha(LYRICS_ART_ALPHA)
+                        .setDuration(FullBottomSheet.BACKGROUND_COLOR_TRANSITION_SEC).start()
+                    fadeOutArtwork(oldArt)
                 }, onError = {
-                    art.visibility = GONE
-                    tint.visibility = GONE
+                    requestedArtworkUri = null
+                    fadeOutArtwork()
                 })
                 .build()
         )
+    }
+
+    private fun fadeOutArtwork(vararg views: ImageView = albumArtBackgrounds.toTypedArray()) {
+        views.forEach { art ->
+            art.animate().cancel()
+            art.animate().alpha(0f)
+                .setDuration(FullBottomSheet.BACKGROUND_COLOR_TRANSITION_SEC)
+                .withEndAction {
+                    art.visibility = GONE
+                    art.setImageDrawable(null)
+                }.start()
+        }
+    }
+
+    fun setLyricBackgroundColor(color: Int) {
+        lyricSurfaceColor = color
+        applySurfaceColor()
+    }
+
+    private fun applySurfaceColor() {
+        val color = if (prefs.getBooleanStrict("lyric_apple_music_effects", true)) {
+            darkenLyricsSurface(lyricSurfaceColor)
+        } else lyricSurfaceColor
+        setBackgroundColor(color)
     }
 
     private fun updateFullPlayerVisibility() {
@@ -345,8 +392,10 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             newView?.onPrefsChanged(key)
         else if (key == "lyric_ui_v2")
             createView()
-        if (key == "lyric_apple_music_effects")
+        if (key == "lyric_apple_music_effects") {
+            applyTextColors()
             updateAlbumArtBackground()
+        }
     }
 
     fun updateLyricPositionFromPlaybackPos() {
@@ -385,26 +434,33 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         defaultTextColor = newColor
         highlightTextColor = newHighlightColor
         highlightTlTextColor = newHighlightTlColor
-        adapter?.updateTextColor(defaultTextColor, highlightTextColor)
-        newView?.updateTextColor(
-            defaultTextColor, highlightTextColor, highlightTlTextColor
-        )
+        applyTextColors()
     }
 
     fun updateTextColor(newColor: Int) {
         defaultTextColor = newColor
-        adapter?.updateTextColor(defaultTextColor, highlightTextColor)
-        newView?.updateTextColor(defaultTextColor)
+        applyTextColors()
     }
 
     fun updateHighlightColor(newHighlightColor: Int) {
         highlightTextColor = newHighlightColor
-        adapter?.updateTextColor(defaultTextColor, highlightTextColor)
-        newView?.updateHighlightColor(highlightTextColor)
+        applyTextColors()
     }
 
     fun updateHighlightTlColor(newHighlightTlColor: Int) {
         highlightTlTextColor = newHighlightTlColor
-        newView?.updateHighlightTlColor(highlightTlTextColor)
+        applyTextColors()
+    }
+
+    private fun applyTextColors() {
+        val effects = prefs.getBooleanStrict("lyric_apple_music_effects", true)
+        val default = if (effects) INACTIVE_LYRICS_COLOR else defaultTextColor
+        val highlight = if (effects) Color.WHITE else highlightTextColor
+        val translation = if (effects) TRANSLATION_LYRICS_COLOR else highlightTlTextColor
+        val colors = Triple(default, highlight, translation)
+        if (appliedTextColors == colors) return
+        appliedTextColors = colors
+        adapter?.updateTextColor(default, highlight)
+        newView?.updateTextColor(default, highlight, translation)
     }
 }

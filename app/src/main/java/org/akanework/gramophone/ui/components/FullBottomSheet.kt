@@ -1380,7 +1380,7 @@ class FullBottomSheet
                     setBackgroundColor(
                         animation.animatedValue as Int
                     )
-                    bottomSheetFullLyricView.setBackgroundColor(
+                    bottomSheetFullLyricView.setLyricBackgroundColor(
                         animation.animatedValue as Int
                     )
                 }
@@ -1523,7 +1523,7 @@ class FullBottomSheet
         currentJob = null
         postOnAnimation {
             setBackgroundColor(backgroundProcessedColor)
-            bottomSheetFullLyricView.setBackgroundColor(backgroundProcessedColor)
+            bottomSheetFullLyricView.setLyricBackgroundColor(backgroundProcessedColor)
             bottomSheetFullTitle.setTextColor(
                 colorPrimary
             )
