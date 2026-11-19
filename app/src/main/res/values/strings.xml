@@ -22,7 +22,7 @@
     <string name="music_store_7digital_formats">Digital Albums &amp; Singles</string>
     <string name="music_store_ototoy_formats">J-Pop, Anime &amp; Hi-Res</string>
     <string name="music_store_scan">Scan for New Downloads</string>
-    <string name="music_store_scan_hint">Scans accessible audio files in Music and Download, including subfolders. Downloads in archives must be extracted first. Android storage restrictions and library filters may hide some files.</string>
+    <string name="music_store_scan_hint">Stores open in your browser. After downloading, return here to scan accessible audio files in Music and Download, including subfolders. Downloads in archives must be extracted first. Android storage restrictions and library filters may hide some files.</string>
     <string name="music_store_scanning">Scanning for downloads…</string>
     <string name="music_store_scan_complete">Scan complete. Library refreshed.</string>
     <string name="music_store_scan_partial">Library refreshed, but some files or folders could not be scanned.</string>
@@ -30,6 +30,11 @@
     <string name="music_store_no_browser">No browser available to open the store.</string>
     <string name="music_store_back">Previous page</string>
     <string name="music_store_forward">Next page</string>
+    <string name="music_store_refresh">Refresh page</string>
+    <string name="music_store_open_browser">Open store in browser</string>
+    <string name="music_store_cache_error_title">Page could not be restored</string>
+    <string name="music_store_cache_error_message">This page could not be restored. Return to the store and try again, or open the store in your browser to sign in and continue there. Your browser and Plug do not share sign-in sessions.</string>
+    <string name="music_store_return_to_store">Return to store</string>
     <string name="music_store_close">Close store</string>
     <string name="music_store_external_unavailable">No app is available to open this link.</string>
     <string name="music_store_download_started">Download started.</string>

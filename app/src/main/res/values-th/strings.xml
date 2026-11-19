@@ -6,7 +6,7 @@
     <string name="music_store_7digital_formats">อัลบั้มและซิงเกิลดิจิทัล</string>
     <string name="music_store_ototoy_formats">J-Pop, อนิเมะ และ Hi-Res</string>
     <string name="music_store_scan">สแกนหาเพลงที่ดาวน์โหลดใหม่</string>
-    <string name="music_store_scan_hint">สแกนไฟล์เสียงที่เข้าถึงได้ในโฟลเดอร์ Music และ Download รวมถึงโฟลเดอร์ย่อย โปรดแตกไฟล์บีบอัดก่อน ข้อจำกัดพื้นที่จัดเก็บของ Android และตัวกรองคลังเพลงอาจซ่อนไฟล์บางไฟล์</string>
+    <string name="music_store_scan_hint">ร้านค้าจะเปิดในเบราว์เซอร์ หลังดาวน์โหลดให้กลับมาสแกนไฟล์เสียงที่เข้าถึงได้ในโฟลเดอร์ Music และ Download รวมถึงโฟลเดอร์ย่อย โปรดแตกไฟล์บีบอัดก่อน ข้อจำกัดพื้นที่จัดเก็บของ Android และตัวกรองคลังเพลงอาจซ่อนไฟล์บางไฟล์</string>
     <string name="music_store_scanning">กำลังสแกนหาไฟล์ที่ดาวน์โหลด…</string>
     <string name="music_store_scan_complete">สแกนเสร็จแล้วและรีเฟรชคลังเพลงแล้ว</string>
     <string name="music_store_scan_partial">รีเฟรชคลังเพลงแล้ว แต่ไม่สามารถสแกนบางไฟล์หรือโฟลเดอร์ได้</string>

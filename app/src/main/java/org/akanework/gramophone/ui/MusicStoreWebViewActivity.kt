@@ -35,6 +35,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -76,6 +77,8 @@ class MusicStoreWebViewActivity : BaseActivity() {
     private lateinit var progress: LinearProgressIndicator
     private var pendingDownload: ArrayList<String>? = null
     private var scanning = false
+    private var cacheErrorDialogShowing = false
+    private var storeHome: Uri? = null
 
     private val storagePermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -112,6 +115,8 @@ class MusicStoreWebViewActivity : BaseActivity() {
             when (it.itemId) {
                 R.id.store_back -> webView.goBack()
                 R.id.store_forward -> webView.goForward()
+                R.id.store_refresh -> webView.reload()
+                R.id.store_open_browser -> openStoreInBrowser()
                 R.id.store_scan_action -> scanDownloads()
                 else -> return@setOnMenuItemClickListener false
             }
@@ -151,6 +156,8 @@ class MusicStoreWebViewActivity : BaseActivity() {
                 super.onReceivedError(view, request, error)
                 if (shouldRetryStoreUrl(request, error.errorCode, error.description)) {
                     view.loadUrl(upgradeStoreUrl(request.url).toString())
+                } else {
+                    handleCacheMiss(request.isForMainFrame, error.description)
                 }
             }
 
@@ -180,18 +187,53 @@ class MusicStoreWebViewActivity : BaseActivity() {
                 enqueueDownload(download)
             }
         }
+        val uri = intent.getStringExtra(EXTRA_URL)?.let(Uri::parse)
+        if (uri == null || uri.host.isNullOrEmpty() ||
+            !(uri.scheme.equals("https", true) || uri.scheme.equals("http", true))
+        ) {
+            toast(R.string.music_store_external_unavailable)
+            finish()
+            return
+        }
+        val secureUri = upgradeStoreUrl(uri)
+        storeHome = secureUri.buildUpon().path("/").clearQuery().fragment(null).build()
         val restored = savedInstanceState?.let { webView.restoreState(it) }
         if (restored == null) {
-            val url = intent.getStringExtra(EXTRA_URL)
-            val uri = url?.let(Uri::parse)
-            if (uri == null || !(uri.scheme.equals("https", true) || uri.scheme.equals("http", true))) {
-                toast(R.string.music_store_external_unavailable)
-                finish()
-                return
-            }
-            webView.loadUrl(upgradeStoreUrl(uri).toString())
+            webView.loadUrl(secureUri.toString())
         }
         updateNavigation()
+    }
+
+    internal fun handleCacheMiss(isMainFrame: Boolean, description: CharSequence) {
+        if (!isMainFrame || !description.contains("ERR_CACHE_MISS", true) ||
+            cacheErrorDialogShowing || storeHome == null || isFinishing
+        ) return
+        cacheErrorDialogShowing = true
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.music_store_cache_error_title)
+            .setMessage(R.string.music_store_cache_error_message)
+            .setPositiveButton(R.string.music_store_return_to_store) { _, _ ->
+                webView.loadUrl(storeHome.toString())
+            }
+            .setNeutralButton(R.string.music_store_open_browser) { _, _ ->
+                openStoreInBrowser()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setOnDismissListener { cacheErrorDialogShowing = false }
+            .show()
+    }
+
+    private fun openStoreInBrowser() {
+        val home = storeHome ?: return
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, home).addCategory(Intent.CATEGORY_BROWSABLE))
+        } catch (e: ActivityNotFoundException) {
+            Log.w("MusicStore", "No browser available", e)
+            toast(R.string.music_store_no_browser)
+        } catch (e: SecurityException) {
+            Log.w("MusicStore", "Browser rejected store link", e)
+            toast(R.string.music_store_no_browser)
+        }
     }
 
     private fun updateNavigation() {

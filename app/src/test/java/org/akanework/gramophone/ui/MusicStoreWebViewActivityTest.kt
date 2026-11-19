@@ -9,11 +9,14 @@
 package org.akanework.gramophone.ui
 
 import android.app.Application
+import android.content.DialogInterface
 import android.content.Intent
 import android.net.Uri
+import android.os.Looper
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.appcompat.app.AlertDialog
 import com.google.android.material.appbar.MaterialToolbar
 import org.akanework.gramophone.R
 import org.junit.Assert.assertEquals
@@ -26,6 +29,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [28])
@@ -128,6 +132,54 @@ class MusicStoreWebViewActivityTest {
                 "(KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
             mobileChromeUserAgent(webViewAgent)
         )
+    }
+
+    @Test
+    fun refreshReloadsCurrentPageAndBrowserOpensStoreHome() {
+        val context = RuntimeEnvironment.getApplication()
+        val intent = Intent(context, MusicStoreWebViewActivity::class.java)
+            .putExtra(MusicStoreWebViewActivity.EXTRA_URL, "https://qobuz.com/store?session=private")
+        val controller = Robolectric.buildActivity(MusicStoreWebViewActivity::class.java, intent).setup()
+        val activity = controller.get()
+        val webView = activity.findViewById<WebView>(R.id.store_webview)
+        val menu = activity.findViewById<MaterialToolbar>(R.id.store_toolbar).menu
+
+        assertTrue(menu.performIdentifierAction(R.id.store_refresh, 0))
+        assertEquals(1, shadowOf(webView).reloadInvocations)
+        assertTrue(menu.performIdentifierAction(R.id.store_open_browser, 0))
+        val external = shadowOf(activity).nextStartedActivity
+        assertEquals(Intent.ACTION_VIEW, external.action)
+        assertEquals("https://qobuz.com/", external.data.toString())
+        assertTrue(external.hasCategory(Intent.CATEGORY_BROWSABLE))
+        controller.destroy()
+    }
+
+    @Test
+    fun cacheMissOffersSafeRecoveryWithoutReplayingFailedUrl() {
+        val context = RuntimeEnvironment.getApplication()
+        val intent = Intent(context, MusicStoreWebViewActivity::class.java)
+            .putExtra(MusicStoreWebViewActivity.EXTRA_URL, "https://qobuz.com/store")
+        val controller = Robolectric.buildActivity(MusicStoreWebViewActivity::class.java, intent).setup()
+        val activity = controller.get()
+        val webView = activity.findViewById<WebView>(R.id.store_webview)
+
+        activity.handleCacheMiss(false, "net::ERR_CACHE_MISS")
+        activity.handleCacheMiss(true, "net::ERR_TIMED_OUT")
+        assertEquals("https://qobuz.com/store", shadowOf(webView).lastLoadedUrl)
+        activity.handleCacheMiss(true, "net::ERR_CACHE_MISS")
+        val dialog = ShadowDialog.getLatestDialog() as AlertDialog
+        assertTrue(dialog.isShowing)
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("https://qobuz.com/", shadowOf(webView).lastLoadedUrl)
+
+        activity.handleCacheMiss(true, "net::ERR_CACHE_MISS")
+        val secondDialog = ShadowDialog.getLatestDialog() as AlertDialog
+        secondDialog.getButton(DialogInterface.BUTTON_NEUTRAL).performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+        val external = shadowOf(activity).nextStartedActivity
+        assertEquals("https://qobuz.com/", external.data.toString())
+        controller.destroy()
     }
 
     private fun request(url: String, mainFrame: Boolean = true, method: String = "GET") = object : WebResourceRequest {

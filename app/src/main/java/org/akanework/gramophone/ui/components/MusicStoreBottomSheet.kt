@@ -8,11 +8,15 @@
  */
 package org.akanework.gramophone.ui.components
 
-import android.content.Intent
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.net.Uri
+import android.util.Log
 import android.view.LayoutInflater
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -28,8 +32,20 @@ import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.hasAudioPermission
 import org.akanework.gramophone.logic.utils.DownloadScanner
 import org.akanework.gramophone.ui.MainActivity
-import org.akanework.gramophone.ui.MusicStoreWebViewActivity
 import kotlin.coroutines.resume
+
+internal fun openMusicStoreInBrowser(activity: Activity, url: String): Boolean {
+    try {
+        CustomTabsIntent.Builder().build().launchUrl(activity, Uri.parse(url))
+        return true
+    } catch (e: ActivityNotFoundException) {
+        Log.w("MusicStore", "No browser available", e)
+    } catch (e: SecurityException) {
+        Log.w("MusicStore", "Browser rejected store link", e)
+    }
+    Toast.makeText(activity, R.string.music_store_no_browser, Toast.LENGTH_LONG).show()
+    return false
+}
 
 class MusicStoreBottomSheet(private val activity: MainActivity) : BottomSheetDialog(activity) {
     private data class Store(
@@ -66,11 +82,7 @@ class MusicStoreBottomSheet(private val activity: MainActivity) : BottomSheetDia
                 })
             }
             item.setOnClickListener {
-                activity.startActivity(Intent(activity, MusicStoreWebViewActivity::class.java).apply {
-                    putExtra(MusicStoreWebViewActivity.EXTRA_URL, store.url)
-                    putExtra(MusicStoreWebViewActivity.EXTRA_TITLE, activity.getString(store.name))
-                })
-                dismiss()
+                if (openMusicStoreInBrowser(activity, store.url)) dismiss()
             }
             list.addView(item)
         }
