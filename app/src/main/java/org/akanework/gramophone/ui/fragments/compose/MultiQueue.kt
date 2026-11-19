@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -646,6 +647,17 @@ fun BottomSheetActions(
     onDismiss: (() -> Unit)? = null,
     onRecyclerScrollTo: (() -> Unit)? = null,
 ) {
+    val context = LocalContext.current
+    val prefs = remember(context) { PreferenceManager.getDefaultSharedPreferences(context) }
+    var automixEnabled by remember(prefs) { mutableStateOf(prefs.getBoolean("automix_enabled", false)) }
+    DisposableEffect(prefs) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "automix_enabled") automixEnabled = prefs.getBoolean(key, false)
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
@@ -685,6 +697,19 @@ fun BottomSheetActions(
                     stringResource(R.string.scroll_to_playing)
                 )
             }
+        }
+
+        Button(
+            colors = ButtonDefaults.textButtonColors(),
+            onClick = { mqState.sortForAutomix() },
+            enabled = automixEnabled && !mqState.isDetached() && !mqState.sortingAutomix,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_automix),
+                contentDescription = null,
+            )
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.sort_for_automix))
         }
 
         AndroidView(
