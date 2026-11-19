@@ -1,61 +1,60 @@
-# Gramophone
-![GitHub](https://img.shields.io/github/license/FoedusProgramme/Gramophone?style=flat-square&logoColor=white&labelColor=black&color=white)
-![GitHub tag (with filter)](https://img.shields.io/github/v/tag/FoedusProgramme/Gramophone?style=flat-square&logoColor=white&labelColor=black&color=white)
-[![Static Badge](https://img.shields.io/badge/Telegram-Content?style=flat-square&logo=telegram&logoColor=black&color=white)](https://t.me/AkaneDev)
+# Plug
+
+Plug は、オフライン音楽プレーヤー [Gramophone](https://github.com/FoedusProgramme/Gramophone)
+のフォークです。DJ Automix、ビートマッチングとビート位相調整、オフライン BPM・キー DSP
+解析、ハーモニックなキューのスマートソートを追加しています。Plug は GPLv3 以降で提供され、
+Gramophone の原著作者および貢献者へのクレジットを保持しています。
 
 [English](./readme.md)
 
-Android のスタンダードを厳密に準拠した media3 と マテリアルデザインライブラリを使用して構築された健全な音楽プレーヤーです。
-
-[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
-     alt="Get it on F-Droid"
-     height="80">](https://f-droid.org/packages/org.akanework.gramophone/)
-
 ## 機能
-- 最新の Material 3 デザイン
-- Android 12 以降の Monet テーマアイコン
-- ダイナミックカラー Monet プレーヤー UI
-- お気に入りの音楽を表示して再生
-- お気に入りの音楽を検索
-- MediaStore の音楽データベースを使用した高速なアクセス
-- 同期された歌詞
-- 読み取り専用のプレイリストをサポート
 
-## スクリーンショット
-| ![Screenshot 1](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_1.jpg) | ![Screenshot 2](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_2.jpg) | ![Screenshot 3](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_3.jpg) |
-|------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| ![Screenshot 4](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_4.jpg) | ![Screenshot 5](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_5.jpg) | ![Screenshot 6](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_6.jpg) |
-| ![Screenshot 7](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_7.jpg) | ![Screenshot 8](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/metadata/android/en-US/images/phoneScreenshots/screenshot_8.jpg) | ![Screenshot 9](https://raw.githubusercontent.com/FoedusProgramme/Gramophone/beta/fastlane/screenshot_9.jpg) |
+- 端末内の音楽をオフライン再生
+- テンポとビート位相を合わせる DJ Automix と切り替えエフェクト
+- BPM と楽曲キーのオフライン解析・ローカルキャッシュ
+- テンポと楽曲キーに基づくハーモニックキューソート
+- Material 3、ダイナミックカラー、Android 12 以降の Monet テーマアイコン
+- 検索、プレイリスト、フォルダー表示、自然順ソート
+- 同期歌詞（LRC、TTML、SRT）と単語・音節単位のカラオケ同期
+- ReplayGain 2.0 とシステム／サードパーティ製イコライザー
 
+Automix の解析結果は推定値であり、正確なビートグリッドを保証するものではありません。
+埋め込みタグはキャッシュ済み解析より優先されます。安定した更新日時がないトラックや、
+システムデコーダーが対応しないトラックは解析をスキップする場合があります。
 
 ## インストール
-アプリの最新な安定バージョンは、[GitHub のリリース](https://github.com/FoedusProgramme/Gramophone/releases/latest)または [F-Droid](https://f-droid.org/packages/org.akanework.gramophone/) からダウンロードできます。
 
-Beta バージョンとプレビューは [Telegram チャンネル](https://t.me/FoedusProgramme)または[チャット](https://t.me/FoedusDiscussion)から入手できます。
+Plug の application ID は `org.plug.player` です。Gramophone とは別のアプリとして
+インストールされるため、Gramophone のアプリ専用設定、キュー、解析キャッシュ、
+権限は自動的に引き継がれません。
+
+[GitHub の最新リリース](https://github.com/FoedusProgramme/Gramophone/releases/latest)
+から Plug ビルドを入手してください。F-Droid と IzzyOnDroid の
+`org.akanework.gramophone` は upstream Gramophone の掲載ページであり、Plug ではありません。
 
 ## ビルド
-このアプリをビルドするには、[Android Studio](https://developer.android.com/studio) の最新 Beta 版と高速なネットワーク環境が必要です。
 
-### パッケージタイプのセットアップ
-Gramophone には、アプリのパッケージを示すためのパッケージタイプがあります。<br>
-パッケージタイプの文字列は `package.properties` という名前の外部ファイルから抽出されます。
+[Android Studio](https://developer.android.com/studio) をインストールし、サブモジュールを
+含めてリポジトリを取得します。
 
-お気に入りのテキストエディタを開いて、`releaseType=SelfBuilt` と入力してリポジトリのルートフォルダに `package.properties` として保存します。
+```sh
+git clone --recurse-submodules https://github.com/FoedusProgramme/Gramophone.git
+cd Gramophone
+git submodule update --init --recursive
+```
 
-その後に Android Studio を起動して独自の署名をインポートします。<br>
-これで Gramophone をビルドできるはずです。
+リポジトリのルートに `package.properties` を作成し、次の内容を記述します。
 
-## ライセンス
-このプロジェクトは、GNU General Public License v3.0 に基づいてライセンスされています。<br>
-詳細については、[LICENSE](https://github.com/FoedusProgramme/Gramophone/blob/beta/LICENSE) ファイルを参照してください。
+```properties
+releaseType=SelfBuilt
+```
 
-## 翻訳
-<a href="https://hosted.weblate.org/engage/gramophone/">
-<img src="https://hosted.weblate.org/widget/gramophone/strings-xml/horizontal-auto.svg" alt="Translation status" />
-</a>
+その後 `./gradlew assembleDebug`（Windows では `.\gradlew.bat assembleDebug`）を実行します。
+application ID の既定値は `org.plug.player` です。
 
-## お知らせ
-- バグの報告はこちら: [Telegram](https://t.me/FoedusDiscussion)
+## ライセンスと upstream へのクレジット
 
-## フレンド
-[SongSync](https://github.com/lambada10/songsync)
+Plug は GNU General Public License version 3 またはそれ以降のバージョンで提供されます。
+Gramophone の著作権表示と原著作者へのクレジットを保持しています。
+[LICENSE](./LICENSE) と
+[FoedusProgramme/Gramophone](https://github.com/FoedusProgramme/Gramophone) を参照してください。

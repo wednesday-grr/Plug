@@ -1,1 +1,1 @@
-Simple offline music player with minimalistic design
+Offline music with DJ Automix, beatmatching and harmonic queue sorting

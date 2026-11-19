@@ -1,4 +1,8 @@
-Thank you for your interest in contributing to this project!
+Thank you for your interest in contributing to Plug!
+
+Plug is a fork of [Gramophone](https://github.com/FoedusProgramme/Gramophone).
+Please preserve its GPLv3-or-later license and original copyright notices and
+attribution in contributions.
 
 We, the maintainers, would like to ask you to open a short, informal issue before starting substantial work on a pull request, so that scope, implementation details, etc can be discussed. For example, sometimes a PR you plan to send may change an area of code where a big refactor is happening at the moment which would cause most of the PR to need a rewrite before even being merged, in which case we can warn you before you write all the code if you open an issue.
 

@@ -92,6 +92,8 @@ class AboutSettingsFragment : BasePreferenceFragment() {
                         Copyright (C) 2023-2024 AkaneTan
                         Copyright (C) 2023-2026 nift4
                         Copyright (C) 2024 The Gramophone authors
+                        Upstream project: FoedusProgramme/Gramophone
+                        https://github.com/FoedusProgramme/Gramophone
 
                         This program is free software: you can redistribute it and/or modify
                         it under the terms of the GNU General Public License as published by

@@ -224,7 +224,7 @@
     <string name="settings_about_app">About</string>
     <!-- Settings category for app credits and version. Subtext -->
     <string name="settings_about_gramophone">About application</string>
-    <string name="upstream_credit">Based on Gramophone, copyright the Gramophone authors and contributors. Licensed under GPL-3.0-or-later.</string>
+    <string name="upstream_credit">Plug is a fork of Gramophone by FoedusProgramme. Original authors and contributors are credited under GPL-3.0-or-later. https://github.com/FoedusProgramme/Gramophone</string>
     <!-- Settings category about song filter, playing and other app behavior settings. Subtext -->
     <string name="settings_behavior_summary">Filters, launch behaviors</string>
     <!-- Shown as category header in about app screen above GitHub and Telegram links -->
