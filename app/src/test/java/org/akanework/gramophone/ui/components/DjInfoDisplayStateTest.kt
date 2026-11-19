@@ -18,12 +18,13 @@ class DjInfoDisplayStateTest {
     }
 
     @Test
-    fun finalSectionLocksAndSeekingBackRestoresAlternation() {
+    fun finalSectionRemainsLockedAfterSeekingBackUntilTrackChanges() {
         val state = DjInfoDisplayState()
         assertFalse(state.showDj(0, true, 60_000, 44_999))
         assertTrue(state.showDj(1, true, 60_000, 45_000))
         assertTrue(state.showDj(2, false, 60_000, 60_500))
-        assertFalse(state.showDj(3, false, 60_000, 20_000))
+        assertTrue(state.showDj(3, false, 60_000, 20_000))
+        assertTrue(state.isFinalSectionLocked)
     }
 
     @Test

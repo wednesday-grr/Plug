@@ -38,6 +38,18 @@ class AutomixMathTest {
     }
 
     @Test
+    fun overlapHeadroomIsSmoothAndReturnsToUnityAtBothEnds() {
+        assertEquals(1f, AutomixMath.overlapHeadroom(0f), 0f)
+        assertEquals(0.85f, AutomixMath.overlapHeadroom(0.5f), 0.000001f)
+        assertEquals(1f, AutomixMath.overlapHeadroom(1f), 0.000001f)
+        assertEquals(1f, AutomixMath.overlapHeadroom(-1f), 0f)
+        assertEquals(1f, AutomixMath.overlapHeadroom(2f), 0.000001f)
+        assertThrows(IllegalArgumentException::class.java) {
+            AutomixMath.overlapHeadroom(Float.NaN)
+        }
+    }
+
+    @Test
     fun matchesOnlyValidTemposWithinThreshold() {
         assertEquals(1.1f, AutomixMath.tempoRatio(110f, 100f)!!, 0.000001f)
         assertEquals(0.9f, AutomixMath.tempoRatio(90f, 100f)!!, 0.000001f)

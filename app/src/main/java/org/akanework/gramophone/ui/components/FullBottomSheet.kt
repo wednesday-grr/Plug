@@ -147,6 +147,16 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.coroutines.coroutineContext
 
+internal fun djTransitionEffectLabelResource(effect: String?): Int = when (effect) {
+    "bass_swap" -> R.string.dj_bass_swap
+    "filter_sweep" -> R.string.dj_filter_sweep
+    "echo_out" -> R.string.dj_echo_out
+    "vinyl_brake" -> R.string.dj_vinyl_brake
+    "vocal_swap" -> R.string.dj_vocal_swap
+    "smooth" -> R.string.dj_crossfade
+    else -> R.string.dj_crossfade
+}
+
 @SuppressLint("NotifyDataSetChanged")
 class FullBottomSheet
     (context: Context, attrs: AttributeSet?, defStyleAttr: Int, defStyleRes: Int) :
@@ -1120,7 +1130,9 @@ class FullBottomSheet
                     if (data.containsKey("next_bpm")) data.getFloat("next_bpm") else null,
                     data.getString("next_key"), data.getFloat("next_speed", 1f)
                 ) else ""
-                val effect = context.getString(R.string.dj_crossfade)
+                val effect = context.getString(
+                    djTransitionEffectLabelResource(data.getString("transition_effect"))
+                )
                 val beatmatch = data.getBoolean("beatmatch")
                 djStatusText = when {
                     data.getBoolean("mixing") ->

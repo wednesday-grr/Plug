@@ -133,7 +133,6 @@ class AutomixPlayer private constructor(
         private const val ECHO_OUT_DRY_MUTE_START = 0.65f
         private const val ECHO_OUT_FEEDBACK = 0.45f
         private const val DEFAULT_ECHO_DELAY_MS = 375f
-        private const val OVERLAP_HEADROOM = 0.5f
         private const val VOCAL_SWAP_ATTENUATION = 1f
         private const val FILTER_OUT_START_HZ = 20f
         private const val FILTER_OUT_END_HZ = 3500f
@@ -224,9 +223,13 @@ class AutomixPlayer private constructor(
     private var beatmatchEnabled = true
     private var transitionStyle = "auto"
     private var activeTransitionStyle = "auto"
+    private var activeTransitionBeatmatched = false
+    private var lastTransitionStyle: String? = null
+    private var lastTransitionBeatmatched = false
     private var vinylBrakeTransition = false
     private var echoDelayMs = DEFAULT_ECHO_DELAY_MS
     private var activeFadeDurationMs = 0L
+    private var transitionProgress = 0f
     private var durationMs = 5000L
     private var userVolume = 1f
     private var unmuteVolume = 1f
@@ -339,6 +342,10 @@ class AutomixPlayer private constructor(
     val isCrossfading: Boolean get() = transition.phase == DeckTransition.Phase.FADING
     val isAutomixEnabled: Boolean get() = enabled
     val isBeatmatchEnabled: Boolean get() = beatmatchEnabled
+    val transitionEffect: String?
+        get() = if (isCrossfading) activeTransitionStyle else lastTransitionStyle
+    val isTransitionBeatmatched: Boolean
+        get() = if (isCrossfading) activeTransitionBeatmatched else lastTransitionBeatmatched
     val upcomingMediaItem: MediaItem? get() = nextItem?.takeIf { enabled }
     val upcomingStandbyPlayer: ExoPlayer?
         get() = upcomingMediaItem?.takeIf { standby.currentMediaItem == it }?.let { standby }
@@ -614,7 +621,7 @@ class AutomixPlayer private constructor(
 
     private fun applyVolumes() {
         val outputGain = if (transition.phase == DeckTransition.Phase.FADING) {
-            OVERLAP_HEADROOM
+            AutomixMath.overlapHeadroom(transitionProgress)
         } else 1f
         decks.factoryA.djTransitionAudioProcessor.setOutputGain(outputGain)
         decks.factoryB.djTransitionAudioProcessor.setOutputGain(outputGain)
@@ -654,7 +661,9 @@ class AutomixPlayer private constructor(
         }
         transition.cancel()
         vinylBrakeTransition = false
+        activeTransitionBeatmatched = false
         activeFadeDurationMs = 0L
+        transitionProgress = 0f
         pendingStartPositionMs = null
         preparedItem = null
         preparedQueue = null
@@ -762,6 +771,7 @@ class AutomixPlayer private constructor(
             val now = SystemClock.elapsedRealtime()
             transition.resume(now)
             val progress = transition.progress(now)
+            transitionProgress = progress
             if (activeTransitionStyle == "filter_sweep") {
                 activeDjFilter.setFilter(
                     DjTransitionAudioProcessor.Type.HIGH_PASS,
@@ -884,6 +894,7 @@ class AutomixPlayer private constructor(
         if (pendingStartPositionMs == null) {
             val alignment = if (beatmatchEnabled && !vinylBrakeTransition) phaseAlignment else null
             matchedSpeed = if (vinylBrakeTransition) 1f else alignment?.incomingSpeed ?: 1f
+            activeTransitionBeatmatched = alignment != null
             val delayMs = alignment?.startDelayMs?.let { ceil(it).toLong() } ?: 0L
             pendingStartPositionMs = active.currentPosition +
                 delayMs.coerceAtMost(remaining - END_MARGIN_MS - 1)
@@ -933,6 +944,7 @@ class AutomixPlayer private constructor(
             standbyDjFilter.bypass()
         }
         activeFadeDurationMs = fadeDuration
+        transitionProgress = 0f
         transition.start(fadeDuration, SystemClock.elapsedRealtime())
         transition.pause(SystemClock.elapsedRealtime())
         applyVolumes()
@@ -942,6 +954,8 @@ class AutomixPlayer private constructor(
     private fun handoff(now: Long) {
         val outgoing = active
         val incoming = standby
+        lastTransitionStyle = activeTransitionStyle
+        lastTransitionBeatmatched = activeTransitionBeatmatched
         incoming.playbackParameters = PlaybackParameters(
             if (vinylBrakeTransition) 1f else outgoing.playbackParameters.speed,
             outgoing.playbackParameters.pitch
@@ -957,7 +971,9 @@ class AutomixPlayer private constructor(
         pendingStartPositionMs = null
         lastHandoffElapsedRealtimeMs = now
         vinylBrakeTransition = false
+        activeTransitionBeatmatched = false
         activeFadeDurationMs = 0L
+        transitionProgress = 0f
         applyVolumes()
         onActiveDeckChanged?.invoke(outgoing, incoming)
         forwarding.handoff(incoming)

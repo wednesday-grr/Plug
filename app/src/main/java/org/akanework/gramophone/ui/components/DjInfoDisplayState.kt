@@ -3,7 +3,6 @@ package org.akanework.gramophone.ui.components
 internal class DjInfoDisplayState {
     private companion object {
         const val FINAL_SECTION_MS = 15_000L
-        const val UNLOCK_HYSTERESIS_MS = 1_000L
     }
 
     private var elapsedMs = 0L
@@ -42,8 +41,6 @@ internal class DjInfoDisplayState {
         val remainingMs = duration - positionMs.coerceAtLeast(0)
         if (duration > FINAL_SECTION_MS && remainingMs <= FINAL_SECTION_MS) {
             finalSectionLocked = true
-        } else if (finalSectionLocked && remainingMs > FINAL_SECTION_MS + UNLOCK_HYSTERESIS_MS) {
-            finalSectionLocked = false
         }
         return finalSectionLocked || (elapsedMs / 10_000L) % 2L == 1L
     }

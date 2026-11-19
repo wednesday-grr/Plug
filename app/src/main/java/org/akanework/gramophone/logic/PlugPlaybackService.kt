@@ -1334,7 +1334,10 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                         "mixed",
                         lastHandoff != null && now - lastHandoff in 0 until 6_000L
                     )
-                    res.extras.putBoolean("beatmatch", engine?.isBeatmatchEnabled == true)
+                    res.extras.putString("transition_effect", engine?.transitionEffect)
+                    res.extras.putBoolean(
+                        "beatmatch", engine?.isTransitionBeatmatched == true
+                    )
                 }
             }
         }

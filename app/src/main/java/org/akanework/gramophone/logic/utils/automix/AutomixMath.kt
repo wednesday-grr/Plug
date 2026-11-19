@@ -31,6 +31,12 @@ object AutomixMath {
         return Volumes(cos(angle).toFloat().coerceIn(0f, 1f), sin(angle).toFloat().coerceIn(0f, 1f))
     }
 
+    fun overlapHeadroom(progress: Float): Float {
+        require(progress.isFinite()) { "Crossfade progress must be finite" }
+        val angle = progress.coerceIn(0f, 1f) * PI
+        return (1f - 0.15f * sin(angle).toFloat()).coerceIn(0.85f, 1f)
+    }
+
     fun tempoRatio(outgoingBpm: Float?, incomingBpm: Float?, maxDeviation: Float = 0.15f): Float? {
         require(maxDeviation.isFinite() && maxDeviation in 0f..<1f)
         if (outgoingBpm == null || incomingBpm == null ||

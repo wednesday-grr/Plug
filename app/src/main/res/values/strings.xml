@@ -14,6 +14,11 @@
     <string name="app_name">Plug</string>
     <string name="dj_metrics">%1$s BPM / %2$s / %3$sx</string>
     <string name="dj_crossfade">Crossfade</string>
+    <string name="dj_bass_swap">Bass-Swap</string>
+    <string name="dj_filter_sweep">Filter Sweep</string>
+    <string name="dj_echo_out">Echo Out</string>
+    <string name="dj_vinyl_brake">Vinyl Brake</string>
+    <string name="dj_vocal_swap">Vocal-Swap</string>
     <string name="dj_mixing">Mixing: %1$s</string>
     <string name="dj_mixing_beatmatch">Mixing: %1$s / Beatmatch</string>
     <string name="dj_mixed">Mixed: %1$s</string>
