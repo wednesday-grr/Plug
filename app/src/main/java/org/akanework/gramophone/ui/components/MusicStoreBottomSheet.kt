@@ -8,16 +8,11 @@
  */
 package org.akanework.gramophone.ui.components
 
-import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.view.LayoutInflater
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import androidx.browser.customtabs.CustomTabColorSchemeParams
-import androidx.browser.customtabs.CustomTabsClient
-import androidx.browser.customtabs.CustomTabsIntent
-import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -25,7 +20,6 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
-import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -34,6 +28,7 @@ import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.hasAudioPermission
 import org.akanework.gramophone.logic.utils.DownloadScanner
 import org.akanework.gramophone.ui.MainActivity
+import org.akanework.gramophone.ui.MusicStoreWebViewActivity
 import kotlin.coroutines.resume
 
 class MusicStoreBottomSheet(private val activity: MainActivity) : BottomSheetDialog(activity) {
@@ -70,7 +65,13 @@ class MusicStoreBottomSheet(private val activity: MainActivity) : BottomSheetDia
                     isFocusable = false
                 })
             }
-            item.setOnClickListener { openStore(store.url) }
+            item.setOnClickListener {
+                activity.startActivity(Intent(activity, MusicStoreWebViewActivity::class.java).apply {
+                    putExtra(MusicStoreWebViewActivity.EXTRA_URL, store.url)
+                    putExtra(MusicStoreWebViewActivity.EXTRA_TITLE, activity.getString(store.name))
+                })
+                dismiss()
+            }
             list.addView(item)
         }
         val scan = findViewById<MaterialButton>(R.id.store_scan)!!
@@ -108,28 +109,4 @@ class MusicStoreBottomSheet(private val activity: MainActivity) : BottomSheetDia
         }
     }
 
-    private fun openStore(url: String) {
-        val uri = url.toUri()
-        try {
-            val browser = CustomTabsClient.getPackageName(activity, null)
-            if (browser != null) {
-                val colors = CustomTabColorSchemeParams.Builder()
-                    .setToolbarColor(MaterialColors.getColor(activity, com.google.android.material.R.attr.colorSurface, 0))
-                    .build()
-                val customTab = CustomTabsIntent.Builder()
-                    .setDefaultColorSchemeParams(colors)
-                    .build()
-                customTab.intent.setPackage(browser)
-                try {
-                    customTab.launchUrl(activity, uri)
-                    return
-                } catch (_: ActivityNotFoundException) {
-                    // The browser may have been removed since discovery.
-                }
-            }
-            activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(activity, R.string.music_store_no_browser, Toast.LENGTH_LONG).show()
-        }
-    }
 }

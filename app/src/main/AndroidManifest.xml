@@ -92,6 +92,18 @@
         </service>
 
         <activity
+            android:name=".ui.MusicStoreWebViewActivity"
+            android:exported="false" />
+
+        <receiver
+            android:name=".logic.utils.MusicStoreDownloadReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+        <activity
             android:name=".ui.MainActivity"
             android:theme="@style/Theme.Splash"
             android:exported="true"

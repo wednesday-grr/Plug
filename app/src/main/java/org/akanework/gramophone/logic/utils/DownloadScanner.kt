@@ -36,6 +36,9 @@ internal object DownloadScanner {
         return scanRoots(context, roots)
     }
 
+    suspend fun scanFile(context: Context, path: String): Boolean =
+        scanBatch(context, arrayOf(path))
+
     internal suspend fun scanRoots(
         context: Context,
         roots: List<File>,

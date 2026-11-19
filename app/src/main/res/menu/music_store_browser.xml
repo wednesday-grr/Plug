@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/store_back"
+        android:icon="@drawable/ic_arrow_back"
+        android:title="@string/music_store_back"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/store_forward"
+        android:icon="@drawable/ic_store_forward"
+        android:title="@string/music_store_forward"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/store_scan_action"
+        android:icon="@drawable/ic_refresh"
+        android:title="@string/music_store_scan"
+        app:showAsAction="always" />
+</menu>
