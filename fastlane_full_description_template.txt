@@ -1,33 +1,35 @@
 <p>
-Gramophone is an offline, local music player that can play .mp3, .flac, .ogg, .opus, .m4a, .mka and .wav files.<br>
+Plug is an offline Android music player forked from Gramophone and enhanced with a real-time DJ Automix engine. It plays music stored on your device, including .mp3, .flac, .ogg, .opus, .m4a, .mka and .wav files.<br>
 <br>
-- Light, stable, and minimalistic<br>
+- Dual-deck DJ Automix with tempo matching and beat-phase alignment<br>
+- Transition styles: Smooth Crossfade, Club Bass-Swap, Filter Sweep, BPM-Synced Echo Out, Vinyl Brake, Vocal-Swap and Smart Auto<br>
+- Offline BPM, beat-grid and musical-key analysis, cached locally<br>
+- Harmonic queue sorting using tempo and Camelot key compatibility<br>
+- Light, stable and minimalistic<br>
 - Up-to-date Material 3 design and theme<br>
-- Dynamic player UI Monet color<br>
+- Dynamic player UI with Monet colors<br>
 - Uses MediaStore to quickly access on-device music<br>
-- Search and browse for your favourite music<br>
+- Search and browse your favourite music<br>
 - List and grid views<br>
 - Browse songs by folder and filesystem<br>
-- Natural sorting and various other sorting options<br>
+- Natural sorting and other sorting options<br>
 - Playlist support<br>
 - Synced lyrics (LRC, TTML, SRT)<br>
-- Supports word/syllable Karaoke lyrics synchronization<br>
+- Supports word/syllable karaoke lyrics synchronization<br>
 - Full support for ReplayGain 2.0<br>
-- Support for system/third-party Equalizer apps<br>
+- Support for system and third-party equalizer apps<br>
 <br>
-If you face any issues, feel free to open an issue at our GitHub page: <a href="https://github.com/FoedusProgramme/Gramophone/issues">https://github.com/FoedusProgramme/Gramophone/issues</a><br>
+If you face any issues, please open an issue on the Plug GitHub page: <a href="https://github.com/FoedusProgramme/Gramophone/issues">https://github.com/FoedusProgramme/Gramophone/issues</a><br>
 <br>
-If you have any security-related or otherwise confidential comments, please email: nift4 [@] posteo [.] net<br>
+Plug is open source and released under the GNU GPL version 3 or later. Plug is a fork of <a href="https://github.com/FoedusProgramme/Gramophone">Gramophone</a> by FoedusProgramme and its contributors; original copyright notices and attribution are retained.<br>
 <br>
-Gramophone is open source and released under the GPLv3.0 or later license. We thank all our contributors and translators! <a href="https://github.com/FoedusProgramme/Gramophone">https://github.com/FoedusProgramme/Gramophone</a><br>
+You can help translate the upstream Gramophone project: <a href="https://hosted.weblate.org/engage/gramophone/">https://hosted.weblate.org/engage/gramophone/</a><br>
 <br>
-You can help translate Gramophone to your language: <a href="https://hosted.weblate.org/engage/gramophone/">https://hosted.weblate.org/engage/gramophone/</a><br>
+Note: Plug supports the "enhanced album covers" feature. This feature needs the "Photos and videos" permission. It is entirely optional and disabled by default. Plug does not upload data; the permission is only used to display album covers.<br>
 <br>
-Note: Gramophone supports the "enhanced album covers" feature. This feature needs the "Photos and videos" permission. This feature is ENTIRELY OPTIONAL and DISABLED BY DEFAULT. We do NOT upload any data anywhere. Your photos are not used, the permission is ONLY used to DISPLAY album covers. That's it.<br>
+Note: Not all audio file formats work on all devices. For more information, refer to <a href="https://developer.android.com/media/media3/exoplayer/supported-formats#progressive-container">Media3 supported formats</a> and <a href="https://developer.android.com/media/platform/supported-formats#audio-formats">Android supported audio formats</a>.<br>
 <br>
-Note: Not all audio file formats will work on all devices. For more information, please refer to <a href="https://developer.android.com/media/media3/exoplayer/supported-formats#progressive-container">https://developer.android.com/media/media3/exoplayer/supported-formats#progressive-container</a> and <a href="https://developer.android.com/media/platform/supported-formats#audio-formats">https://developer.android.com/media/platform/supported-formats#audio-formats</a><br>
+Note: Plug is completely offline and does not support downloading or streaming music. It plays music files on your device and cannot bypass copy protection.<br>
 <br>
-Note: Gramophone is completely offline, thus it does not support downloading or streaming music. It will only play music files on your device. Gramophone cannot bypass any copy protections.<br>
-<br>
-Note: Our privacy policy is available at <a href="https://foedusprogramme.github.io/org/privacy.html">https://foedusprogramme.github.io/org/privacy.html</a>
+Note: The upstream privacy policy is available at <a href="https://foedusprogramme.github.io/org/privacy.html">https://foedusprogramme.github.io/org/privacy.html</a>
 </p>
