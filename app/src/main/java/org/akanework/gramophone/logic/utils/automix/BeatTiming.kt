@@ -248,40 +248,57 @@ data class LoopBoundary(val positionMs: Long, val beatIndex: Long, val type: Typ
     enum class Type { START, END }
 }
 
-enum class LoopLifecycleState { INACTIVE, ACTIVE, PAUSED, COMPLETED, CANCELLED, REJECTED }
+enum class LoopLifecycleState { INACTIVE, ACTIVE, PAUSED, COMPLETED, CANCELLED, FAILED, REJECTED }
 
 data class LoopState(
     val lifecycle: LoopLifecycleState,
     val region: LoopRegion? = null,
     val completedIterations: Long = 0,
     val reason: String? = null,
-)
+    val generation: Long? = null,
+) {
+    val ownsTimingResources: Boolean
+        get() = lifecycle == LoopLifecycleState.ACTIVE || lifecycle == LoopLifecycleState.PAUSED
+}
 
 data class LoopExecutionResult(
     val state: LoopState,
     val seekPositionMs: Long? = null,
     val timingAccuracy: String = LoopBoundaryScheduler.TIMING_LIMITATION,
+    val accepted: Boolean = true,
 )
 
 class LoopBoundaryScheduler {
     private var state = LoopState(LoopLifecycleState.INACTIVE)
 
     fun state(): LoopState = state
+    val ownsTimingResources: Boolean get() = state.ownsTimingResources
 
-    fun activate(region: LoopRegion, durationMs: Long): LoopExecutionResult {
+    fun activate(region: LoopRegion, durationMs: Long, generation: Long): LoopExecutionResult {
+        require(generation > 0)
+        if (ownsTimingResources) return LoopExecutionResult(state, accepted = false)
         if (region.endMs > durationMs) {
-            state = LoopState(LoopLifecycleState.REJECTED, reason = "Loop exceeds track duration.")
+            state = LoopState(
+                LoopLifecycleState.REJECTED,
+                reason = "Loop exceeds track duration.",
+                generation = generation,
+            )
         } else {
-            state = LoopState(LoopLifecycleState.ACTIVE, region)
+            state = LoopState(LoopLifecycleState.ACTIVE, region, generation = generation)
         }
-        return LoopExecutionResult(state)
+        return LoopExecutionResult(state, accepted = state.ownsTimingResources)
     }
 
-    fun onPosition(positionMs: Long, playing: Boolean): LoopExecutionResult {
-        val region = state.region
-        if (region == null || state.lifecycle !in setOf(LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED)) {
-            return LoopExecutionResult(state)
+    fun onPosition(
+        positionMs: Long,
+        playing: Boolean,
+        generation: Long?,
+    ): LoopExecutionResult {
+        if (generation == null || generation != state.generation || !ownsTimingResources) {
+            return LoopExecutionResult(state, accepted = false)
         }
+        val region = state.region
+        if (region == null) return LoopExecutionResult(state, accepted = false)
         if (!playing) {
             state = state.copy(lifecycle = LoopLifecycleState.PAUSED)
             return LoopExecutionResult(state)
@@ -293,17 +310,83 @@ class LoopBoundaryScheduler {
         return LoopExecutionResult(state, region.startMs + overshoot)
     }
 
-    fun cancel(reason: String, completed: Boolean = false): LoopExecutionResult {
-        state = LoopState(
-            if (completed) LoopLifecycleState.COMPLETED else LoopLifecycleState.CANCELLED,
-            reason = reason,
-        )
+    fun cancel(reason: String, generation: Long?): LoopExecutionResult =
+        terminate(LoopLifecycleState.CANCELLED, reason, generation)
+
+    fun complete(reason: String, generation: Long?): LoopExecutionResult =
+        terminate(LoopLifecycleState.COMPLETED, reason, generation)
+
+    fun fail(reason: String, generation: Long?): LoopExecutionResult =
+        terminate(LoopLifecycleState.FAILED, reason, generation)
+
+    private fun terminate(
+        terminalState: LoopLifecycleState,
+        reason: String,
+        generation: Long?,
+    ): LoopExecutionResult {
+        if (generation == null || generation != state.generation || !ownsTimingResources) {
+            return LoopExecutionResult(state, accepted = false)
+        }
+        state = state.copy(lifecycle = terminalState, reason = reason)
         return LoopExecutionResult(state)
     }
 
     companion object {
         const val TIMING_LIMITATION =
             "Boundary checked on the application looper (25 ms while looping) and performed by Media3 seek; not sample-accurate."
+    }
+}
+
+class BeatLoopCoordinator(private val gainOwnership: GainOwnershipRegistry) {
+    private val scheduler = LoopBoundaryScheduler()
+    private var ownedGeneration: Long? = null
+
+    @Synchronized
+    fun state(): LoopState = scheduler.state()
+
+    @get:Synchronized
+    val ownsTimingResources: Boolean
+        get() = scheduler.ownsTimingResources
+
+    @Synchronized
+    fun canStartExclusiveOperation(): Boolean = !scheduler.ownsTimingResources
+
+    @Synchronized
+    fun activate(region: LoopRegion, durationMs: Long, generation: Long): LoopExecutionResult {
+        val result = scheduler.activate(region, durationMs, generation)
+        if (!result.accepted) return result
+        try {
+            gainOwnership.claim(AutoMixEffect.BEAT_LOOP, generation)
+            ownedGeneration = generation
+            return result
+        } catch (error: RuntimeException) {
+            scheduler.fail("Beat Loop ownership acquisition failed.", generation)
+            throw error
+        }
+    }
+
+    @Synchronized
+    fun onPosition(positionMs: Long, playing: Boolean, generation: Long?): LoopExecutionResult =
+        scheduler.onPosition(positionMs, playing, generation)
+
+    @Synchronized
+    fun cancel(reason: String, generation: Long?): LoopExecutionResult =
+        terminate(scheduler.cancel(reason, generation), generation)
+
+    @Synchronized
+    fun complete(reason: String, generation: Long?): LoopExecutionResult =
+        terminate(scheduler.complete(reason, generation), generation)
+
+    @Synchronized
+    fun fail(reason: String, generation: Long?): LoopExecutionResult =
+        terminate(scheduler.fail(reason, generation), generation)
+
+    private fun terminate(result: LoopExecutionResult, generation: Long?): LoopExecutionResult {
+        if (result.accepted && ownedGeneration == generation) {
+            gainOwnership.releaseGeneration(checkNotNull(generation))
+            ownedGeneration = null
+        }
+        return result
     }
 }
 

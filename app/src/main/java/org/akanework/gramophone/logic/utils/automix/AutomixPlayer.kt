@@ -271,8 +271,7 @@ class AutomixPlayer private constructor(
     private val gainOwnershipRegistry = GainOwnershipRegistry()
     private var gainOwnershipGeneration: Long? = null
     private val observedExecutionEffects = mutableSetOf<AutoMixEffect>()
-    private val beatLoopScheduler = LoopBoundaryScheduler()
-    private var beatLoopGeneration: Long? = null
+    private val beatLoopCoordinator = BeatLoopCoordinator(gainOwnershipRegistry)
     @Volatile
     private var beatEffectTelemetry: BeatEffectTelemetry? = null
     private var loopTransitionRegion: LoopRegion? = null
@@ -393,9 +392,7 @@ class AutomixPlayer private constructor(
             while (isActive) {
                 tick()
                 delay(if ((enabled && nextItem != null) ||
-                    beatLoopScheduler.state().lifecycle in setOf(
-                        LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED
-                    )
+                    beatLoopCoordinator.ownsTimingResources
                 ) TICK_MS else 250L)
             }
         }
@@ -456,7 +453,7 @@ class AutomixPlayer private constructor(
         val reason = when {
             transition.phase != DeckTransition.Phase.IDLE ->
                 "Beat Jump is unavailable while a transition is being prepared or executed."
-            beatLoopScheduler.state().lifecycle == LoopLifecycleState.ACTIVE ->
+            !beatLoopCoordinator.canStartExclusiveOperation() ->
                 "Beat Jump is incompatible with an active Beat Loop."
             grid == null || position == null -> "A confident beat grid is unavailable."
             target == null || duration == C.TIME_UNSET ->
@@ -515,8 +512,8 @@ class AutomixPlayer private constructor(
                 "Beat Loop is unavailable while a transition is being prepared or executed."
             active.currentMediaItem == null -> "No active track."
             active.duration == C.TIME_UNSET || active.duration <= 0 -> "Track duration is unavailable."
-            beatLoopScheduler.state().lifecycle == LoopLifecycleState.ACTIVE ->
-                "A Beat Loop is already active."
+            !beatLoopCoordinator.canStartExclusiveOperation() ->
+                "A Beat Loop is already active or paused."
             region == null -> "A valid, confident beat-grid loop is unavailable within the track."
             else -> null
         }
@@ -538,16 +535,13 @@ class AutomixPlayer private constructor(
                 timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
             )
         )
-        gainOwnershipRegistry.claim(AutoMixEffect.BEAT_LOOP, generation)
-        beatLoopGeneration = generation
-        val started = beatLoopScheduler.activate(checkNotNull(region), active.duration)
-        if (started.state.lifecycle != LoopLifecycleState.ACTIVE) {
-            gainOwnershipRegistry.releaseGeneration(generation)
-            beatLoopGeneration = null
+        val started = beatLoopCoordinator.activate(checkNotNull(region), active.duration, generation)
+        if (!started.accepted || started.state.lifecycle != LoopLifecycleState.ACTIVE) {
             return publishBeatTelemetry(
                 BeatEffectTelemetry(
                     AutoMixEffect.BEAT_LOOP.id, true, true, false, EffectLifecycleState.REJECTED,
-                    grid?.confidence?.value, reason = started.state.reason,
+                    grid?.confidence?.value,
+                    reason = started.state.reason ?: "A Beat Loop already owns the timing resources.",
                     timingLimitation = started.timingAccuracy,
                 )
             )
@@ -565,20 +559,29 @@ class AutomixPlayer private constructor(
     }
 
     fun clearBeatLoop(reason: String = "Beat Loop stopped."): BeatEffectTelemetry {
+        return terminateBeatLoop(reason, failed = false)
+    }
+
+    private fun terminateBeatLoop(reason: String, failed: Boolean): BeatEffectTelemetry {
         assertThread()
-        val previous = beatLoopScheduler.state()
-        val result = beatLoopScheduler.cancel(reason)
-        beatLoopGeneration?.let(gainOwnershipRegistry::releaseGeneration)
-        beatLoopGeneration = null
+        val previous = beatLoopCoordinator.state()
+        val result = if (failed) {
+            beatLoopCoordinator.fail(reason, previous.generation)
+        } else {
+            beatLoopCoordinator.cancel(reason, previous.generation)
+        }
         return publishBeatTelemetry(
             BeatEffectTelemetry(
                 AutoMixEffect.BEAT_LOOP.id, true, true, previous.region != null,
-                if (previous.region == null) EffectLifecycleState.COMPLETED
-                else EffectLifecycleState.COMPLETED,
+                when {
+                    failed && result.accepted -> EffectLifecycleState.FAILED
+                    result.accepted || !previous.ownsTimingResources -> EffectLifecycleState.COMPLETED
+                    else -> EffectLifecycleState.FAILED
+                },
                 beatEffectTelemetry?.gridConfidence,
                 loopStartMs = previous.region?.startMs,
                 loopEndMs = previous.region?.endMs,
-                reason = result.state.reason,
+                reason = result.state.reason ?: reason,
                 timingLimitation = result.timingAccuracy,
             )
         )
@@ -959,10 +962,9 @@ class AutomixPlayer private constructor(
             mutableTransitionExplanation.value = null
             explanationQueue = null
         }
-        if (beatLoopScheduler.state().lifecycle in setOf(
-                LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED
-            )
-        ) clearBeatLoop("Playback operation cancelled the Beat Loop.")
+        if (beatLoopCoordinator.ownsTimingResources) {
+            clearBeatLoop("Playback operation cancelled the Beat Loop.")
+        }
         releaseGainOwnership()
         observedExecutionEffects.clear()
         mutableRuntimeTelemetry.value = null
@@ -1026,6 +1028,9 @@ class AutomixPlayer private constructor(
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             if (released) return
+            if (beatLoopCoordinator.ownsTimingResources) {
+                terminateBeatLoop("Playback error terminated the Beat Loop.", failed = true)
+            }
             if (deck === standby) {
                 Log.e(TAG, "Standby deck failed; cancelling crossfade", error)
                 cancelTransition()
@@ -1094,9 +1099,11 @@ class AutomixPlayer private constructor(
 
     private fun tick() {
         if (released) return
-        val loopState = beatLoopScheduler.state()
-        if (loopState.lifecycle in setOf(LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED)) {
-            val result = beatLoopScheduler.onPosition(active.currentPosition, active.isPlaying)
+        val loopState = beatLoopCoordinator.state()
+        if (loopState.ownsTimingResources) {
+            val result = beatLoopCoordinator.onPosition(
+                active.currentPosition, active.isPlaying, loopState.generation
+            )
             val lifecycle = when (result.state.lifecycle) {
                 LoopLifecycleState.ACTIVE -> if (result.state.completedIterations > 0) {
                     EffectLifecycleState.EXECUTING
@@ -1189,10 +1196,7 @@ class AutomixPlayer private constructor(
             if (progress >= 1f) handoff(now)
             return
         }
-        if (beatLoopScheduler.state().lifecycle in setOf(
-                LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED
-            )
-        ) return
+        if (beatLoopCoordinator.ownsTimingResources) return
         if (!active.isPlaying || active.duration == C.TIME_UNSET ||
             active.playbackParameters.speed != 1f || active.isPlayingAd ||
             active.pauseAtEndOfMediaItems
@@ -1508,6 +1512,9 @@ class AutomixPlayer private constructor(
     }
 
     private fun handoff(now: Long) {
+        if (beatLoopCoordinator.ownsTimingResources) {
+            clearBeatLoop("Deck handoff terminated the Beat Loop.")
+        }
         val outgoing = active
         val incoming = standby
         lastTransitionStyle = activeTransitionStyle
