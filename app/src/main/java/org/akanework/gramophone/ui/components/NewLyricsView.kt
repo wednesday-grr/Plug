@@ -109,6 +109,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         var target: Float, val targetIndex: Int?
     )
     private var currentSmoothScroll: SmoothScroll? = null
+    private data class ScrollHandoff(val scrollY: Int, val targetIndex: Int?)
+    private var pendingScrollHandoff: ScrollHandoff? = null
     private var delayedScrollAnimation: Pair<Long, Pair<Int, Int>>? = null
     private data class BackgroundTransition(val from: Float, val to: Float, val startedAt: Long)
     private val backgroundFractions = mutableMapOf<Int, Float>()
@@ -275,6 +277,13 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         invalidateDeeply()
     }
 
+    fun prepareAutomixHandoffFrom(incoming: NewLyricsView) {
+        if (incoming === this) return
+        currentSmoothScroll = null
+        delayedScrollAnimation = null
+        pendingScrollHandoff = ScrollHandoff(incoming.scrollY, incoming.currentScrollTarget)
+    }
+
     fun updateAttribution(attribution: SpicyLyricsAttribution?) {
         lyricsAttribution = attribution
         spForRender = null
@@ -406,6 +415,11 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         var animating = updateBackgroundRows(items, posForRender, now, isPlaying)
         val globalBottom = spForRender!!.first[4]
         updateChildHeight(visibleContentHeight(items, spForRender!!.first[2], globalBottom))
+        pendingScrollHandoff?.let {
+            scrollTo(0, it.scrollY)
+            currentScrollTarget = it.targetIndex
+            pendingScrollHandoff = null
+        }
         var delayedScrollDoneForFrame = false
         val globalPaddingTop = spForRender!!.first[2]
         var heightSoFar = globalPaddingTop.toDouble()

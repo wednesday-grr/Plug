@@ -22,9 +22,12 @@ import android.content.SharedPreferences
 import android.animation.ValueAnimator
 import android.graphics.Color
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.Rect
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.BitmapDrawable
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -33,6 +36,7 @@ import android.util.AttributeSet
 import android.view.View
 import android.widget.FrameLayout
 import android.view.ViewGroup
+import android.view.ContextThemeWrapper
 import android.widget.ImageView
 import androidx.core.graphics.Insets
 import androidx.core.os.BundleCompat
@@ -43,6 +47,14 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.media3.common.Player
 import androidx.preference.PreferenceManager
+import com.google.android.material.color.DynamicColors
+import com.google.android.material.color.DynamicColorsOptions
+import com.google.android.material.color.MaterialColors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.getBooleanStrict
@@ -63,6 +75,8 @@ import coil3.request.Disposable
 internal const val LYRICS_ART_ALPHA = 0.56f
 internal const val LYRICS_ART_BRIGHTNESS = 0.7f
 internal const val LYRICS_SCRIM_COLOR = 0x66000000
+
+internal data class LyricsTheme(val surface: Int, val inactive: Int, val active: Int, val translation: Int)
 
 internal fun darkenLyricsSurface(color: Int, brightness: Float = 0.7f, maxValue: Float = 0.45f): Int {
     val hsv = FloatArray(3)
@@ -105,6 +119,20 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     private var splitHandoff = false
     private var handoffStartAmount = 1f
     private var incomingLyricsFromPlayer = false
+    private var incomingContent: View? = null
+    private var outgoingTheme: LyricsTheme? = null
+    private var fallbackIncomingTheme: LyricsTheme? = null
+    private var incomingTheme: LyricsTheme? = null
+    private var incomingArtworkUri: Uri? = null
+    private var incomingArtworkRequest: Disposable? = null
+    private var incomingPaletteRequest: Disposable? = null
+    private var incomingArtworkGeneration = 0L
+    private var incomingThemeJob: Job? = null
+    private var incomingArtwork: ImageView? = null
+    private var incomingScrim: View? = null
+    private var outgoingArtworkLuminance: Float? = null
+    private var incomingArtworkLuminance: Float? = null
+    private var backgroundArtworkBrightnessScale: Float? = null
     private val albumArtBackgrounds = mutableListOf<ImageView>()
     private var backgroundScrim: View? = null
     private var backgroundRequest: Disposable? = null
@@ -128,6 +156,9 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     private val fullPlayer by lazy { (parent.parent as ViewGroup)
         .findViewById<FullBottomSheet>(R.id.full_player)!! }
 
+    private fun currentTheme() =
+        LyricsTheme(lyricSurfaceColor, defaultTextColor, highlightTextColor, highlightTlTextColor)
+
     init {
         ViewCompat.setOnApplyWindowInsetsListener(this) { v, insets ->
             val myInsets = insets.getInsets(
@@ -150,6 +181,8 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     private fun createView() {
+        clearIncomingArtwork()
+        outgoingTheme = null
         val oldAnimator = splitAnimator
         splitAnimator = null
         oldAnimator?.cancel()
@@ -158,6 +191,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         incomingContainer = null
         incomingView = null
         incomingAdapter = null
+        incomingContent = null
         incomingId = null
         splitAmount = 0f
         endingSplit = false
@@ -290,6 +324,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     private fun updateAlbumArtBackground() {
+        if (incomingId != null) return
         val enabled = prefs.getBooleanStrict("lyric_apple_music_effects", true)
         val artworkUri = if (enabled) {
             (context as? MainActivity)?.getPlayer()?.currentMediaItem?.mediaMetadata?.artworkUri
@@ -322,6 +357,8 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 .allowHardware(false)
                 .target(onSuccess = { drawable ->
                     albumArtBackgrounds.forEach { it.animate().cancel() }
+                    backgroundArtworkBrightnessScale = null
+                    applySurfaceColor()
                     val oldArt = albumArtBackgrounds.maxBy { it.alpha }
                     val newArt = albumArtBackgrounds.first { it !== oldArt }
                     newArt.alpha = 0f
@@ -350,21 +387,77 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         }
     }
 
+    private fun transitionArtworkBrightness(baseBrightness: Float): Pair<Float, Float> {
+        val outgoing = outgoingArtworkLuminance
+        val incoming = incomingArtworkLuminance
+        if (outgoing == null || outgoing <= 0f || incoming == null || incoming <= 0f) {
+            val retained = backgroundArtworkBrightnessScale?.let { baseBrightness * it }
+                ?: baseBrightness
+            return retained to baseBrightness
+        }
+        val target = minOf(outgoing, incoming) * baseBrightness
+        return (target / outgoing) to (target / incoming)
+    }
+
+    private fun normalizedIncomingArtworkScale(): Float? {
+        val outgoing = outgoingArtworkLuminance ?: return null
+        val incoming = incomingArtworkLuminance ?: return null
+        if (outgoing <= 0f || incoming <= 0f) return null
+        return minOf(outgoing, incoming) / incoming
+    }
+
+    private fun artworkLuminance(drawable: android.graphics.drawable.Drawable?): Float? {
+        val bitmap = (drawable as? BitmapDrawable)?.bitmap ?: return null
+        if (bitmap.width <= 0 || bitmap.height <= 0) return null
+        val stepX = (bitmap.width / 32).coerceAtLeast(1)
+        val stepY = (bitmap.height / 32).coerceAtLeast(1)
+        var luminance = 0L
+        var samples = 0
+        for (y in 0 until bitmap.height step stepY) {
+            for (x in 0 until bitmap.width step stepX) {
+                val color = bitmap.getPixel(x, y)
+                luminance += 2126L * Color.red(color) +
+                    7152L * Color.green(color) + 722L * Color.blue(color)
+                samples++
+            }
+        }
+        return if (samples == 0) null else luminance.toFloat() / (10000f * 255f * samples)
+    }
+
     fun setLyricBackgroundColor(color: Int) {
         lyricSurfaceColor = color
         applySurfaceColor()
     }
 
     private fun applySurfaceColor() {
-        val custom = prefs.getBoolean("lyric_custom_brightness_enabled", false)
-        val brightness = if (custom)
+        val brightness = if (prefs.getBoolean("lyric_custom_brightness_enabled", false))
             prefs.getInt("lyric_custom_brightness", 70).coerceIn(0, 100) / 100f
         else LYRICS_ART_BRIGHTNESS
-        albumArtBackgrounds.forEach { it.colorFilter = lyricsArtworkColorFilter(brightness) }
-        val color = if (prefs.getBooleanStrict("lyric_apple_music_effects", true)) {
-            darkenLyricsSurface(lyricSurfaceColor, brightness, if (custom) 1f else 0.45f)
-        } else lyricSurfaceColor
+        val (outgoingBrightness, incomingBrightness) = if (incomingId != null) {
+            transitionArtworkBrightness(brightness)
+        } else {
+            ((backgroundArtworkBrightnessScale?.let { brightness * it }) ?: brightness) to brightness
+        }
+        albumArtBackgrounds.forEach {
+            it.colorFilter = lyricsArtworkColorFilter(outgoingBrightness)
+        }
+        val color = surfaceColor(outgoingTheme?.surface ?: lyricSurfaceColor)
         setBackgroundColor(color)
+        incomingContainer?.setBackgroundColor(surfaceColor(
+            (incomingTheme ?: fallbackIncomingTheme ?: currentTheme()).surface
+        ))
+        incomingArtwork?.colorFilter = lyricsArtworkColorFilter(incomingBrightness)
+        val enabled = prefs.getBooleanStrict("lyric_apple_music_effects", true)
+        incomingArtwork?.visibility = if (enabled && incomingArtwork?.drawable != null) VISIBLE else GONE
+        incomingScrim?.visibility = if (enabled) VISIBLE else GONE
+    }
+
+    private fun surfaceColor(color: Int): Int {
+        if (!prefs.getBooleanStrict("lyric_apple_music_effects", true)) return color
+        val custom = prefs.getBoolean("lyric_custom_brightness_enabled", false)
+        val brightness = if (custom) prefs.getInt("lyric_custom_brightness", 70).coerceIn(0, 100) / 100f
+        else LYRICS_ART_BRIGHTNESS
+        return darkenLyricsSurface(color, brightness, if (custom) 1f else 0.45f)
     }
 
     private fun updateFullPlayerVisibility() {
@@ -412,12 +505,20 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         super.onAttachedToWindow()
         prefs.registerOnSharedPreferenceChangeListener(this)
         adapter?.updateLyricStatus()
+        if (incomingId != null) loadIncomingArtwork(incomingArtworkUri, force = true)
         updateFullPlayerVisibility()
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         prefs.unregisterOnSharedPreferenceChangeListener(this)
+        incomingArtworkRequest?.dispose()
+        incomingArtworkRequest = null
+        incomingPaletteRequest?.dispose()
+        incomingPaletteRequest = null
+        incomingArtworkGeneration++
+        incomingThemeJob?.cancel()
+        incomingThemeJob = null
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
@@ -437,6 +538,12 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             createView()
         if (key == "lyric_apple_music_effects")
             updateAlbumArtBackground()
+        if (key == "lyric_apple_music_effects" || key == "content_based_color" ||
+            key == "color_accuracy" || key == "pureDark"
+        ) {
+            if (incomingId != null) loadIncomingArtwork(incomingArtworkUri, force = true)
+            applySurfaceColor()
+        }
         if (key == "lyric_custom_active_enabled" || key == "lyric_custom_active_color" ||
             key == "lyric_custom_inactive_enabled" || key == "lyric_custom_inactive_color"
         ) {
@@ -496,6 +603,19 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         }
         val id = args.getString("incoming_id") ?: return
         if (incomingId != id || incomingContainer == null) {
+            if (outgoingTheme == null) {
+                outgoingTheme = currentTheme()
+                outgoingArtworkLuminance = albumArtBackgrounds
+                    .filter { it.drawable != null }
+                    .maxByOrNull { it.alpha }
+                    ?.let { artworkLuminance(it.drawable) }
+                incomingArtworkLuminance = null
+                backgroundRequest?.dispose()
+                backgroundRequest = null
+                requestedArtworkUri = null
+                albumArtBackgrounds.forEach { it.animate().cancel() }
+            }
+            fallbackIncomingTheme = baseTheme()
             incomingId = id
             incomingLyrics = null
             incomingAttribution = null
@@ -503,11 +623,14 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             incomingLyricsFromPlayer = false
             endingSplit = false
             createIncomingRenderer()
+            loadIncomingArtwork(args.getString("incoming_artwork")?.let(Uri::parse), force = true)
             animateSplit(1f, false)
         } else if (endingSplit) {
             endingSplit = false
             animateSplit(1f, false)
         }
+        val artworkUri = args.getString("incoming_artwork")?.let(Uri::parse)
+        if (artworkUri != incomingArtworkUri) loadIncomingArtwork(artworkUri, force = true)
         incomingPosition = args.getLong("position")
         incomingSampleTime = args.getLong("sample_time")
         incomingPlaying = args.getBoolean("playing")
@@ -539,6 +662,19 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         val container = FrameLayout(context)
         incomingContainer = container
         addView(container, LayoutParams(LayoutParams.MATCH_PARENT, 0))
+        incomingArtwork = ImageView(context).also { art ->
+            art.scaleType = ImageView.ScaleType.CENTER_CROP
+            art.alpha = LYRICS_ART_ALPHA
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val radius = 48f.dpToPx(context)
+                art.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
+            }
+            container.addView(art, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        }
+        incomingScrim = View(context).also { scrim ->
+            scrim.setBackgroundColor(LYRICS_SCRIM_COLOR)
+            container.addView(scrim, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        }
         val callbacks = object : NewLyricsView.Callbacks {
             override fun getCurrentPosition() = sampledPosition(
                 incomingPosition, incomingSampleTime, incomingPlaying, incomingSpeed
@@ -554,6 +690,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 it.setPadding(contentPaddingLeft, contentPaddingTop, contentPaddingRight, contentPaddingBottom)
                 it.updateLyrics(null)
             }
+            incomingContent = incomingView
             incomingAdapter = null
         } else {
             inflate(context, R.layout.lyric_view, container)
@@ -565,11 +702,117 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 list.adapter = it
                 it.updateLyrics(null, null)
             }
+            incomingContent = list
             incomingView = null
         }
         appliedTextColors = null
         applyTextColors()
+        applySurfaceColor()
         layoutSplit()
+    }
+
+    private fun clearIncomingArtwork() {
+        incomingArtworkRequest?.dispose()
+        incomingArtworkRequest = null
+        incomingPaletteRequest?.dispose()
+        incomingPaletteRequest = null
+        incomingArtworkGeneration++
+        incomingThemeJob?.cancel()
+        incomingThemeJob = null
+        incomingArtworkUri = null
+        incomingArtwork = null
+        incomingScrim = null
+        incomingTheme = null
+        fallbackIncomingTheme = null
+        outgoingArtworkLuminance = null
+        incomingArtworkLuminance = null
+    }
+
+    private fun loadIncomingArtwork(uri: Uri?, force: Boolean = false) {
+        if (!force && uri == incomingArtworkUri) return
+        incomingArtworkRequest?.dispose()
+        incomingPaletteRequest?.dispose()
+        incomingThemeJob?.cancel()
+        val generation = ++incomingArtworkGeneration
+        incomingArtworkUri = uri
+        incomingTheme = null
+        incomingArtworkLuminance = null
+        incomingArtwork?.setImageDrawable(null)
+        applySurfaceColor()
+        appliedTextColors = null
+        applyTextColors()
+        if (uri == null) return
+        val trackId = incomingId
+        incomingArtworkRequest = context.imageLoader.enqueue(
+            ImageRequest.Builder(context).data(uri).size(480, 800).scale(Scale.FILL)
+                .allowConversionToBitmap(true).allowHardware(false)
+                .target(onSuccess = { image ->
+                    if (generation != incomingArtworkGeneration) return@target
+                    val drawable = image.asDrawable(context.resources)
+                    incomingArtwork?.setImageDrawable(drawable)
+                    incomingArtworkLuminance = artworkLuminance(drawable)
+                    applySurfaceColor()
+                }, onError = {
+                    android.util.Log.w("LyricsView", "Unable to load incoming album artwork")
+                }).build()
+        )
+        if (DynamicColors.isDynamicColorAvailable() && prefs.getBooleanStrict("content_based_color", true)) {
+            val size = if (prefs.getBoolean("color_accuracy", false)) 256 else 16
+            incomingPaletteRequest = context.imageLoader.enqueue(
+                ImageRequest.Builder(context).data(uri).size(size, size).scale(Scale.FILL)
+                    .allowConversionToBitmap(true).allowHardware(false)
+                    .target(onSuccess = { image ->
+                        if (generation != incomingArtworkGeneration) return@target
+                        val bitmap = (image.asDrawable(context.resources) as? BitmapDrawable)?.bitmap
+                        if (bitmap == null) {
+                            android.util.Log.w("LyricsView", "Incoming artwork cannot be used for dynamic colors")
+                            return@target
+                        }
+                        incomingThemeJob = CoroutineScope(Dispatchers.Default).launch {
+                            val options = DynamicColorsOptions.Builder().setContentBasedSource(bitmap).build()
+                            val theme = incomingThemeFromOptions(options)
+                            withContext(Dispatchers.Main) {
+                                if (generation == incomingArtworkGeneration && trackId == incomingId) {
+                                    incomingTheme = theme
+                                    applySurfaceColor()
+                                    appliedTextColors = null
+                                    applyTextColors()
+                                }
+                            }
+                        }
+                    }, onError = {
+                        android.util.Log.w("LyricsView", "Unable to extract incoming album colors")
+                    }).build()
+            )
+        }
+    }
+
+    private fun incomingThemeFromOptions(options: DynamicColorsOptions): LyricsTheme {
+        val wrapped = DynamicColors.wrapContextIfAvailable(context, options).apply {
+            resources.configuration.uiMode = context.resources.configuration.uiMode
+        }.let {
+            if (prefs.getBoolean("pureDark", false) &&
+                resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+            ) ContextThemeWrapper(it, R.style.ThemeOverlay_PureDark) else it
+        }
+        return themeFromContext(wrapped)
+    }
+
+    private fun baseTheme(): LyricsTheme = themeFromContext(context)
+
+    private fun themeFromContext(wrapped: Context): LyricsTheme {
+        val surface = MaterialColors.getColor(wrapped, com.google.android.material.R.attr.colorSurface, Color.BLACK)
+        val processed = org.akanework.gramophone.logic.utils.ColorUtils.getColor(
+            surface, org.akanework.gramophone.logic.utils.ColorUtils.ColorType.COLOR_BACKGROUND_ELEVATED, wrapped
+        )
+        val primary = MaterialColors.getColor(wrapped, androidx.appcompat.R.attr.colorPrimary, Color.WHITE)
+        val inactive = androidx.core.graphics.ColorUtils.compositeColors(
+            androidx.core.graphics.ColorUtils.setAlphaComponent(primary, 77), processed
+        )
+        val translation = androidx.core.graphics.ColorUtils.compositeColors(
+            androidx.core.graphics.ColorUtils.setAlphaComponent(primary, 200), processed
+        )
+        return LyricsTheme(processed, inactive, primary, translation)
     }
 
     private fun animateSplit(target: Float, handoff: Boolean) {
@@ -608,30 +851,87 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         val handoffStartHeight = (total * (1f - handoffStartAmount / 2f)).toInt()
         val handoffProgress = if (handoffStartAmount > 0f)
             (1f - splitAmount / handoffStartAmount).coerceIn(0f, 1f) else 1f
+        val incomingTop = if (handoff)
+            (handoffStartHeight * (1f - handoffProgress)).toInt() else splitHeight
         val main = newView ?: recyclerView
-        main?.layoutParams = (main?.layoutParams as? LayoutParams ?: LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT
-        )).apply {
-            height = if (incomingContainer == null) LayoutParams.MATCH_PARENT
-                else if (handoff) handoffStartHeight else splitHeight
-            topMargin = if (handoff) -(handoffStartHeight * handoffProgress).toInt() else 0
+        main?.let {
+            val params = it.layoutParams as? LayoutParams
+            if (params == null || params.width != LayoutParams.MATCH_PARENT ||
+                params.height != LayoutParams.MATCH_PARENT || params.topMargin != 0
+            ) {
+                it.layoutParams = LayoutParams(
+                    LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT
+                )
+            }
+            val clipBottom: Int
+            if (handoff) {
+                it.translationY = -handoffStartHeight * handoffProgress
+                clipBottom = handoffStartHeight
+            } else {
+                it.translationY = 0f
+                clipBottom = splitHeight
+            }
+            it.clipBounds = if (incomingContainer != null && width > 0 && total > 0) {
+                Rect(0, 0, width, clipBottom.coerceIn(0, total))
+            } else null
         }
-        incomingContainer?.layoutParams = LayoutParams(
-            LayoutParams.MATCH_PARENT,
-            if (handoff) total - (handoffStartHeight * (1f - handoffProgress)).toInt()
-            else total - splitHeight
-        ).apply { topMargin = if (handoff) (handoffStartHeight * (1f - handoffProgress)).toInt() else splitHeight }
+        incomingContainer?.let {
+            val params = it.layoutParams as? LayoutParams
+            if (params == null || params.width != LayoutParams.MATCH_PARENT ||
+                params.height != LayoutParams.MATCH_PARENT || params.topMargin != 0
+            ) {
+                it.layoutParams = LayoutParams(
+                    LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT
+                )
+            }
+            it.clipBounds = if (width > 0 && total > 0)
+                Rect(0, incomingTop.coerceIn(0, total), width, total)
+            else null
+            incomingContent?.translationY = incomingTop.toFloat()
+        }
     }
 
     private fun finishSplit(handoff: Boolean) {
+        if (handoff) {
+            incomingView?.let { newView?.prepareAutomixHandoffFrom(it) }
+        }
         if (handoff && !incomingLyricsFromPlayer) {
             lyrics = if (incomingLyricsReady) incomingLyrics else null
             lyricsAttribution = if (incomingLyricsReady) incomingAttribution else null
         }
+        if (handoff) {
+            (incomingTheme ?: fallbackIncomingTheme)?.let {
+                lyricSurfaceColor = it.surface
+                defaultTextColor = it.inactive
+                highlightTextColor = it.active
+                highlightTlTextColor = it.translation
+            }
+            val artwork = incomingArtwork?.drawable
+            if (artwork != null && incomingArtworkUri != null) {
+                backgroundArtworkBrightnessScale = normalizedIncomingArtworkScale()
+                backgroundRequest?.dispose()
+                backgroundRequest = null
+                albumArtBackgrounds.forEach {
+                    it.animate().cancel()
+                    it.setImageDrawable(null)
+                    it.visibility = GONE
+                    it.alpha = 0f
+                }
+                albumArtBackgrounds.firstOrNull()?.apply {
+                    setImageDrawable(artwork)
+                    alpha = LYRICS_ART_ALPHA
+                    visibility = VISIBLE
+                }
+                requestedArtworkUri = incomingArtworkUri
+            }
+        }
+        clearIncomingArtwork()
+        outgoingTheme = null
         incomingContainer?.let(::removeView)
         incomingContainer = null
         incomingAdapter = null
         incomingView = null
+        incomingContent = null
         incomingId = null
         endingSplit = false
         splitAmount = 0f
@@ -639,6 +939,10 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         adapter?.updateLyrics(lyrics, lyricsAttribution)
         newView?.updateLyrics(lyrics)
         newView?.updateAttribution(lyricsAttribution)
+        applySurfaceColor()
+        appliedTextColors = null
+        applyTextColors()
+        updateAlbumArtBackground()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -685,17 +989,24 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
 
     private fun applyTextColors() {
         val active = customLyricColor(prefs, true)
-        val inactive = customLyricColor(prefs, false) ?: defaultTextColor
-        val highlight = active ?: highlightTextColor
-        val translation = active ?: highlightTlTextColor
+        val customInactive = customLyricColor(prefs, false)
+        val mainTheme = outgoingTheme ?: currentTheme()
+        val inactive = customInactive ?: mainTheme.inactive
+        val highlight = active ?: mainTheme.active
+        val translation = active ?: mainTheme.translation
         val colors = Triple(inactive, highlight, translation)
-        if (appliedTextColors == colors) return
-        appliedTextColors = colors
-        adapter?.updateTextColor(inactive, highlight, active != null)
-        newView?.setCustomActiveColor(active)
-        newView?.updateTextColor(inactive, highlight, translation)
-        incomingAdapter?.updateTextColor(inactive, highlight, active != null)
+        if (appliedTextColors != colors) {
+            appliedTextColors = colors
+            adapter?.updateTextColor(inactive, highlight, active != null)
+            newView?.setCustomActiveColor(active)
+            newView?.updateTextColor(inactive, highlight, translation)
+        }
+        val next = incomingTheme ?: fallbackIncomingTheme ?: currentTheme()
+        val nextInactive = customInactive ?: next.inactive
+        val nextHighlight = active ?: next.active
+        val nextTranslation = active ?: next.translation
+        incomingAdapter?.updateTextColor(nextInactive, nextHighlight, active != null)
         incomingView?.setCustomActiveColor(active)
-        incomingView?.updateTextColor(inactive, highlight, translation)
+        incomingView?.updateTextColor(nextInactive, nextHighlight, nextTranslation)
     }
 }

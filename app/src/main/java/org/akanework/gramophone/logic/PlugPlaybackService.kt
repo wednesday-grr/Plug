@@ -332,6 +332,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                     engine === lyricsCrossfadeEngine && engine.activeExoPlayer !== lyricsOutgoingDeck)
                 if (fading) {
                     putString("incoming_id", item?.mediaId)
+                    putString("incoming_artwork", item?.mediaMetadata?.artworkUri?.toString())
                     putLong("outgoing_position", engine?.currentPosition?.coerceAtLeast(0) ?: 0L)
                     putBoolean("outgoing_playing", engine?.isPlaying == true)
                     putFloat("outgoing_speed", engine?.playbackParameters?.speed ?: 1f)
@@ -347,13 +348,13 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                         sentUpcomingLyricsVersion = upcomingLyricsVersion
                         sentUpcomingLyricsAt = SystemClock.elapsedRealtime()
                     }
-                    if (!fading) {
-                        lyricsCrossfadeEngine = null
-                        lyricsOutgoingDeck = null
-                    }
                 }
             }
             mediaSession?.broadcastCustomCommand(SessionCommand(CLIENT_AUTOMIX_LYRICS, Bundle.EMPTY), args)
+        }
+        if (!fading) {
+            lyricsCrossfadeEngine = null
+            lyricsOutgoingDeck = null
         }
         wasLyricsCrossfading = fading
     }
