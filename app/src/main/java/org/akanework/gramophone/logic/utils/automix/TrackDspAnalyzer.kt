@@ -36,7 +36,10 @@ data class TrackAnalysis(
     val windowEndMs: Long,
     val vocalEnergy: Float? = null,
     val edgeAnalysis: TrackEdges? = null,
+    val pulseProvenance: PulseProvenance? = null,
 )
+
+data class TrackBeatAnalysis(val analysis: TrackAnalysis, val tracking: BeatTrackingResult)
 
 /** Offline analysis; beat grids describe only the analyzed window, not a bar or a whole song. */
 object TrackDspAnalyzer {
@@ -47,11 +50,25 @@ object TrackDspAnalyzer {
     private val minor = doubleArrayOf(6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
     private val notes = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
-    suspend fun analyze(samples: FloatArray, startMs: Long): TrackAnalysis {
+    suspend fun analyze(samples: FloatArray, startMs: Long): TrackAnalysis =
+        analyzeInternal(samples, startMs, null).first
+
+    /** Offline opt-in research output; it is not connected to playback or the analysis cache. */
+    suspend fun analyzeWithBeatTracking(
+        samples: FloatArray, startMs: Long, timeline: SourceTimeline,
+    ): TrackBeatAnalysis {
+        val (analysis, tracking) = analyzeInternal(samples, startMs, timeline)
+        return TrackBeatAnalysis(analysis, checkNotNull(tracking))
+    }
+
+    private suspend fun analyzeInternal(
+        samples: FloatArray, startMs: Long, timeline: SourceTimeline?,
+    ): Pair<TrackAnalysis, BeatTrackingResult?> {
         require(startMs >= 0)
         require(samples.all { it.isFinite() })
         val endMs = startMs + samples.size.toLong() * 1000 / SAMPLE_RATE
-        if (samples.size < FFT_SIZE * 4) return TrackAnalysis(null, null, null, 0f, startMs, endMs)
+        if (samples.size < FFT_SIZE * 4) return TrackAnalysis(null, null, null, 0f, startMs, endMs) to
+            timeline?.let { BeatTrackingResult(null, emptyList(), null, false, "Analysis window is too short") }
         val count = 1 + (samples.size - FFT_SIZE) / HOP
         val flux = DoubleArray(count)
         val chroma = DoubleArray(12)
@@ -93,9 +110,19 @@ object TrackDspAnalyzer {
         val vocalEnergy = if (analyzedBandEnergy > 0.0) {
             (vocalBandEnergy / analyzedBandEnergy).toFloat().coerceIn(0f, 1f)
         } else null
-        return TrackAnalysis(
+        val analysis = TrackAnalysis(
             tempo?.first, key, tempo?.second, tempo?.third ?: 0f, startMs, endMs, vocalEnergy
         )
+        val tracking = timeline?.let {
+            val startUs = SourceTime.millisecondsToMicros(startMs)
+            val durationUs = SourceTime.framesToMicros(samples.size.toLong(), SAMPLE_RATE)
+            require(startUs <= Long.MAX_VALUE - durationUs)
+            val bounds = AnalysisWindow(startUs, startUs + durationUs)
+            val onsets = MusicalBeatTracker.onsetCandidates(flux, SAMPLE_RATE, HOP, FFT_SIZE,
+                bounds.startUs, bounds)
+            MusicalBeatTracker.track(onsets, analysis.bpm, bounds, it)
+        }
+        return analysis to tracking
     }
 
     private fun tempo(envelope: DoubleArray, startMs: Long): Triple<Float, Double, Float>? {

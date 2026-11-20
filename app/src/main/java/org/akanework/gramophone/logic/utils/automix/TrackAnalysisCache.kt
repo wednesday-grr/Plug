@@ -20,6 +20,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.util.Log
 import androidx.media3.common.MediaItem
 import uk.akane.libphonograph.items.modifiedDate
 import java.util.concurrent.ConcurrentHashMap
@@ -44,7 +45,7 @@ data class AnalysisKey(
     }
 }
 
-class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 4) {
+class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 5) {
     private val memory = ConcurrentHashMap<AnalysisKey, TrackAnalysis>()
     @Volatile
     var selectedAnalyzer: String = "existing"
@@ -58,6 +59,11 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
     fun loadSelected(key: AnalysisKey): TrackAnalysis? = load(selectedKey(key))
 
     override fun onCreate(db: SQLiteDatabase) {
+        createVersionFour(db)
+        addEvidenceColumns(db)
+    }
+
+    private fun createVersionFour(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE analysis (
             media_id TEXT NOT NULL, modified INTEGER NOT NULL, uri TEXT NOT NULL,
             bpm REAL, camelot TEXT, beat_offset REAL, confidence REAL NOT NULL,
@@ -68,6 +74,13 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             start_window_end INTEGER, end_window_start INTEGER,
             analyzer TEXT NOT NULL,
             PRIMARY KEY(media_id, modified, uri, analyzer))""")
+    }
+
+    private fun addEvidenceColumns(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE analysis ADD COLUMN evidence_source TEXT")
+        db.execSQL("ALTER TABLE analysis ADD COLUMN evidence_algorithm_version TEXT")
+        db.execSQL("ALTER TABLE analysis ADD COLUMN evidence_timeline_origin TEXT")
+        db.execSQL("ALTER TABLE analysis ADD COLUMN evidence_timeline_mapping TEXT")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -86,7 +99,7 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
         }
         if (oldVersion < 4 && newVersion >= 4) {
             db.execSQL("ALTER TABLE analysis RENAME TO analysis_v3")
-            onCreate(db)
+            createVersionFour(db)
             db.execSQL("""INSERT INTO analysis (
                 media_id, modified, uri, bpm, camelot, beat_offset, confidence,
                 window_start, window_end, vocal_energy, edge_duration, leading_silence,
@@ -101,6 +114,7 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                 end_window_start, 'existing' FROM analysis_v3""")
             db.execSQL("DROP TABLE analysis_v3")
         }
+        if (oldVersion < 5 && newVersion >= 5) addEvidenceColumns(db)
     }
 
     fun peek(key: AnalysisKey): TrackAnalysis? = memory[key]?.takeIf { isCurrent(key, it) }
@@ -117,7 +131,9 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                 "bpm", "camelot", "beat_offset", "confidence", "window_start", "window_end",
                 "vocal_energy", "edge_duration", "leading_silence", "trailing_silence",
                 "intro_point", "outro_skip", "start_period", "start_phase", "start_confidence",
-                "end_period", "end_phase", "end_confidence", "start_window_end", "end_window_start"
+                "end_period", "end_phase", "end_confidence", "start_window_end", "end_window_start",
+                "evidence_source", "evidence_algorithm_version", "evidence_timeline_origin",
+                "evidence_timeline_mapping"
             ),
             "media_id=? AND modified=? AND uri=? AND analyzer=?",
             arrayOf(key.mediaId, key.modified.toString(), key.uri, key.analyzer),
@@ -141,6 +157,21 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                     if (cursor.isNull(18)) 0 else cursor.getLong(18),
                     if (cursor.isNull(19)) 0 else cursor.getLong(19),
                 ),
+                if (cursor.isNull(20) && cursor.isNull(21) && cursor.isNull(22) && cursor.isNull(23)) {
+                    null
+                } else {
+                    val source = EvidenceSource.entries.firstOrNull { it.name == cursor.getString(20) }
+                    val version = if (cursor.isNull(21)) null else cursor.getString(21)
+                    val origin = TimelineOrigin.entries.firstOrNull { it.name == cursor.getString(22) }
+                    val mapping = TimelineMapping.entries.firstOrNull { it.name == cursor.getString(23) }
+                    if (source == null || origin == null || mapping == null ||
+                        version != null && version.isBlank() ||
+                        origin == TimelineOrigin.UNKNOWN && mapping != TimelineMapping.UNKNOWN
+                    ) {
+                        Log.w("TrackAnalysisCache", "Incomplete or invalid beat evidence metadata; treating as legacy")
+                        null
+                    } else PulseProvenance(source, version, origin, mapping)
+                },
             )
             if (!isCurrent(key, result)) return null
             memory[key] = result
@@ -158,6 +189,12 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             put("beat_offset", result.beatOffsetMs); put("confidence", result.confidence)
             put("window_start", result.windowStartMs); put("window_end", result.windowEndMs)
             put("vocal_energy", result.vocalEnergy)
+            result.pulseProvenance?.let {
+                put("evidence_source", it.source.name)
+                put("evidence_algorithm_version", it.algorithmVersion)
+                put("evidence_timeline_origin", it.origin.name)
+                put("evidence_timeline_mapping", it.mappingToMedia3.name)
+            }
             result.edgeAnalysis?.let {
                 put("edge_duration", it.durationMs)
                 put("leading_silence", it.leadingSilenceMs)

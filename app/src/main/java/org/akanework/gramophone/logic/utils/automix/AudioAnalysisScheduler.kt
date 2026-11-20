@@ -100,7 +100,9 @@ class AudioAnalysisScheduler(
                                         check(BuildConfig.HAS_ESSENTIA) { "This build does not include Essentia" }
                                         EssentiaTrackAnalyzer.analyze(decoder.decode(uri, sampleRate = 44_100))
                                     } else decoder.decode(uri).let {
-                                        TrackDspAnalyzer.analyze(it.samples, it.startMs)
+                                        val analysis = TrackDspAnalyzer.analyze(it.samples, it.startMs)
+                                        analysis.copy(pulseProvenance = if (analysis.beatOffsetMs != null)
+                                            BeatEvidenceAdapter.spectralFluxProvenance else null)
                                     }
                                     val edges = try {
                                         val start = decoder.decode(uri, TrackPcmDecoder.Region.START)
