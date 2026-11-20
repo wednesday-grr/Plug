@@ -1232,13 +1232,47 @@
     <string name="settings_automix_description">Crossfade between tracks. Audio offload is disabled while Automix is enabled.</string>
     <string name="settings_automix_beatmatch">DJ beatmatching / tempo sync</string>
     <string name="settings_automix_duration">Crossfade duration (seconds)</string>
+    <string name="settings_automix_duration_auto">Automatic crossfade duration</string>
+    <string name="settings_automix_duration_auto_summary">Choose a duration based on tempo, up to 30 seconds; use 5 seconds if tempo is unknown.</string>
+    <string name="settings_automix_max_skip">Maximum intro and outro skip (seconds)</string>
+    <string name="settings_automix_max_skip_summary">Maximum per end, also limited to 10% of the track. Set to 0 to disable skipping.</string>
     <string name="settings_automix_transition_style">Transition style</string>
+    <string name="settings_automix_additional_effects">Additional simultaneous effects</string>
+    <string name="settings_automix_effect_intensity">Transition effect intensity (%)</string>
+    <string name="settings_automix_effect_intensity_summary">Controls scheduled EQ, filter, bass, vocal, echo and reverb effects; does not change crossfade, beatmatching, Vinyl Brake or Tremolo Fade.</string>
+    <string name="settings_automix_additional_effects_summary">Combine effects with the transition style. If filters conflict, the transition style takes priority; otherwise Filter Sweep, High-Pass Intro, then Rise take priority.</string>
     <string name="automix_transition_auto">Smart Auto</string>
     <string name="automix_transition_smooth">Smooth Crossfade</string>
     <string name="automix_transition_vinyl_brake">Vinyl Brake</string>
     <string name="automix_transition_bass_swap">Club Bass-Swap</string>
     <string name="automix_transition_filter_sweep">Filter Sweep</string>
     <string name="automix_transition_echo_out">Echo Out</string>
+    <string name="automix_transition_high_pass_intro">High-Pass Intro</string>
+    <string name="automix_transition_reverb_tail">Reverb Tail</string>
+    <string name="automix_transition_tremolo_fade">Tremolo Fade</string>
+    <string name="automix_transition_fade">Fade</string>
+    <string name="automix_transition_rise">Rise</string>
+    <string name="automix_transition_eq">Three-Band EQ Transition</string>
+    <string-array name="automix_additional_effects">
+        <item>@string/automix_transition_bass_swap</item>
+        <item>@string/dj_vocal_swap</item>
+        <item>@string/automix_transition_eq</item>
+        <item>@string/automix_transition_filter_sweep</item>
+        <item>@string/automix_transition_high_pass_intro</item>
+        <item>@string/automix_transition_rise</item>
+        <item>@string/automix_transition_echo_out</item>
+        <item>@string/automix_transition_reverb_tail</item>
+    </string-array>
+    <string-array name="automix_additional_effect_values">
+        <item>bass_swap</item>
+        <item>vocal_swap</item>
+        <item>eq_transition</item>
+        <item>filter_sweep</item>
+        <item>high_pass_intro</item>
+        <item>rise</item>
+        <item>echo_out</item>
+        <item>reverb_tail</item>
+    </string-array>
     <string-array name="automix_transition_styles">
         <item>@string/automix_transition_auto</item>
         <item>@string/automix_transition_smooth</item>
@@ -1246,6 +1280,11 @@
         <item>@string/automix_transition_bass_swap</item>
         <item>@string/automix_transition_filter_sweep</item>
         <item>@string/automix_transition_echo_out</item>
+        <item>@string/automix_transition_high_pass_intro</item>
+        <item>@string/automix_transition_reverb_tail</item>
+        <item>@string/automix_transition_tremolo_fade</item>
+        <item>@string/automix_transition_fade</item>
+        <item>@string/automix_transition_rise</item>
     </string-array>
     <string-array name="automix_transition_style_values">
         <item>auto</item>
@@ -1254,6 +1293,11 @@
         <item>bass_swap</item>
         <item>filter_sweep</item>
         <item>echo_out</item>
+        <item>high_pass_intro</item>
+        <item>reverb_tail</item>
+        <item>tremolo_fade</item>
+        <item>fade</item>
+        <item>rise</item>
     </string-array>
     <string name="sort_for_automix">Sort for Automix</string>
     <string name="sort_for_automix_failed">Could not sort the queue. Check that Automix is enabled and try again after any transition.</string>

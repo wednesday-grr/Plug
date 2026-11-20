@@ -31,6 +31,97 @@ import kotlin.math.sqrt
 
 class DjTransitionAudioProcessorTest {
     @Test
+    fun transitionEqIndependentlyAttenuatesAllThreeBands() {
+        fun measure(frequency: Double, low: Float, mid: Float, high: Float): Double {
+            val processor = configured(C.ENCODING_PCM_FLOAT)
+            processor.setTransitionEq(low, mid, high)
+            processor.queueInput(sineBuffer(frequency, 48_000, 16_384))
+            val output = processor.output.order(ByteOrder.nativeOrder())
+            val samples = FloatArray(output.remaining() / 4) { output.float }
+            return rms(samples.drop(4000).toFloatArray())
+        }
+        assertTrue(measure(80.0, 0f, 1f, 1f) < 0.35)
+        assertTrue(measure(1000.0, 1f, 0f, 1f) < 0.3)
+        assertTrue(measure(10_000.0, 1f, 1f, 0f) < 0.35)
+        assertTrue(measure(10_000.0, 0f, 1f, 1f) > 0.6)
+        assertTrue(measure(80.0, 1f, 1f, 0f) > 0.6)
+    }
+
+    @Test
+    fun eqChangesAreSmoothedAndCoexistWithOtherEffects() {
+        val processor = configured(C.ENCODING_PCM_FLOAT)
+        processor.setTransitionEq(0f, 0f, 0f)
+        processor.setBassGain(0.7f)
+        processor.setFilter(DjTransitionAudioProcessor.Type.LOW_PASS, 8000f)
+        processor.setEcho(100f, wetMix = 0.2f)
+        processor.setReverb(0.2f)
+        processor.queueInput(sineBuffer(1000.0, 48_000, 16_384))
+        val output = processor.output.order(ByteOrder.nativeOrder())
+        while (output.hasRemaining()) assertTrue(output.float in -1f..1f)
+        processor.bypass()
+        processor.flush(AudioProcessor.StreamMetadata.DEFAULT)
+        val dry = sineBuffer(1000.0, 48_000, 1000)
+        val expected = ByteArray(dry.remaining()).also { dry.asReadOnlyBuffer().get(it) }
+        processor.queueInput(dry)
+        val actual = ByteArray(expected.size)
+        processor.output.get(actual)
+        assertArrayEquals(expected, actual)
+    }
+
+    @Test
+    fun filterBassEchoAndReverbComposeAndBypassClearsThem() {
+        val processor = configured(C.ENCODING_PCM_FLOAT)
+        processor.setFilter(DjTransitionAudioProcessor.Type.LOW_PASS, 3000f)
+        processor.setBassGain(0.5f)
+        processor.setVocalAttenuation(0.3f)
+        processor.setEcho(delayMs = 100f, feedback = 0.4f, wetMix = 0.4f)
+        processor.setReverb(0.4f)
+        processor.setOutputGain(0.8f)
+        val input = sineBuffer(1000.0, 48_000, 12_000)
+        processor.queueInput(input)
+        val output = processor.output.order(ByteOrder.nativeOrder())
+        var energy = 0.0
+        while (output.hasRemaining()) {
+            val sample = output.float
+            assertTrue(sample.isFinite() && sample in -1f..1f)
+            energy += kotlin.math.abs(sample)
+        }
+        assertTrue(energy > 0.1)
+        processor.bypass()
+        val dry = sineBuffer(1000.0, 48_000, 1000)
+        val expected = ByteArray(dry.remaining()).also { dry.asReadOnlyBuffer().get(it) }
+        processor.queueInput(dry)
+        val actual = ByteArray(expected.size)
+        processor.output.get(actual)
+        assertArrayEquals(expected, actual)
+    }
+
+    @Test
+    fun reverbProducesDecayingStereoTailAndBypassClearsIt() {
+        val processor = configured(C.ENCODING_PCM_FLOAT)
+        processor.setReverb(1f)
+        val input = ByteBuffer.allocate(12_000 * 8).order(ByteOrder.nativeOrder())
+        repeat(12_000) { frame ->
+            input.putFloat(if (frame == 0) 1f else 0f)
+            input.putFloat(if (frame == 0) 0.5f else 0f)
+        }
+        input.flip()
+        processor.queueInput(input)
+        val output = processor.output.order(ByteOrder.nativeOrder())
+        var tailEnergy = 0.0
+        repeat(12_000) {
+            tailEnergy += kotlin.math.abs(output.float)
+            tailEnergy += kotlin.math.abs(output.float)
+        }
+        assertTrue(tailEnergy > 1.0)
+        processor.bypass()
+        val silence = ByteBuffer.allocate(1024).order(ByteOrder.nativeOrder())
+        processor.queueInput(silence)
+        val bypassed = processor.output
+        while (bypassed.hasRemaining()) assertEquals(0, bypassed.get().toInt())
+    }
+
+    @Test
     fun bypassPreservesPcm16AndFloatStereo() {
         for (encoding in listOf(C.ENCODING_PCM_16BIT, C.ENCODING_PCM_FLOAT)) {
             val processor = configured(encoding)

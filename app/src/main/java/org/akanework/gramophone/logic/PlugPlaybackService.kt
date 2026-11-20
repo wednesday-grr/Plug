@@ -1016,12 +1016,15 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         if (key == "automix_enabled") {
             rebuildPlayerForAudioMode(automixSettings.settings.value.enabled)
         } else if (key == "automix_beatmatch_enabled" || key == "automix_duration_sec" ||
-            key == "automix_transition_style"
+            key == "automix_transition_style" || key == "automix_duration_auto" ||
+            key == "automix_max_skip_sec" || key == "automix_additional_effects" ||
+            key == "automix_effect_intensity"
         ) {
             automixSettings.settings.value.let { settings ->
                 automixPlayer?.updateAutomixConfig(
                     settings.enabled, settings.beatmatchEnabled, settings.durationSeconds,
-                    settings.transitionStyle
+                    settings.transitionStyle, settings.automaticDuration, settings.maxSkipSeconds,
+                    settings.additionalEffects, settings.effectIntensityPercent
                 )
             }
         } else if (key == "offload") {
@@ -1197,7 +1200,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
             )
             automixSettings.settings.value.let {
                 newAutomix.updateAutomixConfig(
-                    it.enabled, it.beatmatchEnabled, it.durationSeconds, it.transitionStyle
+                    it.enabled, it.beatmatchEnabled, it.durationSeconds, it.transitionStyle,
+                    it.automaticDuration, it.maxSkipSeconds, it.additionalEffects,
+                    it.effectIntensityPercent
                 )
             }
             newAutomix.onActiveDeckChanged = { outgoing, incoming ->
@@ -1448,6 +1453,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                         lastHandoff != null && now - lastHandoff in 0 until 6_000L
                     )
                     res.extras.putString("transition_effect", engine?.transitionEffect)
+                    res.extras.putStringArrayList(
+                        "transition_effects", ArrayList(engine?.transitionEffects ?: emptyList())
+                    )
                     res.extras.putBoolean(
                         "beatmatch", engine?.isTransitionBeatmatched == true
                     )

@@ -35,7 +35,7 @@ data class AnalysisKey(val mediaId: String, val modified: Long, val uri: String)
     }
 }
 
-class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 2) {
+class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 3) {
     private val memory = ConcurrentHashMap<AnalysisKey, TrackAnalysis>()
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -43,12 +43,26 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             media_id TEXT NOT NULL, modified INTEGER NOT NULL, uri TEXT NOT NULL,
             bpm REAL, camelot TEXT, beat_offset REAL, confidence REAL NOT NULL,
             window_start INTEGER NOT NULL, window_end INTEGER NOT NULL, vocal_energy REAL,
+            edge_duration INTEGER, leading_silence INTEGER, trailing_silence INTEGER,
+            intro_point INTEGER, outro_skip INTEGER, start_period REAL, start_phase REAL,
+            start_confidence REAL, end_period REAL, end_phase REAL, end_confidence REAL,
+            start_window_end INTEGER, end_window_start INTEGER,
             PRIMARY KEY(media_id, modified, uri))""")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2 && newVersion >= 2) {
             db.execSQL("ALTER TABLE analysis ADD COLUMN vocal_energy REAL")
+        }
+        if (oldVersion < 3 && newVersion >= 3) {
+            for (name in listOf("edge_duration", "leading_silence", "trailing_silence", "intro_point", "outro_skip")) {
+                db.execSQL("ALTER TABLE analysis ADD COLUMN $name INTEGER")
+            }
+            for (name in listOf("start_period", "start_phase", "start_confidence", "end_period", "end_phase", "end_confidence")) {
+                db.execSQL("ALTER TABLE analysis ADD COLUMN $name REAL")
+            }
+            db.execSQL("ALTER TABLE analysis ADD COLUMN start_window_end INTEGER")
+            db.execSQL("ALTER TABLE analysis ADD COLUMN end_window_start INTEGER")
         }
     }
 
@@ -60,7 +74,9 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
         readableDatabase.query(
             "analysis", arrayOf(
                 "bpm", "camelot", "beat_offset", "confidence", "window_start", "window_end",
-                "vocal_energy"
+                "vocal_energy", "edge_duration", "leading_silence", "trailing_silence",
+                "intro_point", "outro_skip", "start_period", "start_phase", "start_confidence",
+                "end_period", "end_phase", "end_confidence", "start_window_end", "end_window_start"
             ),
             "media_id=? AND modified=? AND uri=?", arrayOf(key.mediaId, key.modified.toString(), key.uri),
             null, null, null
@@ -72,6 +88,17 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                 if (cursor.isNull(2)) null else cursor.getDouble(2),
                 cursor.getFloat(3), cursor.getLong(4), cursor.getLong(5),
                 if (cursor.isNull(6)) null else cursor.getFloat(6),
+                if (cursor.isNull(7) || cursor.isNull(8) || cursor.isNull(9)) null else TrackEdges(
+                    cursor.getLong(7), cursor.getLong(8), cursor.getLong(9),
+                    if (cursor.isNull(10)) null else cursor.getLong(10),
+                    if (cursor.isNull(11)) null else cursor.getLong(11),
+                    if (cursor.isNull(12) || cursor.isNull(13) || cursor.isNull(14)) null
+                    else BeatPhaseAligner.Grid(cursor.getDouble(12), cursor.getDouble(13), cursor.getFloat(14)),
+                    if (cursor.isNull(15) || cursor.isNull(16) || cursor.isNull(17)) null
+                    else BeatPhaseAligner.Grid(cursor.getDouble(15), cursor.getDouble(16), cursor.getFloat(17)),
+                    if (cursor.isNull(18)) 0 else cursor.getLong(18),
+                    if (cursor.isNull(19)) 0 else cursor.getLong(19),
+                ),
             )
             memory[key] = result
             return result
@@ -86,6 +113,21 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             put("beat_offset", result.beatOffsetMs); put("confidence", result.confidence)
             put("window_start", result.windowStartMs); put("window_end", result.windowEndMs)
             put("vocal_energy", result.vocalEnergy)
+            result.edgeAnalysis?.let {
+                put("edge_duration", it.durationMs)
+                put("leading_silence", it.leadingSilenceMs)
+                put("trailing_silence", it.trailingSilenceMs)
+                put("intro_point", it.introPointMs)
+                put("outro_skip", it.outroSkipMs)
+                put("start_period", it.startGrid?.beatPeriodMs)
+                put("start_phase", it.startGrid?.phaseOffsetMs)
+                put("start_confidence", it.startGrid?.confidence)
+                put("end_period", it.endGrid?.beatPeriodMs)
+                put("end_phase", it.endGrid?.phaseOffsetMs)
+                put("end_confidence", it.endGrid?.confidence)
+                put("start_window_end", it.startWindowEndMs)
+                put("end_window_start", it.endWindowStartMs)
+            }
         }
         val db = writableDatabase
         db.beginTransaction()

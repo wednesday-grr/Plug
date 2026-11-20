@@ -1,0 +1,80 @@
+name: Build Essentia for Android
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/essentia-android.yml"
+      - ".github/essentia/**"
+  push:
+    branches: [ "beta" ]
+    paths:
+      - ".github/workflows/essentia-android.yml"
+      - ".github/essentia/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Essentia ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+            machine: AArch64
+          - abi: armeabi-v7a
+            target: armv7a-linux-androideabi
+            machine: ARM
+          - abi: x86
+            target: i686-linux-android
+            machine: Intel 80386
+          - abi: x86_64
+            target: x86_64-linux-android
+            machine: Advanced Micro Devices X86-64
+    env:
+      NDK_VERSION: 27.2.12479018
+      ANDROID_API: "23"
+      ESSENTIA_COMMIT: df27f949d7827a43b4afc216fd5c788454b0f8a4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: MTG/essentia
+          ref: df27f949d7827a43b4afc216fd5c788454b0f8a4
+          path: essentia-source
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeigen3-dev pkg-config
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION"
+
+      - name: Configure and build
+        env:
+          ABI: ${{ matrix.abi }}
+          TARGET: ${{ matrix.target }}
+        run: bash .github/essentia/build-android.sh
+
+      - name: Verify architecture and link
+        env:
+          ABI: ${{ matrix.abi }}
+          TARGET: ${{ matrix.target }}
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: bash .github/essentia/verify-android.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: essentia-android-${{ matrix.abi }}
+          path: essentia-artifacts/${{ matrix.abi }}/
+          if-no-files-found: error
+          retention-days: 30

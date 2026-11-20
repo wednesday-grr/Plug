@@ -154,6 +154,12 @@ internal fun djTransitionEffectLabelResource(effect: String?): Int = when (effec
     "echo_out" -> R.string.dj_echo_out
     "vinyl_brake" -> R.string.dj_vinyl_brake
     "vocal_swap" -> R.string.dj_vocal_swap
+    "eq_transition" -> R.string.automix_transition_eq
+    "high_pass_intro" -> R.string.automix_transition_high_pass_intro
+    "reverb_tail" -> R.string.automix_transition_reverb_tail
+    "tremolo_fade" -> R.string.automix_transition_tremolo_fade
+    "fade" -> R.string.automix_transition_fade
+    "rise" -> R.string.automix_transition_rise
     "smooth" -> R.string.dj_crossfade
     else -> R.string.dj_crossfade
 }
@@ -1136,9 +1142,11 @@ class FullBottomSheet
                     if (data.containsKey("next_bpm")) data.getFloat("next_bpm") else null,
                     data.getString("next_key"), data.getFloat("next_speed", 1f)
                 ) else ""
-                val effect = context.getString(
-                    djTransitionEffectLabelResource(data.getString("transition_effect"))
-                )
+                val primaryEffect = data.getString("transition_effect")
+                val effectIds = data.getStringArrayList("transition_effects").orEmpty()
+                val effect = (listOfNotNull(primaryEffect) + effectIds).distinct()
+                    .ifEmpty { listOf("smooth") }
+                    .joinToString(" + ") { context.getString(djTransitionEffectLabelResource(it)) }
                 val beatmatch = data.getBoolean("beatmatch")
                 djStatusText = when {
                     data.getBoolean("mixing") ->

@@ -23,6 +23,8 @@ import androidx.media3.common.MediaMetadata
 import org.akanework.gramophone.logic.utils.automix.AnalysisKey
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysis
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysisCache
+import org.akanework.gramophone.logic.utils.automix.TrackEdges
+import org.akanework.gramophone.logic.utils.automix.BeatPhaseAligner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -39,7 +41,10 @@ class TrackAnalysisCacheTest {
     fun persistsAndInvalidatesByModificationAndUri() {
         val context = RuntimeEnvironment.getApplication()
         val id = AnalysisKey("cache-test", 1, "content://media/track/1")
-        val value = TrackAnalysis(120f, "8A", 500.0, 0.9f, 100, 50_000, 0.72f)
+        val value = TrackAnalysis(120f, "8A", 500.0, 0.9f, 100, 50_000, 0.72f,
+            TrackEdges(200_000, 2000, 1000, 4000, 5000,
+                BeatPhaseAligner.Grid(500.0, 250.0, 0.9f),
+                BeatPhaseAligner.Grid(500.0, 400.0, 0.8f), 30_000, 170_000))
         val initial = TrackAnalysisCache(context)
         try {
             initial.store(id, value)

@@ -62,8 +62,16 @@ class AutomixSettingsTest {
             assertEquals(AutomixSettings(true, false, 5), store.settings.value)
             prefs.edit().putInt("automix_duration_sec", 0).commit()
             assertEquals(1, store.settings.value.durationSeconds)
-            prefs.edit().putInt("automix_duration_sec", 16).commit()
-            assertEquals(15, store.settings.value.durationSeconds)
+            prefs.edit().putInt("automix_duration_sec", 31).commit()
+            assertEquals(30, store.settings.value.durationSeconds)
+            prefs.edit().putBoolean("automix_duration_auto", true).commit()
+            assertEquals(true, store.settings.value.automaticDuration)
+            prefs.edit().putBoolean("automix_duration_auto", false).commit()
+            prefs.edit().putInt("automix_max_skip_sec", 40).commit()
+            assertEquals(30, store.settings.value.maxSkipSeconds)
+            prefs.edit().putInt("automix_max_skip_sec", 0).commit()
+            assertEquals(0, store.settings.value.maxSkipSeconds)
+            prefs.edit().putInt("automix_max_skip_sec", 15).commit()
             prefs.edit().putInt("automix_duration_sec", 7).commit()
             assertEquals(7, store.settings.value.durationSeconds)
             prefs.edit().putString("automix_transition_style", "vinyl_brake").commit()
@@ -73,6 +81,41 @@ class AutomixSettingsTest {
         } finally {
             prefs.unregisterOnSharedPreferenceChangeListener(listener)
         }
+    }
+
+    @Test
+    fun acceptsAllNewTransitionStyles() {
+        val prefs = preferences()
+        val store = AutomixSettingsStore(prefs)
+        for (style in listOf("high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise")) {
+            prefs.edit().putString("automix_transition_style", style).commit()
+            store.onPreferenceChanged("automix_transition_style")
+            assertEquals(style, store.settings.value.transitionStyle)
+        }
+    }
+
+    @Test
+    fun persistsIndependentEffectsAndIgnoresUnknownIds() {
+        val prefs = preferences()
+        val store = AutomixSettingsStore(prefs)
+        prefs.edit().putStringSet("automix_additional_effects",
+            setOf("bass_swap", "echo_out", "reverb_tail", "invalid")).commit()
+        store.onPreferenceChanged("automix_additional_effects")
+        assertEquals(setOf("bass_swap", "echo_out", "reverb_tail"),
+            store.settings.value.additionalEffects)
+        assertEquals(store.settings.value, AutomixSettingsStore(prefs).settings.value)
+    }
+
+    @Test
+    fun persistsAndClampsEffectIntensity() {
+        val prefs = preferences()
+        val store = AutomixSettingsStore(prefs)
+        prefs.edit().putInt("automix_effect_intensity", 40).commit()
+        store.onPreferenceChanged("automix_effect_intensity")
+        assertEquals(40, store.settings.value.effectIntensityPercent)
+        prefs.edit().putInt("automix_effect_intensity", 101).commit()
+        store.onPreferenceChanged("automix_effect_intensity")
+        assertEquals(100, store.settings.value.effectIntensityPercent)
     }
 
     private fun preferences(): SharedPreferences =

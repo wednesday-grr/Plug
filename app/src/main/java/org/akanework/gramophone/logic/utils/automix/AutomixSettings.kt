@@ -29,6 +29,10 @@ data class AutomixSettings(
     val beatmatchEnabled: Boolean,
     val durationSeconds: Int,
     val transitionStyle: String = "auto",
+    val automaticDuration: Boolean = false,
+    val maxSkipSeconds: Int = 15,
+    val additionalEffects: Set<String> = emptySet(),
+    val effectIntensityPercent: Int = 100,
 )
 
 class AutomixSettingsStore(private val preferences: SharedPreferences) {
@@ -37,9 +41,14 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
         private const val ENABLED = "automix_enabled"
         private const val BEATMATCH_ENABLED = "automix_beatmatch_enabled"
         private const val DURATION = "automix_duration_sec"
+        private const val AUTOMATIC_DURATION = "automix_duration_auto"
+        private const val MAX_SKIP = "automix_max_skip_sec"
         private const val TRANSITION_STYLE = "automix_transition_style"
+        private const val ADDITIONAL_EFFECTS = "automix_additional_effects"
+        private const val EFFECT_INTENSITY = "automix_effect_intensity"
         private val TRANSITION_STYLES = setOf(
-            "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out"
+            "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out",
+            "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise"
         )
     }
 
@@ -48,7 +57,8 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
 
     fun onPreferenceChanged(key: String?) {
         if (key == null || key == ENABLED || key == BEATMATCH_ENABLED || key == DURATION ||
-            key == TRANSITION_STYLE
+            key == TRANSITION_STYLE || key == AUTOMATIC_DURATION || key == MAX_SKIP ||
+            key == ADDITIONAL_EFFECTS || key == EFFECT_INTENSITY
         ) {
             mutableSettings.value = readSettings()
         }
@@ -56,18 +66,33 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
 
     private fun readSettings(): AutomixSettings {
         val duration = preferences.getIntStrict(DURATION, 5)
-        if (duration !in 1..15) {
-            Log.w(TAG, "Crossfade duration $duration is outside 1..15 seconds; clamping")
+        val maxSkip = preferences.getIntStrict(MAX_SKIP, 15)
+        val effectIntensity = preferences.getIntStrict(EFFECT_INTENSITY, 100)
+        if (effectIntensity !in 0..100) {
+            Log.w(TAG, "Effect intensity $effectIntensity is outside 0..100; clamping")
+        }
+        if (maxSkip !in 0..30) {
+            Log.w(TAG, "Maximum skip $maxSkip is outside 0..30 seconds; clamping")
+        }
+        if (duration !in 1..30) {
+            Log.w(TAG, "Crossfade duration $duration is outside 1..30 seconds; clamping")
         }
         val transitionStyle = preferences.getString(TRANSITION_STYLE, "auto") ?: "auto"
         if (transitionStyle !in TRANSITION_STYLES) {
             Log.w(TAG, "Unknown transition style $transitionStyle; using auto")
         }
+        val requestedEffects = preferences.getStringSet(ADDITIONAL_EFFECTS, emptySet())?.toSet() ?: emptySet()
+        val unknownEffects = requestedEffects - TransitionEffectPlan.selectableIds
+        if (unknownEffects.isNotEmpty()) Log.w(TAG, "Unknown additional effects: $unknownEffects")
         return AutomixSettings(
             enabled = preferences.getBooleanStrict(ENABLED, false),
             beatmatchEnabled = preferences.getBooleanStrict(BEATMATCH_ENABLED, true),
-            durationSeconds = duration.coerceIn(1, 15),
+            durationSeconds = duration.coerceIn(1, 30),
             transitionStyle = transitionStyle.takeIf { it in TRANSITION_STYLES } ?: "auto",
+            automaticDuration = preferences.getBooleanStrict(AUTOMATIC_DURATION, false),
+            maxSkipSeconds = maxSkip.coerceIn(0, 30),
+            additionalEffects = requestedEffects.intersect(TransitionEffectPlan.selectableIds),
+            effectIntensityPercent = effectIntensity.coerceIn(0, 100),
         )
     }
 }

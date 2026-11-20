@@ -35,6 +35,7 @@ data class TrackAnalysis(
     val windowStartMs: Long,
     val windowEndMs: Long,
     val vocalEnergy: Float? = null,
+    val edgeAnalysis: TrackEdges? = null,
 )
 
 /** Offline analysis; beat grids describe only the analyzed window, not a bar or a whole song. */

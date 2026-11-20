@@ -85,10 +85,38 @@ class AudioAnalysisScheduler(
                     } ?: break
                     val job = launch {
                         try {
-                            if (cache.load(next.second) == null) {
+                            val cached = cache.load(next.second)
+                            if (cached == null || (analyze == null && cached.edgeAnalysis == null)) {
                                 val result = if (analyze != null) analyze.invoke(next.first) else {
-                                    val window = decoder.decode(checkNotNull(next.first.localConfiguration).uri)
-                                    TrackDspAnalyzer.analyze(window.samples, window.startMs)
+                                    val uri = checkNotNull(next.first.localConfiguration).uri
+                                    val base = cached ?: decoder.decode(uri).let {
+                                        TrackDspAnalyzer.analyze(it.samples, it.startMs)
+                                    }
+                                    val edges = try {
+                                        val start = decoder.decode(uri, TrackPcmDecoder.Region.START)
+                                        val end = decoder.decode(uri, TrackPcmDecoder.Region.END)
+                                        val endMs = end.startMs + end.samples.size.toLong() * 1000 / TrackDspAnalyzer.SAMPLE_RATE
+                                        if (start.startMs <= 100 && kotlin.math.abs(end.durationMs - endMs) <= 500) {
+                                            val edges = TrackEdgeAnalyzer.analyze(start.samples, end.samples, end.durationMs)
+                                            fun grid(analysis: TrackAnalysis): BeatPhaseAligner.Grid? {
+                                                val bpm = analysis.bpm ?: return null
+                                                val offset = analysis.beatOffsetMs ?: return null
+                                                return BeatPhaseAligner.Grid(60_000.0 / bpm, offset, analysis.confidence)
+                                            }
+                                            edges?.copy(
+                                                startGrid = grid(TrackDspAnalyzer.analyze(start.samples, start.startMs)),
+                                                endGrid = grid(TrackDspAnalyzer.analyze(end.samples, end.startMs)),
+                                                startWindowEndMs = start.startMs + start.samples.size.toLong() * 1000 / TrackDspAnalyzer.SAMPLE_RATE,
+                                                endWindowStartMs = end.startMs,
+                                            )
+                                        } else null
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        Log.w("AudioAnalysis", "Edge analysis failed for ${next.second.mediaId}", e)
+                                        null
+                                    }
+                                    base.copy(edgeAnalysis = edges)
                                 }
                                 cache.store(next.second, result)
                             }

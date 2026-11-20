@@ -25,6 +25,11 @@ import kotlin.math.sin
 object AutomixMath {
     data class Volumes(val outgoing: Float, val incoming: Float)
 
+    fun automaticDurationMs(bpm: Float?): Long {
+        val validBpm = bpm?.takeIf { it.isFinite() && it in 30f..300f } ?: return 5000L
+        return (32f * 60_000f / validBpm).toLong().coerceIn(1000L, 30_000L)
+    }
+
     fun equalPower(progress: Float): Volumes {
         require(progress.isFinite()) { "Crossfade progress must be finite" }
         val angle = progress.coerceIn(0f, 1f) * PI / 2.0

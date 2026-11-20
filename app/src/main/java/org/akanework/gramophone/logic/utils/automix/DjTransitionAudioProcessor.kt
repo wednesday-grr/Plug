@@ -46,6 +46,11 @@ class DjTransitionAudioProcessor(
         val dryGain: Float,
         val vocalAttenuation: Float,
         val outputGain: Float,
+        val reverbEnabled: Boolean,
+        val reverbWet: Float,
+        val eqLow: Float,
+        val eqMid: Float,
+        val eqHigh: Float,
         val version: Long,
         val stateVersion: Long,
         val bassStateVersion: Long,
@@ -64,7 +69,7 @@ class DjTransitionAudioProcessor(
     @Volatile
     private var request = Request(
         null, 0f, 0f, 1f, false, 375f, 0.45f, 0f, 1f, 0f, 1f,
-        0L, 0L, 0L, 0L, 0L,
+        false, 0f, 1f, 1f, 1f, 0L, 0L, 0L, 0L, 0L,
     )
     private var appliedVersion = -1L
     private var appliedStateVersion = -1L
@@ -89,6 +94,12 @@ class DjTransitionAudioProcessor(
     private var vocalCoefficients: Coefficients? = null
     private val vocalZ1 = DoubleArray(2)
     private val vocalZ2 = DoubleArray(2)
+    private var reverbBuffers = emptyArray<DoubleArray>()
+    private val reverbPositions = IntArray(4)
+    private val eqZ1 = Array(3) { DoubleArray(2) }
+    private val eqZ2 = Array(3) { DoubleArray(2) }
+    private var eqCoefficients = emptyArray<Coefficients>()
+    private val eqMix = DoubleArray(3)
 
     fun setFilter(type: Type, cutoffHz: Float, intensity: Float = 1f) {
         require(cutoffHz.isFinite() && cutoffHz > 0f)
@@ -168,14 +179,33 @@ class DjTransitionAudioProcessor(
         request = previous.copy(outputGain = outputGain, version = previous.version + 1)
     }
 
+    fun setReverb(wetMix: Float) {
+        require(wetMix.isFinite() && wetMix in 0f..1f)
+        val previous = request
+        if (previous.reverbEnabled && previous.reverbWet == wetMix) return
+        request = previous.copy(
+            reverbEnabled = true, reverbWet = wetMix, version = previous.version + 1
+        )
+    }
+
+    fun setTransitionEq(low: Float, mid: Float, high: Float) {
+        require(listOf(low, mid, high).all { it.isFinite() && it in 0f..1f })
+        val previous = request
+        if (previous.eqLow == low && previous.eqMid == mid && previous.eqHigh == high) return
+        request = previous.copy(eqLow = low, eqMid = mid, eqHigh = high,
+            version = previous.version + 1)
+    }
+
     fun bypass() {
         val previous = request
         if (previous.type == null && previous.intensity == 0f && previous.bassGain == 1f &&
             !previous.echoEnabled && previous.vocalAttenuation == 0f &&
-            previous.outputGain == 1f
+            previous.outputGain == 1f && !previous.reverbEnabled &&
+            previous.eqLow == 1f && previous.eqMid == 1f && previous.eqHigh == 1f
         ) return
         request = Request(
             null, 0f, 0f, 1f, false, 375f, DEFAULT_ECHO_FEEDBACK, 0f, 1f, 0f, 1f,
+            false, 0f, 1f, 1f, 1f,
             previous.version + 1, previous.stateVersion + 1,
             previous.bassStateVersion + 1, previous.echoStateVersion + 1,
             previous.vocalStateVersion + 1,
@@ -197,6 +227,8 @@ class DjTransitionAudioProcessor(
         clearBassState()
         clearEchoState()
         clearVocalState()
+        clearReverbState()
+        clearEqState()
         appliedVersion = -1L
         appliedStateVersion = -1L
         appliedBassStateVersion = -1L
@@ -216,7 +248,24 @@ class DjTransitionAudioProcessor(
         val frameCount = remaining / inputBytesPerFrame
 
         val current = request
+        if (eqCoefficients.isEmpty() &&
+            (current.eqLow != 1f || current.eqMid != 1f || current.eqHigh != 1f)
+        ) {
+            eqCoefficients = arrayOf(
+                designBassShelf(0.25f, inputAudioFormat.sampleRate),
+                designVocalAttenuation(0.5f, inputAudioFormat.sampleRate),
+                designHighShelf(inputAudioFormat.sampleRate),
+            )
+        }
         if (current.version != appliedVersion) {
+            if (current.reverbEnabled && reverbBuffers.isEmpty()) {
+                reverbBuffers = doubleArrayOf(0.0297, 0.0371, 0.0411, 0.0437).map {
+                    DoubleArray((it * inputAudioFormat.sampleRate).toInt().coerceAtLeast(1) * 2)
+                }.toTypedArray()
+                reverbPositions.fill(0)
+            } else if (!current.reverbEnabled && reverbBuffers.isNotEmpty()) {
+                clearReverbState()
+            }
             if (current.stateVersion != appliedStateVersion) clearState()
             if (current.type != appliedType || current.cutoffHz != appliedCutoffHz) {
                 coefficients = if (current.type != null && current.intensity > 0f) {
@@ -270,13 +319,18 @@ class DjTransitionAudioProcessor(
         if ((filter == null || current.intensity == 0f) &&
             (bassFilter == null || current.bassGain == 1f) &&
             !current.echoEnabled && current.vocalAttenuation == 0f &&
-            current.outputGain == 1f && outputAudioFormat == inputAudioFormat
+            current.outputGain == 1f && !current.reverbEnabled &&
+            current.eqLow == 1f && current.eqMid == 1f && current.eqHigh == 1f &&
+            eqMix.all { it < 0.00001 } &&
+            outputAudioFormat == inputAudioFormat
         ) {
+            if (eqCoefficients.isNotEmpty()) clearEqState()
             output.put(inputBuffer).flip()
             return
         }
 
         val input = inputBuffer.asReadOnlyBuffer().order(ByteOrder.nativeOrder())
+        val eqSmoothing = 1.0 - exp(-1.0 / (0.01 * inputAudioFormat.sampleRate))
         while (input.hasRemaining()) {
             val left = when (inputAudioFormat.encoding) {
                 C.ENCODING_PCM_16BIT -> {
@@ -292,6 +346,18 @@ class DjTransitionAudioProcessor(
             }
             var processedLeft = processChannel(left, 0, current, filter, bassFilter)
             var processedRight = processChannel(right, 1, current, filter, bassFilter)
+            for (band in eqCoefficients.indices) {
+                val target = when (band) {
+                    0 -> 1f - current.eqLow
+                    1 -> 1f - current.eqMid
+                    else -> 1f - current.eqHigh
+                }
+                eqMix[band] += (target - eqMix[band]) * eqSmoothing
+                val leftEq = process(processedLeft, 0, eqCoefficients[band], eqZ1[band], eqZ2[band])
+                val rightEq = process(processedRight, 1, eqCoefficients[band], eqZ1[band], eqZ2[band])
+                processedLeft += (leftEq - processedLeft) * eqMix[band]
+                processedRight += (rightEq - processedRight) * eqMix[band]
+            }
             if (current.vocalAttenuation > 0f) {
                 val mid = (processedLeft + processedRight) * 0.5
                 val side = (processedLeft - processedRight) * 0.5
@@ -315,6 +381,23 @@ class DjTransitionAudioProcessor(
                 delayPosition++
                 if (delayPosition == appliedDelayFrames) delayPosition = 0
             }
+            if (current.reverbEnabled) {
+                var wetLeft = 0.0
+                var wetRight = 0.0
+                for (i in reverbBuffers.indices) {
+                    val buffer = reverbBuffers[i]
+                    val position = reverbPositions[i]
+                    val left = buffer[position]
+                    val right = buffer[position + 1]
+                    buffer[position] = processedLeft + left * 0.72
+                    buffer[position + 1] = processedRight + right * 0.72
+                    wetLeft += left
+                    wetRight += right
+                    reverbPositions[i] = (position + 2) % buffer.size
+                }
+                processedLeft = processedLeft * (1f - current.reverbWet) + wetLeft * current.reverbWet * 0.25
+                processedRight = processedRight * (1f - current.reverbWet) + wetRight * current.reverbWet * 0.25
+            }
             processedLeft = (processedLeft * current.outputGain).coerceIn(-1.0, 1.0)
             processedRight = (processedRight * current.outputGain).coerceIn(-1.0, 1.0)
             when (outputAudioFormat.encoding) {
@@ -337,6 +420,8 @@ class DjTransitionAudioProcessor(
         clearBassState()
         clearEchoState()
         clearVocalState()
+        clearReverbState()
+        clearEqState()
         coefficients = null
         bassCoefficients = null
         appliedVersion = -1L
@@ -408,6 +493,18 @@ class DjTransitionAudioProcessor(
         vocalZ2.fill(0.0)
     }
 
+    private fun clearEqState() {
+        eqZ1.forEach { it.fill(0.0) }
+        eqZ2.forEach { it.fill(0.0) }
+        eqMix.fill(0.0)
+        eqCoefficients = emptyArray()
+    }
+
+    private fun clearReverbState() {
+        reverbBuffers = emptyArray()
+        reverbPositions.fill(0)
+    }
+
     private fun designVocalAttenuation(
         attenuation: Float,
         sampleRate: Int,
@@ -464,6 +561,22 @@ class DjTransitionAudioProcessor(
             amplitude * ((amplitude + 1.0) - (amplitude - 1.0) * cosine - beta) / a0,
             -2.0 * ((amplitude - 1.0) + (amplitude + 1.0) * cosine) / a0,
             ((amplitude + 1.0) + (amplitude - 1.0) * cosine - beta) / a0,
+        )
+    }
+
+    private fun designHighShelf(sampleRate: Int): Coefficients {
+        val amplitude = 0.5
+        val omega = 2.0 * PI * minOf(6000.0, sampleRate * 0.45) / sampleRate
+        val cosine = cos(omega)
+        val alpha = sin(omega) / 2.0 * sqrt(2.0)
+        val beta = 2.0 * sqrt(amplitude) * alpha
+        val a0 = (amplitude + 1.0) - (amplitude - 1.0) * cosine + beta
+        return Coefficients(
+            amplitude * ((amplitude + 1.0) + (amplitude - 1.0) * cosine + beta) / a0,
+            -2.0 * amplitude * ((amplitude - 1.0) + (amplitude + 1.0) * cosine) / a0,
+            amplitude * ((amplitude + 1.0) + (amplitude - 1.0) * cosine - beta) / a0,
+            2.0 * ((amplitude - 1.0) - (amplitude + 1.0) * cosine) / a0,
+            ((amplitude + 1.0) - (amplitude - 1.0) * cosine - beta) / a0,
         )
     }
 

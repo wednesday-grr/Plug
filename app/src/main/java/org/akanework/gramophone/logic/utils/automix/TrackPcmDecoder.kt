@@ -27,9 +27,10 @@ import kotlinx.coroutines.ensureActive
 import java.nio.ByteOrder
 
 class TrackPcmDecoder(private val context: Context) {
-    data class Window(val samples: FloatArray, val startMs: Long)
+    data class Window(val samples: FloatArray, val startMs: Long, val durationMs: Long)
+    enum class Region { MIDDLE, START, END }
 
-    suspend fun decode(uri: Uri): Window {
+    suspend fun decode(uri: Uri, region: Region = Region.MIDDLE): Window {
         require(uri.scheme == "content" || uri.scheme == "file") { "Only local audio is supported" }
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
@@ -42,14 +43,22 @@ class TrackPcmDecoder(private val context: Context) {
             val inputFormat = extractor.getTrackFormat(track)
             val durationUs = if (inputFormat.containsKey(MediaFormat.KEY_DURATION))
                 inputFormat.getLong(MediaFormat.KEY_DURATION) else 0L
-            val startUs = ((durationUs - WINDOW_US) / 2).coerceAtLeast(0L)
-            val endUs = startUs + WINDOW_US
+            val windowUs = if (region == Region.MIDDLE) WINDOW_US else EDGE_WINDOW_US
+            val startUs = when (region) {
+                Region.MIDDLE -> ((durationUs - windowUs) / 2).coerceAtLeast(0L)
+                Region.START -> 0L
+                Region.END -> {
+                    require(durationUs > 0) { "Track duration is required for end analysis" }
+                    (durationUs - windowUs).coerceAtLeast(0L)
+                }
+            }
+            val endUs = startUs + windowUs
             extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             val decoder = MediaCodec.createDecoderByType(checkNotNull(inputFormat.getString(MediaFormat.KEY_MIME)))
             codec = decoder
             decoder.configure(inputFormat, null, null, 0)
             decoder.start()
-            val result = FloatArray(TrackDspAnalyzer.SAMPLE_RATE * 60)
+            val result = FloatArray(TrackDspAnalyzer.SAMPLE_RATE * (windowUs / 1_000_000L).toInt())
             var size = 0
             var firstUs: Long? = null
             var rate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
@@ -102,14 +111,17 @@ class TrackPcmDecoder(private val context: Context) {
                     var frame = 0L
                     while (buffer.remaining() >= bytes * channels && size < result.size) {
                         var sample = 0.0
+                        var strongest = 0.0
                         repeat(channels) {
-                            sample += if (bytes == 4) buffer.float.toDouble() else buffer.short / 32768.0
+                            val channel = if (bytes == 4) buffer.float.toDouble() else buffer.short / 32768.0
+                            sample += channel
+                            if (kotlin.math.abs(channel) > kotlin.math.abs(strongest)) strongest = channel
                         }
                         val timeUs = info.presentationTimeUs + frame * 1_000_000L / rate
                         frame++
                         if (timeUs < startUs || timeUs >= endUs) continue
                         if (firstUs == null) firstUs = timeUs
-                        sum += sample / channels
+                        sum += if (region == Region.MIDDLE) sample / channels else strongest
                         count++
                         accumulator += TrackDspAnalyzer.SAMPLE_RATE
                         if (accumulator >= rate) {
@@ -126,7 +138,7 @@ class TrackPcmDecoder(private val context: Context) {
                 check(idle < 1000) { "Audio decoder stalled for $uri" }
             }
             check(size > 0 && firstUs != null) { "No decodable PCM in $uri" }
-            return Window(result.copyOf(size), firstUs / 1000)
+            return Window(result.copyOf(size), firstUs / 1000, durationUs / 1000)
         } finally {
             codec?.release()
             extractor.release()
@@ -135,5 +147,6 @@ class TrackPcmDecoder(private val context: Context) {
 
     companion object {
         private const val WINDOW_US = 60_000_000L
+        private const val EDGE_WINDOW_US = 30_000_000L
     }
 }

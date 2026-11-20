@@ -32,19 +32,19 @@ class AutomixEffectSelectorTest {
             AutomixEffectSelector.select(120f, 124f, true, 0.8f, 0.2f)
         )
         assertEquals(
-            "filter_sweep",
+            "rise",
             AutomixEffectSelector.select(120f, 130f, true, 0.8f, 0.9f)
         )
         assertEquals(
-            "echo_out",
+            "fade",
             AutomixEffectSelector.select(120f, 140f, true, 0.8f, 0.9f)
         )
         assertEquals(
-            "vinyl_brake",
+            "fade",
             AutomixEffectSelector.select(120f, 90f, true, 0.8f, 0.9f)
         )
         assertEquals(
-            "echo_out",
+            "fade",
             AutomixEffectSelector.select(120f, null, false, null, null)
         )
     }

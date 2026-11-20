@@ -26,6 +26,14 @@ import kotlin.math.sqrt
 
 class AutomixMathTest {
     @Test
+    fun automaticDurationUsesEightBarsAndCapsAtThirtySeconds() {
+        assertEquals(16_000L, AutomixMath.automaticDurationMs(120f))
+        assertEquals(30_000L, AutomixMath.automaticDurationMs(30f))
+        assertEquals(6_400L, AutomixMath.automaticDurationMs(300f))
+        assertEquals(5_000L, AutomixMath.automaticDurationMs(null))
+        assertEquals(5_000L, AutomixMath.automaticDurationMs(Float.NaN))
+    }
+    @Test
     fun equalPowerPreservesSquaredAmplitude() {
         for (i in 0..100) {
             val volumes = AutomixMath.equalPower(i / 100f)
