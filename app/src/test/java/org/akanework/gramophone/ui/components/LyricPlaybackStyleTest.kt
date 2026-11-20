@@ -1,14 +1,25 @@
 package org.akanework.gramophone.ui.components
 
 import android.app.Application
+import android.app.Activity
+import android.animation.ValueAnimator
 import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.os.Bundle
+import android.os.SystemClock
 import android.text.Spanned
 import android.text.style.RelativeSizeSpan
+import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.preference.PreferenceManager
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.R as MaterialR
 import org.akanework.gramophone.logic.utils.SemanticLyrics
 import org.akanework.gramophone.logic.utils.SpeakerEntity
+import org.akanework.gramophone.logic.ui.MyRecyclerView
+import org.akanework.gramophone.ui.MainActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -16,6 +27,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -37,32 +49,412 @@ class LyricPlaybackStyleTest {
     }
 
     @Test
-    fun wordGrowsOnlyAfterOneSecondAndResetsAtEnd() {
-        val word = SemanticLyrics.Word(1000uL..4000uL, 0..3, false)
-        assertEquals(1f, activeWordScale(word, 1999uL, true), 0.001f)
-        assertEquals(1f, activeWordScale(word, 2000uL, true), 0.001f)
-        assertEquals(1.12f, activeWordScale(word, 2200uL, true), 0.001f)
+    fun longWordsArePreparedAndGrowAtTheirOwnStart() {
+        val words = listOf(
+            SemanticLyrics.Word(0uL..1000uL, 0..2, false),
+            SemanticLyrics.Word(1000uL..4000uL, 4..7, false),
+            SemanticLyrics.Word(4000uL..5001uL, 9..12, false),
+            SemanticLyrics.Word(5001uL, null, 14..16, false)
+        )
+        val prepared = prepareLongLyricWords(words)
+        assertNull(prepared[0])
+        assertNull(prepared[3])
+        val word = prepared[1]!!
+        assertEquals(1f, activeWordScale(word, 999uL, true), 0.001f)
+        assertEquals(1f, activeWordScale(word, 1000uL, true), 0.001f)
+        assertEquals(1.06f, activeWordScale(word, 1100uL, true), 0.001f)
+        assertEquals(1.12f, activeWordScale(word, 1200uL, true), 0.001f)
         assertEquals(1.06f, activeWordScale(word, 3900uL, true), 0.001f)
+        assertEquals(1f, activeWordScale(word, 4000uL, true), 0.001f)
         assertEquals(1f, activeWordScale(word, 4001uL, true), 0.001f)
-        assertEquals(1.12f, activeWordScale(word, 2000uL, false), 0.001f)
+        assertEquals(1.06f, activeWordScale(prepared[2], 4100uL, true), 0.001f)
+        assertEquals(1.12f, activeWordScale(word, 1000uL, false), 0.001f)
         assertEquals(1f, activeWordScale(null, 2200uL, true), 0.001f)
     }
 
     @Test
-    fun overlappingBackgroundLinesFollowPrimaryTogether() {
+    fun newRendererPreparesOnlyLongWordGeometryPerWord() {
+        val context = RuntimeEnvironment.getApplication()
+        val timed = line("one two three", 1000uL, 5000uL, null).copy(words = mutableListOf(
+            SemanticLyrics.Word(1000uL..2500uL, 0..2, false),
+            SemanticLyrics.Word(2500uL..3000uL, 4..6, false),
+            SemanticLyrics.Word(3000uL..5000uL, 8..12, false)
+        ))
+        val item = NewLyricsView(context, null)
+            .buildSpForMeasure(SemanticLyrics.SyncedLyrics(listOf(timed)), 800).second.single()
+        assertEquals(3, item.longWords.size)
+        assertEquals(0..2, item.longWords[0]?.word?.charRange)
+        assertNull(item.longWords[1])
+        assertEquals(8..12, item.longWords[2]?.word?.charRange)
+        assertTrue(item.longWords[0]!!.bounds.width() > 0f)
+        assertTrue(item.longWords[2]!!.bounds.width() > 0f)
+    }
+
+    @Test
+    fun automixSplitShowsBothLyricsAndReturnsToWinner() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).get()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(activity)
+        val oldAnimation = prefs.getBoolean("lyric_no_animation", false)
+        val oldRenderer = prefs.getBoolean("lyric_ui_v2", true)
+        prefs.edit().putBoolean("lyric_no_animation", true).putBoolean("lyric_ui_v2", true).commit()
+        try {
+            val view = LyricsView(activity, null)
+            val original = SemanticLyrics.SyncedLyrics(listOf(line("old", 0uL, 5000uL, null)))
+            val incoming = SemanticLyrics.SyncedLyrics(listOf(line("new", 0uL, 5000uL, null)))
+            view.updateLyrics(original)
+            view.measure(View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY))
+            view.layout(0, 0, 800, 800)
+            val main = view.findViewById<NewLyricsView>(org.akanework.gramophone.R.id.lyric_view)
+            val event = Bundle().apply {
+                putBoolean("fading", true)
+                putString("incoming_id", "next")
+                putLong("position", 1200)
+                putLong("outgoing_position", 4000)
+                putLong("sample_time", SystemClock.elapsedRealtime())
+                putBoolean("lyrics_updated", true)
+                putParcelable("lyrics", incoming)
+            }
+
+            view.updateAutomixLyrics(event)
+            val incomingContainer = view.getChildAt(view.childCount - 1) as FrameLayout
+            val second = incomingContainer.findViewById<NewLyricsView>(org.akanework.gramophone.R.id.lyric_view)
+            assertEquals(400, main.layoutParams.height)
+            assertEquals(400, incomingContainer.layoutParams.height)
+            assertEquals(4000uL, main.instance.getCurrentPosition())
+            assertEquals(1200uL, second.instance.getCurrentPosition())
+            view.updateAutomixLyrics(Bundle().apply {
+                putBoolean("fading", false)
+                putBoolean("handoff", true)
+            })
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, main.layoutParams.height)
+            val lyricsField = NewLyricsView::class.java.getDeclaredField("lyrics").apply { isAccessible = true }
+            assertEquals(incoming, lyricsField.get(main))
+            assertEquals(4, view.childCount)
+        } finally {
+            prefs.edit().putBoolean("lyric_no_animation", oldAnimation)
+                .putBoolean("lyric_ui_v2", oldRenderer).commit()
+        }
+    }
+
+    @Test
+    fun automixSplitAnimatesWithoutJumpAndRestoresOnCancel() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).get()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(activity)
+        val oldAnimation = prefs.getBoolean("lyric_no_animation", false)
+        val oldRenderer = prefs.getBoolean("lyric_ui_v2", true)
+        prefs.edit().putBoolean("lyric_no_animation", false).putBoolean("lyric_ui_v2", true).commit()
+        try {
+            val view = LyricsView(activity, null)
+            val original = SemanticLyrics.SyncedLyrics(listOf(line("old", 0uL, 5000uL, null)))
+            view.updateLyrics(original)
+            view.measure(View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY))
+            view.layout(0, 0, 800, 800)
+            val main = view.findViewById<NewLyricsView>(org.akanework.gramophone.R.id.lyric_view)
+            val animatorField = LyricsView::class.java.getDeclaredField("splitAnimator").apply { isAccessible = true }
+            val event = Bundle().apply {
+                putBoolean("fading", true)
+                putString("incoming_id", "next")
+                putLong("sample_time", SystemClock.elapsedRealtime())
+            }
+            view.updateAutomixLyrics(event)
+            (animatorField.get(view) as ValueAnimator).end()
+            val incoming = view.getChildAt(view.childCount - 1) as FrameLayout
+            assertEquals(400, main.layoutParams.height)
+            assertEquals(400, (incoming.layoutParams as FrameLayout.LayoutParams).topMargin)
+            view.updateAutomixLyrics(Bundle().apply { putBoolean("handoff", true) })
+            assertEquals(0, (main.layoutParams as FrameLayout.LayoutParams).topMargin)
+            assertEquals(400, (incoming.layoutParams as FrameLayout.LayoutParams).topMargin)
+            (animatorField.get(view) as ValueAnimator).currentPlayTime = 200
+            assertTrue((main.layoutParams as FrameLayout.LayoutParams).topMargin < 0)
+            assertTrue((incoming.layoutParams as FrameLayout.LayoutParams).topMargin in 1..399)
+            view.updateAutomixLyrics(event)
+            (animatorField.get(view) as ValueAnimator).end()
+            view.updateAutomixLyrics(Bundle().apply { putBoolean("handoff", false) })
+            (animatorField.get(view) as ValueAnimator).end()
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, main.layoutParams.height)
+            val lyricsField = NewLyricsView::class.java.getDeclaredField("lyrics").apply { isAccessible = true }
+            assertEquals(original, lyricsField.get(main))
+        } finally {
+            prefs.edit().putBoolean("lyric_no_animation", oldAnimation)
+                .putBoolean("lyric_ui_v2", oldRenderer).commit()
+        }
+    }
+
+    @Test
+    fun automixSplitSupportsLegacyRendererAndCancellation() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).get()
+        activity.setTheme(MaterialR.style.Theme_MaterialComponents)
+        val prefs = PreferenceManager.getDefaultSharedPreferences(activity)
+        val oldAnimation = prefs.getBoolean("lyric_no_animation", false)
+        val oldRenderer = prefs.getBoolean("lyric_ui_v2", true)
+        prefs.edit().putBoolean("lyric_no_animation", true).putBoolean("lyric_ui_v2", false).commit()
+        try {
+            val view = LyricsView(activity, null)
+            val original = SemanticLyrics.SyncedLyrics(listOf(line("old", 0uL, 5000uL, null)))
+            val incoming = SemanticLyrics.SyncedLyrics(listOf(line("new", 0uL, 5000uL, null)))
+            view.updateLyrics(original)
+            view.measure(View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY))
+            view.layout(0, 0, 800, 800)
+            view.updateAutomixLyrics(Bundle().apply {
+                putBoolean("fading", true)
+                putString("incoming_id", "next")
+                putLong("position", 1200)
+                putLong("outgoing_position", 4000)
+                putLong("sample_time", SystemClock.elapsedRealtime())
+                putBoolean("lyrics_updated", true)
+                putParcelable("lyrics", incoming)
+            })
+            val main = view.findViewById<MyRecyclerView>(org.akanework.gramophone.R.id.recycler_view)
+            val container = view.getChildAt(view.childCount - 1) as FrameLayout
+            val secondary = container.findViewById<MyRecyclerView>(org.akanework.gramophone.R.id.recycler_view)
+            val primaryAdapter = main.adapter as LegacyLyricsAdapter
+            val secondaryAdapter = secondary.adapter as LegacyLyricsAdapter
+            assertEquals(400, main.layoutParams.height)
+            assertEquals(400, container.layoutParams.height)
+            assertEquals(4000uL, primaryAdapter.callback!!.getCurrentPosition())
+            assertEquals(1200uL, secondaryAdapter.callback!!.getCurrentPosition())
+            val holder = secondaryAdapter.onCreateViewHolder(container, 0)
+            secondaryAdapter.onBindViewHolder(holder, 0, mutableListOf())
+            assertEquals("new", holder.lyricTextView.text.toString())
+            view.updateAutomixLyrics(Bundle().apply { putBoolean("handoff", false) })
+            val primaryHolder = primaryAdapter.onCreateViewHolder(FrameLayout(activity), 0)
+            primaryAdapter.onBindViewHolder(primaryHolder, 0, mutableListOf())
+            assertEquals("old", primaryHolder.lyricTextView.text.toString())
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, main.layoutParams.height)
+        } finally {
+            prefs.edit().putBoolean("lyric_no_animation", oldAnimation)
+                .putBoolean("lyric_ui_v2", oldRenderer).commit()
+        }
+    }
+
+    @Test
+    fun legacyBackgroundRowsAnimateTogetherAndSnapWhenPaused() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setTheme(MaterialR.style.Theme_MaterialComponents)
+        val container = FrameLayout(activity)
+        activity.setContentView(container)
+        var position = 900uL
+        var playing = true
+        val adapter = LegacyLyricsAdapter(activity)
+        adapter.callback = object : NewLyricsView.Callbacks {
+            override fun getCurrentPosition() = position
+            override fun isPlaying() = playing
+            override fun speed() = 1f
+            override fun destroy() {}
+        }
+        adapter.updateLyricStatus()
+        val lyrics = SemanticLyrics.SyncedLyrics(listOf(
+            line("lead", 1000uL, 4000uL, null),
+            line("one", 1200uL, 2000uL, SpeakerEntity.VoiceBackground),
+            line("two", 2500uL, 3500uL, SpeakerEntity.VoiceBackground)
+        ))
+        adapter.updateLyrics(lyrics)
+        val holders = listOf(adapter.onCreateViewHolder(container, 0), adapter.onCreateViewHolder(container, 0))
+        holders.forEachIndexed { index, holder ->
+            container.addView(holder.itemView)
+            adapter.onBindViewHolder(holder, index + 1, mutableListOf())
+        }
+        container.measure(View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY))
+        container.layout(0, 0, 800, 800)
+        adapter.registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
+            override fun onItemRangeChanged(positionStart: Int, itemCount: Int, payload: Any?) {
+                if (positionStart in 1..2) adapter.onBindViewHolder(
+                    holders[positionStart - 1], positionStart, mutableListOf(payload!!)
+                )
+            }
+        })
+        adapter.updateLyricPositionFromPlaybackPos()
+        position = 1000uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        assertTrue(holders.all { it.backgroundAnimator != null })
+        holders.forEach {
+            assertEquals(400L, it.backgroundAnimator!!.duration)
+            it.backgroundAnimator!!.currentPlayTime = 200L
+        }
+        assertTrue(
+            holders.all { it.lyricCard.alpha > 0f && it.lyricCard.alpha < 1f })
+        holders.forEach { it.backgroundAnimator!!.end() }
+        assertTrue(holders.all { it.lyricCard.visibility == View.VISIBLE && it.backgroundAnimator == null })
+        playing = false
+        position = 3501uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        assertTrue(holders.all { it.lyricCard.visibility == View.GONE && it.backgroundAnimator == null })
+        activity.finish()
+    }
+
+    @Test
+    fun overlappingBackgroundLinesStartAndEndTogether() {
         val primary = line("lead", 1000uL, 4000uL, null)
-        val bg1 = line("one", 1200uL, 1800uL, SpeakerEntity.VoiceBackground)
+        val bg1 = line("one", 1200uL, 2700uL, SpeakerEntity.VoiceBackground)
         val bg2 = line("two", 2500uL, 3000uL, SpeakerEntity.Voice2Background)
         val later = line("later", 5000uL, 6000uL, SpeakerEntity.VoiceBackground)
         val lines = listOf(primary, bg1, bg2, later)
         assertFalse(lyricBackgroundVisible(bg1, lines, 999uL))
+        assertTrue(lyricBackgroundVisible(bg1, lines, 1000uL))
+        assertTrue(lyricBackgroundVisible(bg2, lines, 1000uL))
         assertTrue(lyricBackgroundVisible(bg1, lines, 2000uL))
         assertTrue(lyricBackgroundVisible(bg2, lines, 2000uL))
+        assertTrue(lyricBackgroundVisible(bg1, lines, 2600uL))
+        assertTrue(lyricBackgroundVisible(bg2, lines, 2600uL))
+        assertTrue(lyricBackgroundVisible(bg1, lines, 2800uL))
+        assertTrue(lyricBackgroundVisible(bg2, lines, 2800uL))
+        assertTrue(lyricBackgroundVisible(bg1, lines, 3000uL))
+        assertFalse(lyricBackgroundVisible(bg1, lines, 3001uL))
+        assertFalse(lyricBackgroundVisible(bg2, lines, 3001uL))
         assertFalse(lyricBackgroundVisible(later, lines, 2000uL))
         assertFalse(lyricBackgroundVisible(bg1, lines, 4001uL))
         assertTrue(lyricBackgroundVisible(primary, lines, 0uL))
         val instrumental = line("• •", 1000uL, 4000uL, null)
-        assertFalse(lyricBackgroundVisible(bg1, listOf(instrumental, bg1), 2000uL))
+        assertFalse(lyricBackgroundVisible(bg1, listOf(instrumental, bg1), 2800uL))
+        assertTrue(lyricBackgroundVisible(bg1, listOf(instrumental, bg1), 1200uL))
+    }
+
+    @Test
+    fun backgroundContinuesAfterPrimaryAndEndsAtItsOwnTime() {
+        val primary = line("lead", 1000uL, 2000uL, null)
+        val backing = line("back", 1500uL, 4000uL, SpeakerEntity.VoiceBackground)
+        val next = line("next", 2500uL, 3000uL, null)
+        val future = line("future", 5000uL, 6000uL, SpeakerEntity.VoiceBackground)
+        val lines = listOf(primary, backing, next, future)
+        assertFalse(lyricBackgroundVisible(backing, lines, 999uL))
+        assertTrue(lyricBackgroundVisible(backing, lines, 1000uL))
+        assertTrue(lyricBackgroundVisible(backing, lines, 2001uL))
+        assertTrue(lyricBackgroundVisible(backing, lines, 3500uL))
+        assertTrue(lyricBackgroundVisible(backing, lines, 4000uL))
+        assertFalse(lyricBackgroundVisible(backing, lines, 4001uL))
+        assertFalse(lyricBackgroundVisible(future, lines, 3500uL))
+        assertTrue(lyricBackgroundVisible(backing, lines, 1500uL))
+    }
+
+    @Test
+    fun overlappingPrimaryGroupsDoNotExtendEachOther() {
+        val first = line("first", 1000uL, 2000uL, null)
+        val firstBg = line("first backing", 1500uL, 5000uL, SpeakerEntity.VoiceBackground)
+        val second = line("second", 2500uL, 4000uL, null)
+        val secondBg = line("second backing", 3000uL, 3500uL, SpeakerEntity.VoiceBackground)
+        val translation = line("translation", 2500uL, 4000uL, null).copy(isTranslated = true)
+        val lines = listOf(first, firstBg, second, translation, secondBg)
+        assertTrue(lyricBackgroundVisible(firstBg, lines, 4000uL))
+        assertFalse(lyricBackgroundVisible(secondBg, lines, 4000uL))
+        assertFalse(lyricBackgroundVisible(secondBg, lines, 2499uL))
+        assertTrue(lyricBackgroundVisible(secondBg, lines, 2500uL))
+        assertTrue(lyricBackgroundVisible(firstBg, lines, 1500uL))
+    }
+
+    @Test
+    fun sourceGroupKeepsLateBackingWithItsOriginalLead() {
+        val first = line("first", 1000uL, 2000uL, null)
+        val early = line("early", 1500uL, 2500uL, SpeakerEntity.VoiceBackground)
+            .copy(backgroundGroupId = 0, backgroundGroupStart = 1000uL)
+        val second = line("second", 2000uL, 4000uL, null)
+        val late = line("late", 3000uL, 5000uL, SpeakerEntity.VoiceBackground)
+            .copy(backgroundGroupId = 0, backgroundGroupStart = 1000uL)
+        val other = line("other", 2100uL, 3500uL, SpeakerEntity.VoiceBackground)
+            .copy(backgroundGroupId = 1, backgroundGroupStart = 2000uL)
+        val lines = listOf(first, early, second, other, late)
+        assertTrue(lyricBackgroundVisible(late, lines, 1000uL))
+        assertTrue(lyricBackgroundVisible(early, lines, 4000uL))
+        assertFalse(lyricBackgroundVisible(other, lines, 4000uL))
+        assertFalse(lyricBackgroundVisible(early, lines, 5001uL))
+    }
+
+    @Test
+    fun autoScrollFocusesLatestStartedPrimaryOnly() {
+        val lead = line("lead", 1000uL, 2000uL, null)
+        val background = line("back", 1200uL, 5000uL, SpeakerEntity.VoiceBackground)
+        val translation = line("translation", 2000uL, 4000uL, null).copy(isTranslated = true)
+        val instrumental = line("• •", 2200uL, 2900uL, null)
+        val next = line("next", 3000uL, 4000uL, null)
+        val lines = listOf(background, lead, translation, instrumental, next, null)
+        assertEquals(1, primaryLyricScrollIndex(lines, 0uL))
+        assertEquals(1, primaryLyricScrollIndex(lines, 2500uL))
+        assertEquals(1, primaryLyricScrollIndex(lines, 2999uL))
+        assertEquals(4, primaryLyricScrollIndex(lines, 3000uL))
+        assertEquals(1, primaryLyricScrollIndex(lines, 1500uL))
+        assertEquals(4, primaryLyricScrollIndex(lines, 5500uL))
+        assertNull(primaryLyricScrollIndex(listOf(background, translation, instrumental, null), 2500uL))
+    }
+
+    @Test
+    fun legacyAutoScrollDoesNotFocusBackingOrAdvanceDuringGap() {
+        val context = RuntimeEnvironment.getApplication()
+        context.setTheme(MaterialR.style.Theme_MaterialComponents)
+        var position = 1000uL
+        val adapter = LegacyLyricsAdapter(context)
+        adapter.callback = object : NewLyricsView.Callbacks {
+            override fun getCurrentPosition() = position
+            override fun isPlaying() = false
+            override fun speed() = 1f
+            override fun destroy() {}
+        }
+        val lyrics = SemanticLyrics.SyncedLyrics(listOf(
+            line("lead", 1000uL, 2000uL, null),
+            line("back", 1200uL, 5000uL, SpeakerEntity.VoiceBackground),
+            line("translation", 2000uL, 4000uL, null).copy(isTranslated = true),
+            line("• •", 2200uL, 2900uL, null),
+            line("next", 3000uL, 4000uL, null)
+        ))
+        adapter.updateLyrics(lyrics)
+        position = 2500uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        assertEquals(0, adapter.currentFocusPos)
+        position = 3000uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        assertEquals(4, adapter.currentFocusPos)
+        position = 1500uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        assertEquals(0, adapter.currentFocusPos)
+    }
+
+    @Test
+    fun newRendererScrollsToPrimaryEvenWhenBackingContinues() {
+        val context = RuntimeEnvironment.getApplication()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val previous = prefs.getBoolean("lyric_no_animation", false)
+        prefs.edit().putBoolean("lyric_no_animation", true).commit()
+        try {
+            var position = 1000uL
+            val view = NewLyricsView(context, null)
+            view.instance = object : NewLyricsView.Callbacks {
+                override fun getCurrentPosition() = position
+                override fun isPlaying() = false
+                override fun speed() = 1f
+                override fun destroy() {}
+            }
+            val lyrics = SemanticLyrics.SyncedLyrics(listOf(
+                line("lead", 1000uL, 2000uL, null),
+                line("back", 1200uL, 5000uL, SpeakerEntity.VoiceBackground),
+                line("translation", 2000uL, 4000uL, null).copy(isTranslated = true),
+                line("• •", 2200uL, 2900uL, null),
+                line("next", 3000uL, 4000uL, null)
+            ))
+            view.updateLyrics(lyrics)
+            view.measure(View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY))
+            view.layout(0, 0, 800, 800)
+            val bitmap = Bitmap.createBitmap(800, 800, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            view.draw(canvas)
+            assertEquals(0, view.scrollY)
+            position = 2500uL
+            view.draw(canvas)
+            assertEquals(0, view.scrollY)
+            position = 3000uL
+            view.draw(canvas)
+            val items = view.buildSpForMeasure(lyrics, 800).second
+            val expected = items.take(4).sumOf { it.paddingTop + it.layout.height + it.paddingBottom }
+            assertTrue(kotlin.math.abs(expected - view.scrollY) <= 1)
+            position = 1500uL
+            view.draw(canvas)
+            assertEquals(0, view.scrollY)
+            bitmap.recycle()
+        } finally {
+            prefs.edit().putBoolean("lyric_no_animation", previous).commit()
+        }
     }
 
     @Test
@@ -80,20 +472,140 @@ class LyricPlaybackStyleTest {
         val primary = line("lead", 1000uL, 4000uL, null).copy(
             words = mutableListOf(SemanticLyrics.Word(1000uL..4000uL, 0..3, false))
         )
-        val background = line("back", 1200uL, 1800uL, SpeakerEntity.VoiceBackground)
+        val background = line("back", 1200uL, 4500uL, SpeakerEntity.VoiceBackground)
         adapter.updateLyrics(SemanticLyrics.SyncedLyrics(listOf(primary, background)))
         adapter.updateTextColor(Color.GRAY, Color.RED, true)
         val holder = adapter.onCreateViewHolder(FrameLayout(context), 0)
         adapter.onBindViewHolder(holder, 1, mutableListOf())
-        assertEquals(0f, holder.lyricTextView.alpha, 0.001f)
+        assertEquals(android.view.View.GONE, holder.lyricCard.visibility)
         position = 2200uL
         adapter.updateLyricPositionFromPlaybackPos()
         adapter.onBindViewHolder(holder, 1, mutableListOf())
+        assertEquals(android.view.View.VISIBLE, holder.lyricCard.visibility)
         assertEquals(0.75f, holder.lyricTextView.alpha, 0.001f)
         adapter.onBindViewHolder(holder, 0, mutableListOf())
         assertEquals(Color.RED, holder.lyricTextView.currentTextColor)
         assertEquals(1, (holder.lyricTextView.text as Spanned)
             .getSpans(0, 4, RelativeSizeSpan::class.java).size)
+        position = 3500uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        adapter.onBindViewHolder(holder, 1, mutableListOf())
+        assertEquals(android.view.View.VISIBLE, holder.lyricCard.visibility)
+        position = 4001uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        adapter.onBindViewHolder(holder, 1, mutableListOf())
+        assertEquals(android.view.View.VISIBLE, holder.lyricCard.visibility)
+        position = 4501uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        adapter.onBindViewHolder(holder, 1, mutableListOf())
+        assertEquals(android.view.View.GONE, holder.lyricCard.visibility)
+    }
+
+    @Test
+    fun legacyBackgroundGroupStaysVisibleWhileEachLineHighlightsAtItsOwnTime() {
+        val context = RuntimeEnvironment.getApplication()
+        context.setTheme(MaterialR.style.Theme_MaterialComponents)
+        var position = 1000uL
+        val adapter = LegacyLyricsAdapter(context)
+        adapter.callback = object : NewLyricsView.Callbacks {
+            override fun getCurrentPosition() = position
+            override fun isPlaying() = false
+            override fun speed() = 1f
+            override fun destroy() {}
+        }
+        val primary = line("lead", 1000uL, 4000uL, null)
+        val first = line("one", 1200uL, 2000uL, SpeakerEntity.VoiceBackground)
+        val second = line("two", 2500uL, 3500uL, SpeakerEntity.VoiceBackground)
+        adapter.updateLyrics(SemanticLyrics.SyncedLyrics(listOf(primary, first, second)))
+        adapter.updateTextColor(Color.GRAY, Color.RED, true)
+        val holder = adapter.onCreateViewHolder(FrameLayout(context), 0)
+        adapter.updateLyricPositionFromPlaybackPos()
+        adapter.onBindViewHolder(holder, 2, mutableListOf())
+        assertEquals(android.view.View.VISIBLE, holder.lyricCard.visibility)
+        assertEquals(Color.GRAY, holder.lyricTextView.currentTextColor)
+        position = 2600uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        adapter.onBindViewHolder(holder, 1, mutableListOf())
+        assertEquals(android.view.View.VISIBLE, holder.lyricCard.visibility)
+        assertEquals(Color.GRAY, holder.lyricTextView.currentTextColor)
+        adapter.onBindViewHolder(holder, 2, mutableListOf())
+        assertEquals(Color.RED, holder.lyricTextView.currentTextColor)
+        position = 3501uL
+        adapter.updateLyricPositionFromPlaybackPos()
+        adapter.onBindViewHolder(holder, 1, mutableListOf())
+        assertEquals(android.view.View.GONE, holder.lyricCard.visibility)
+    }
+
+    @Test
+    fun backgroundRowsExpandAndCollapseTogetherAndSeekImmediately() {
+        val context = RuntimeEnvironment.getApplication()
+        val primary = line("lead", 1000uL, 5000uL, null)
+        val bg1 = line("one", 1200uL, 3000uL, SpeakerEntity.VoiceBackground)
+        val bg2 = line("two", 2000uL, 4000uL, SpeakerEntity.VoiceBackground)
+        val lyrics = SemanticLyrics.SyncedLyrics(listOf(primary, bg1, bg2))
+        val view = NewLyricsView(context, null)
+        view.instance = object : NewLyricsView.Callbacks {
+            override fun getCurrentPosition() = 0uL
+            override fun isPlaying() = true
+            override fun speed() = 1f
+            override fun destroy() {}
+        }
+        view.updateLyrics(lyrics)
+        val items = view.buildSpForMeasure(lyrics, 800).second
+        fun fraction(i: Int) = view.backgroundRowFraction(i, items[i])
+        view.updateBackgroundRows(items, 900uL, 1000L, true)
+        val hiddenHeight = view.visibleContentHeight(items, 0, 0)
+        assertEquals(0f, fraction(1), 0.001f)
+        assertEquals(0f, fraction(2), 0.001f)
+        view.updateBackgroundRows(items, 1000uL, 1100L, true)
+        view.updateBackgroundRows(items, 1200uL, 1300L, true)
+        assertTrue(fraction(1) > 0f && fraction(1) < 1f)
+        assertEquals(fraction(1), fraction(2), 0.001f)
+        view.updateBackgroundRows(items, 1400uL, 1500L, true)
+        assertEquals(1f, fraction(1), 0.001f)
+        assertEquals(1f, fraction(2), 0.001f)
+        val bothHeight = view.visibleContentHeight(items, 0, 0)
+        assertTrue(bothHeight > hiddenHeight)
+        view.updateBackgroundRows(items, 3001uL, 2901L, true)
+        view.updateBackgroundRows(items, 3251uL, 3151L, true)
+        assertEquals(1f, fraction(1), 0.001f)
+        assertEquals(1f, fraction(2), 0.001f)
+        assertEquals(bothHeight, view.visibleContentHeight(items, 0, 0))
+        view.updateBackgroundRows(items, 4001uL, 3901L, true)
+        view.updateBackgroundRows(items, 4201uL, 4101L, true)
+        assertTrue(fraction(1) > 0f && fraction(1) < 1f)
+        assertEquals(fraction(1), fraction(2), 0.001f)
+        view.updateBackgroundRows(items, 4401uL, 4301L, true)
+        assertEquals(0f, fraction(1), 0.001f)
+        assertEquals(0f, fraction(2), 0.001f)
+        assertEquals(hiddenHeight, view.visibleContentHeight(items, 0, 0))
+        view.updateBackgroundRows(items, 1500uL, 4350L, true)
+        assertEquals(1f, fraction(1), 0.001f)
+        assertEquals(1f, fraction(2), 0.001f)
+        view.updateBackgroundRows(items, 4500uL, 4400L, false)
+        assertEquals(0f, fraction(1), 0.001f)
+        assertEquals(0f, fraction(2), 0.001f)
+        assertEquals(hiddenHeight, view.visibleContentHeight(items, 0, 0))
+    }
+
+    @Test
+    fun backgroundRowRemainsExpandedAfterPrimaryEnds() {
+        val context = RuntimeEnvironment.getApplication()
+        val primary = line("lead", 1000uL, 2000uL, null)
+        val background = line("back", 1500uL, 4000uL, SpeakerEntity.VoiceBackground)
+        val lyrics = SemanticLyrics.SyncedLyrics(listOf(primary, background))
+        val view = NewLyricsView(context, null)
+        view.updateLyrics(lyrics)
+        val items = view.buildSpForMeasure(lyrics, 800).second
+        view.updateBackgroundRows(items, 1800uL, 1000L, true)
+        assertEquals(1f, view.backgroundRowFraction(1, items[1]), 0.001f)
+        view.updateBackgroundRows(items, 2200uL, 1400L, true)
+        assertEquals(1f, view.backgroundRowFraction(1, items[1]), 0.001f)
+        view.updateBackgroundRows(items, 4001uL, 3201L, true)
+        view.updateBackgroundRows(items, 4401uL, 3601L, true)
+        assertEquals(0f, view.backgroundRowFraction(1, items[1]), 0.001f)
+        view.updateBackgroundRows(items, 2500uL, 3650L, false)
+        assertEquals(1f, view.backgroundRowFraction(1, items[1]), 0.001f)
     }
 
     private fun line(text: String, start: ULong, end: ULong, speaker: SpeakerEntity?) =

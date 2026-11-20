@@ -17,6 +17,20 @@ class SpicyLyricsClientTest {
     private val client = SpicyLyricsClient("sl_pk_test")
 
     @Test
+    fun syllablesDoNotSplitAtCommaButKeepOtherBoundaries() {
+        val result = client.parse(
+            """{"Body":{"Type":"Syllable","Content":[{"Lead":{"Syllables":[
+                {"Text":"hello,","StartTime":1,"EndTime":1.5},
+                {"Text":"world!","StartTime":1.6,"EndTime":2},
+                {"Text":"next","StartTime":2.1,"EndTime":2.5}
+            ]}}]}}"""
+        )!!
+        val lines = (result.lyrics as SemanticLyrics.SyncedLyrics).text.filterNot { it.text == "• • •" }
+        assertEquals(listOf("hello, world!", "next"), lines.map { it.text })
+        assertEquals(2, lines.first().words?.size)
+    }
+
+    @Test
     fun parsesSyllablesAndConditionalSpicyLyricsAttribution() {
         val result = client.parse(
             """
@@ -157,6 +171,8 @@ class SpicyLyricsClientTest {
         assertEquals(3, lines.first().words?.size)
         assertEquals(SpeakerEntity.Voice1, lines[1].speaker)
         assertEquals(SpeakerEntity.Voice1Background, lines[2].speaker)
+        assertEquals(0, lines[2].backgroundGroupId)
+        assertEquals(3000uL, lines[2].backgroundGroupStart)
         assertEquals(SpeakerEntity.Voice2, lines[3].speaker)
         assertEquals(SpeakerEntity.Voice2, lines[4].speaker)
         assertEquals(SpeakerEntity.Voice, lines.last().speaker)
@@ -180,6 +196,7 @@ class SpicyLyricsClientTest {
                         "BGLine": true,
                         "OppositeAligned": true
                       }
+
                     ]
                   }
                 }
@@ -191,6 +208,29 @@ class SpicyLyricsClientTest {
         assertEquals(SpeakerEntity.Voice1, lines[1].speaker)
         assertEquals(SpeakerEntity.Voice2Background, lines[2].speaker)
         assertEquals("• • •", lines.last().text)
+    }
+
+    @Test
+    fun retainsLineBackgroundGroupDespiteLaterOverlappingLeads() {
+        val result = client.parse(
+            """{"Body":{"Type":"Line","Content":[
+                {"Text":"lead","StartTime":1,"EndTime":2,"Background":[
+                    {"Text":"early","StartTime":1.5,"EndTime":2.5},
+                    {"Text":"late","StartTime":3,"EndTime":5}
+                ]},
+                {"Text":"next","StartTime":2,"EndTime":4,"Background":[
+                    {"Text":"other","StartTime":2.1,"EndTime":3.5}
+                ]}
+            ]}}"""
+        )!!
+        val lines = (result.lyrics as SemanticLyrics.SyncedLyrics).text
+        val early = lines.first { it.text == "early" }
+        val late = lines.first { it.text == "late" }
+        val other = lines.first { it.text == "other" }
+        assertEquals(early.backgroundGroupId, late.backgroundGroupId)
+        assertEquals(1000uL, late.backgroundGroupStart)
+        assertEquals(1, other.backgroundGroupId)
+        assertEquals(2000uL, other.backgroundGroupStart)
     }
 
     @Test

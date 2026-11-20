@@ -104,8 +104,20 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     lateinit var instance: Callbacks
     private val gestureDetector = GestureDetector(context, this)
     private var currentScrollTarget: Int? = null
-    private var currentSmoothScroll: Pair<Pair<Double, Double>, Pair<Float, Float>>? = null
+    private data class SmoothScroll(
+        val startTime: Double, val duration: Double, val start: Float,
+        var target: Float, val targetIndex: Int?
+    )
+    private var currentSmoothScroll: SmoothScroll? = null
     private var delayedScrollAnimation: Pair<Long, Pair<Int, Int>>? = null
+    private data class BackgroundTransition(val from: Float, val to: Float, val startedAt: Long)
+    private val backgroundFractions = mutableMapOf<Int, Float>()
+    private val backgroundTransitions = mutableMapOf<Int, BackgroundTransition>()
+    private var backgroundItems: List<SbItem>? = null
+    private var backgroundGroups = LyricBackgroundGroups(emptyList())
+    private var backgroundStateInitialized = false
+    private var backgroundTimelinePosition: ULong? = null
+    private var backgroundWallTime = 0L
     private var stateOverrides = hashMapOf<Int, Float>()
     private var stateTime = 0uL
     private var isCallbackQueued = false
@@ -249,8 +261,14 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     }
 
     fun updateLyrics(parsedLyrics: SemanticLyrics?) {
+        backgroundGroups = LyricBackgroundGroups((parsedLyrics as? SemanticLyrics.SyncedLyrics)?.text.orEmpty())
         spForRender = null
         spForMeasure = null
+        backgroundItems = null
+        backgroundFractions.clear()
+        backgroundTransitions.clear()
+        backgroundStateInitialized = false
+        backgroundTimelinePosition = null
         requestLayout()
         lyrics = parsedLyrics
         stateOverrides.clear()
@@ -315,6 +333,60 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         translationBackgroundTextPaint.typeface = typeface
     }
 
+    internal fun updateBackgroundRows(items: List<SbItem>, position: ULong, now: Long, playing: Boolean): Boolean {
+        if (backgroundItems !== items) {
+            backgroundItems = items
+            backgroundFractions.clear()
+            backgroundTransitions.clear()
+            backgroundStateInitialized = false
+            backgroundTimelinePosition = null
+        }
+        val previous = backgroundTimelinePosition
+        val wallElapsed = (now - backgroundWallTime).coerceAtLeast(0L)
+        val positionDelta = if (previous != null) abs(position.toLong() - previous.toLong()) else 0L
+        val seek = previous != null && (position < previous || positionDelta > wallElapsed * 4 + 500)
+        var animating = false
+        items.forEachIndexed { index, item ->
+            val line = item.line
+            if (item.speaker?.isBackground != true || line == null) return@forEachIndexed
+            val target = if (backgroundGroups.visible(line, position)) 1f else 0f
+            var transition = backgroundTransitions[index]
+            var current = backgroundFractions[index] ?: target
+            if (transition != null) {
+                val progress = ((now - transition.startedAt).toFloat() /
+                    BACKGROUND_ROW_ANIMATION_MS).coerceIn(0f, 1f)
+                current = transition.from + (transition.to - transition.from) *
+                    scaleColorInterpolator.getInterpolation(progress)
+                if (progress >= 1f) {
+                    backgroundTransitions.remove(index)
+                    transition = null
+                }
+            }
+            if (!backgroundStateInitialized || seek || lyricAnimTime == 0f || !playing) {
+                current = target
+                backgroundTransitions.remove(index)
+            } else if ((transition?.to ?: current) != target) {
+                transition = BackgroundTransition(current, target, now)
+                backgroundTransitions[index] = transition
+            }
+            backgroundFractions[index] = current
+            if (backgroundTransitions.containsKey(index)) animating = true
+        }
+        backgroundStateInitialized = true
+        backgroundTimelinePosition = position
+        backgroundWallTime = now
+        return animating
+    }
+
+    internal fun backgroundRowFraction(index: Int, item: SbItem): Float =
+        if (item.speaker?.isBackground == true && item.line != null) backgroundFractions[index] ?: 0f else 1f
+
+    internal fun visibleContentHeight(items: List<SbItem>, globalTop: Int, globalBottom: Int): Int =
+        globalTop + globalBottom + items.mapIndexed { index, item ->
+            ((item.paddingTop + item.layout.height + item.paddingBottom) *
+                backgroundRowFraction(index, item)).roundToInt()
+        }.sum()
+
     override fun onDrawForChild(canvas: Canvas) {
         val playbackPosition = instance.getCurrentPosition()
         if (posForRender > playbackPosition && posForRender - playbackPosition < 1000uL)
@@ -329,22 +401,28 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             requestLayout()
             return
         }
-        var animating = false
+        val items = spForRender!!.second
+        val now = AnimationUtils.currentAnimationTimeMillis()
+        var animating = updateBackgroundRows(items, posForRender, now, isPlaying)
+        val globalBottom = spForRender!!.first[4]
+        updateChildHeight(visibleContentHeight(items, spForRender!!.first[2], globalBottom))
         var delayedScrollDoneForFrame = false
         val globalPaddingTop = spForRender!!.first[2]
         var heightSoFar = globalPaddingTop.toDouble()
-        var heightSoFarWithoutTranslated = heightSoFar
-        var determineTimeUntilNext = false
-        var timeUntilNext = 0uL // TODO: remove if useless
-        var firstScrollTarget: Int? = null
-        var firstScrollTargetIdx: Int? = null
-        var lastScrollTarget: Int? = null
-        var lastScrollTargetIdx: Int? = null
+        val scrollTargetIndex = primaryLyricScrollIndex(items.map { it.line }, posForRender)
+        var scrollTargetPosition: Int? = null
         canvas.save()
         canvas.translate(globalPaddingHorizontal, globalPaddingTop.toFloat())
         val width = width - paddingLeft - paddingRight - globalPaddingHorizontal * 2
         val cat = AnimationUtils.currentAnimationTimeMillis().toDouble()
         spForRender!!.second.forEachIndexed { i, it ->
+            val rowFraction = backgroundRowFraction(i, it)
+            if (rowFraction <= 0f) return@forEachIndexed
+            if (rowFraction < 1f) {
+                canvas.save()
+                canvas.clipRect(0f, 0f, width, (it.paddingTop + it.layout.height + it.paddingBottom) * rowFraction)
+                canvas.translate(0f, -(it.paddingTop + it.layout.height + it.paddingBottom) * (1f - rowFraction))
+            }
             var spanEnd = -1
             var spanStartGradient = -1
             var realGradientStart = -1
@@ -355,7 +433,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             var lastTs = if (it.isAttributionFooter) 0uL else
                 min(it.line?.end ?: Int.MAX_VALUE.toULong(), Int.MAX_VALUE.toULong())
             var endIsImplicit = !it.isAttributionFooter && it.line?.endIsImplicit != false
-            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.line?.start != null && (!it.line.isTranslated
+            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.speaker?.isBackground != true &&
+                it.line?.start != null && (!it.line.isTranslated
                         && it.theWords == null || it.line.isTranslated && spForRender!!.second
                     .subList(0, i).find { l -> l.line?.start == it.line.start }?.theWords == null)) {
                 val j = spForRender!!.second.subList(i, spForRender!!.second.size).find { l ->
@@ -420,8 +499,6 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     else animPos >= animPosReal)
                     stateOverrides.remove(i)
             }
-            val scrollTarget = !it.isAttributionFooter && it.speaker?.isBackground != true &&
-                posForRender in fadeInStart..(lastTs - timeOffsetForUse.toULong())
             val scaleInProgress = if (it.line == null) 1f else lerpInv(
                 fadeInStart.toFloat(), fadeInEnd.toFloat(),
                 overridePos.toFloat()
@@ -466,28 +543,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 timeOffsetForUse > 0f && it.line != null && isPlaying
             )
                 animating = true
-            if (!it.isAttributionFooter &&
-                it.line?.isTranslated != true && it.speaker?.isBackground != true
-            ) {
-                if (determineTimeUntilNext) {
-                    determineTimeUntilNext = false
-                    timeUntilNext = max(0uL, (it.line?.start ?: 0uL) - posForRender)
-                }
-                heightSoFarWithoutTranslated = heightSoFar
-            }
-            if (scrollTarget && firstScrollTarget == null) {
-                firstScrollTarget = heightSoFarWithoutTranslated.toInt()
-                firstScrollTargetIdx = i
-                determineTimeUntilNext = true
-            }
-            if (!it.isAttributionFooter && posForRender >= fadeInStart && it.line?.isTranslated != true
-                && it.speaker?.isBackground != true
-            ) {
-                lastScrollTarget = heightSoFar.toInt()
-                lastScrollTargetIdx = i
-                if (firstScrollTarget == null)
-                    determineTimeUntilNext = true
-            }
+            if (i == scrollTargetIndex) scrollTargetPosition = heightSoFar.toInt()
             heightSoFar += it.paddingTop.toFloat()
             val culledDown = heightSoFar > scrollY + height
             var delayedScrollOffset = 0
@@ -525,10 +581,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             }
             canvas.translate(0f, it.paddingTop.toFloat() + delayedScrollOffset -
                     (it.layout.height.toFloat() / hlScaleFactor - it.layout.height.toFloat()) / 2)
-            val backgroundVisible = it.line?.let { line ->
-                lyricBackgroundVisible(line, (lyrics as? SemanticLyrics.SyncedLyrics)?.text.orEmpty(), posForRender)
-            } ?: true
-            val culled = !backgroundVisible || culledDown || scrollY - paddingTop > heightSoFar +
+            val culled = culledDown || scrollY - paddingTop > heightSoFar +
                     it.layout.height.toFloat() + it.paddingBottom
             if (!culled) {
                 if (highlight) {
@@ -693,26 +746,23 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     }
                 }
                 val backgroundSave = if (it.speaker?.isBackground == true) {
-                    canvas.saveLayerAlpha(0f, 0f, width, it.layout.height.toFloat(), 192)
+                    canvas.saveLayerAlpha(0f, 0f, width, it.layout.height.toFloat(), (192 * rowFraction).roundToInt())
                 } else null
-                val activeWord = wordIdx?.let { index -> it.theWords?.get(index) }
-                val wordScale = activeWordScale(activeWord, posForRender, lyricAnimTime > 0f)
+                val activeWord = wordIdx?.let { index -> it.longWords.getOrNull(index) }
+                val wordScale = activeWordScale(activeWord?.word, posForRender, lyricAnimTime > 0f)
                 if (activeWord != null && isPlaying &&
-                    posForRender >= activeWord.begin && posForRender <= (activeWord.endInclusive ?: 0uL)
+                    posForRender >= activeWord.word.begin && posForRender <= activeWord.word.end
                 ) animating = true
                 if (wordScale > 1f && activeWord != null) {
-                    val path = Path()
-                    it.layout.getSelectionPath(activeWord.charRange.first, activeWord.charRange.last + 1, path)
-                    val bounds = RectF()
-                    path.computeBounds(bounds, true)
+                    node?.discardDisplayList()
                     canvas.save()
                     @Suppress("DEPRECATION")
-                    canvas.clipPath(path, Region.Op.DIFFERENCE)
+                    canvas.clipPath(activeWord.path, Region.Op.DIFFERENCE)
                     it.layout.draw(canvas)
                     canvas.restore()
                     canvas.save()
-                    canvas.scale(wordScale, wordScale, bounds.centerX(), bounds.centerY())
-                    canvas.clipPath(path)
+                    canvas.scale(wordScale, wordScale, activeWord.bounds.centerX(), activeWord.bounds.centerY())
+                    canvas.clipPath(activeWord.path)
                     it.layout.draw(canvas)
                     canvas.restore()
                 } else if (hasRenderNodes()) {
@@ -736,6 +786,12 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     (it.layout.height.toFloat() / hlScaleFactor - it.layout.height.toFloat()) / 2
                     + it.paddingBottom.toFloat() - delayedScrollOffset)
             heightSoFar += it.layout.height + it.paddingBottom
+            if (rowFraction < 1f) {
+                canvas.restore()
+                val visibleHeight = (it.paddingTop + it.layout.height + it.paddingBottom) * rowFraction
+                canvas.translate(0f, visibleHeight)
+                heightSoFar -= (it.paddingTop + it.layout.height + it.paddingBottom) - visibleHeight
+            }
         }
         //heightSoFar += globalPaddingBottom
         canvas.restore()
@@ -747,17 +803,23 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             isCallbackQueued = true
             if (spForRender!!.first[3] == 1)
                 currentScrollTarget = null
-        } else if (!isCallbackQueued && currentSmoothScroll == null) {
-            val scrollTarget = max(0, (firstScrollTarget ?: lastScrollTarget ?: 0) -
-                    globalPaddingTop)
-            val scrollTargetIndex = firstScrollTargetIdx ?: lastScrollTargetIdx
-            if (scrollTarget != currentScrollTarget) {
+        } else if (!isCallbackQueued) {
+            val scrollTarget = max(0, (scrollTargetPosition ?: globalPaddingTop) - globalPaddingTop)
+            val running = currentSmoothScroll
+            if (running != null && running.targetIndex == scrollTargetIndex) {
+                running.target = scrollTarget.toFloat()
+                currentScrollTarget = scrollTarget
+            } else if (scrollTarget != currentScrollTarget || running != null) {
+                currentScrollTarget = scrollTarget
                 if (lyricAnimTime == 0f) {
+                    currentSmoothScroll = null
                     scrollTo(0, scrollTarget)
                 } else {
-                    currentScrollTarget = scrollTarget
-                    currentSmoothScroll = (AnimationUtils.currentAnimationTimeMillis().toDouble() to
-                            lyricAnimTime.toDouble()) to (scrollY.toFloat() to scrollTarget.toFloat())
+                    currentSmoothScroll = SmoothScroll(
+                        AnimationUtils.currentAnimationTimeMillis().toDouble(),
+                        lyricAnimTime.toDouble(), scrollY.toFloat(), scrollTarget.toFloat(),
+                        scrollTargetIndex
+                    )
                     runAnimatedScroll(false)
                     if (scrollY < scrollTarget) {
                         delayedScrollAnimation = if (scrollTargetIndex != null) AnimationUtils
@@ -922,7 +984,18 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                                 listOf(line)
                         }
                     }.flatten()
-                }, speaker, syncedLine
+                }, speaker, syncedLine,
+                longWords = prepareLongLyricWords(words).map { word ->
+                    if (word == null || word.charRange.first < 0 ||
+                        word.charRange.last < word.charRange.first || word.charRange.last >= sb.length
+                    ) null else {
+                        val path = Path()
+                        layout.getSelectionPath(word.charRange.first, word.charRange.last + 1, path)
+                        val bounds = RectF()
+                        path.computeBounds(bounds, true)
+                        PreparedWordDrawing(word, path, bounds)
+                    }
+                }
             )
         }.toMutableList()
         buildAttributionItem(width)?.let(spLines::add)
@@ -941,7 +1014,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 width,
                 heights.sum() + globalPaddingTop + globalPaddingBottom,
                 globalPaddingTop,
-                if (lyrics is SemanticLyrics.SyncedLyrics) 1 else 0
+                if (lyrics is SemanticLyrics.SyncedLyrics) 1 else 0,
+                globalPaddingBottom
             ), spLines
         )
     }
@@ -984,8 +1058,11 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         val y = e.y
         val x = e.x - globalPaddingHorizontal
         var heightSoFar = spForRender!!.first[2]
-        spForRender!!.second.forEach { item ->
-            val rowTop = heightSoFar + item.paddingTop
+        spForRender!!.second.forEachIndexed { index, item ->
+            val fraction = backgroundRowFraction(index, item)
+            if (fraction <= 0f) return@forEachIndexed
+            val rowTop = heightSoFar + item.paddingTop -
+                (item.paddingTop + item.layout.height + item.paddingBottom) * (1f - fraction)
             val rowBottom = rowTop + item.layout.height
             if (item.isAttributionFooter && y in rowTop.toFloat()..rowBottom.toFloat()) {
                 val lineIndex = item.layout.getLineForVertical((y - rowTop).toInt())
@@ -996,7 +1073,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                         ?.onClick(this)
                 }
             }
-            heightSoFar += item.paddingTop + item.layout.height + item.paddingBottom
+            heightSoFar += ((item.paddingTop + item.layout.height + item.paddingBottom) * fraction).roundToInt()
         }
         return true
     }
@@ -1007,7 +1084,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             val firstTs = it.line?.start ?: ULong.MIN_VALUE
             var lastTs = min(it.line?.end ?: Int.MAX_VALUE.toULong(), Int.MAX_VALUE.toULong())
             var endIsImplicit = it.line?.endIsImplicit != false
-            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.line?.start != null && (!it.line.isTranslated
+            if (Flags.IGNORE_SMALL_ENDTIME_GAPS && it.speaker?.isBackground != true &&
+                it.line?.start != null && (!it.line.isTranslated
                         && it.theWords == null || it.line.isTranslated && spForRender!!.second
                     .subList(0, i).find { l -> l.line?.start == it.line.start }?.theWords == null)) {
                 val j = spForRender!!.second.subList(i, spForRender!!.second.size).find { l ->
@@ -1080,21 +1158,18 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     }
 
     private fun getScrollProgressAt(time: Double): Int {
-        val progress = lerpInv(currentSmoothScroll!!.first.first, currentSmoothScroll!!
-            .first.first + currentSmoothScroll!!.first.second, time).toFloat()
-        val interpolatedProgress = scrollInterpolator.getInterpolation(min(1f,
-            progress))
-        return lerp(currentSmoothScroll!!.second.first, currentSmoothScroll!!
-            .second.second, interpolatedProgress).toInt()
+        val scroll = currentSmoothScroll!!
+        val progress = lerpInv(scroll.startTime, scroll.startTime + scroll.duration, time).toFloat()
+        val interpolatedProgress = scrollInterpolator.getInterpolation(progress.coerceIn(0f, 1f))
+        return lerp(scroll.start, scroll.target, interpolatedProgress).toInt()
     }
 
     override fun computeScrollInner(): Long {
         val cat = AnimationUtils.currentAnimationTimeMillis().toDouble()
         val q = getScrollProgressAt(cat)
-        val q1 = getScrollProgressAt(cat - 1000f)
-        val distance = currentSmoothScroll!!.first.second
-        val velocity = (1000f * (q - q1) * distance).toFloat()
-        if (cat >= currentSmoothScroll!!.first.first + currentSmoothScroll!!.first.second) {
+        val q1 = getScrollProgressAt(cat - 16.0)
+        val velocity = (1000f * (q - q1) / 16f)
+        if (cat >= currentSmoothScroll!!.startTime + currentSmoothScroll!!.duration) {
             currentSmoothScroll = null
         }
         return q.toLong() or velocity.toBits().toLong().shl(32)
@@ -1156,12 +1231,15 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         return false // handled by parent
     }
 
-    data class SbItem(
+    internal data class PreparedWordDrawing(val word: LongLyricWord, val path: Path, val bounds: RectF)
+
+    data class SbItem internal constructor(
         val layout: StaticLayout, val text: SpannableStringBuilder,
         val paddingTop: Int, val paddingBottom: Int, val theWords: List<SemanticLyrics.Word>?,
         val words: List<List<Int>>?, val rlm: List<Int>?, val speaker: SpeakerEntity?,
         val line: SemanticLyrics.LyricLine?,
-        val isAttributionFooter: Boolean = false
+        val isAttributionFooter: Boolean = false,
+        internal val longWords: List<PreparedWordDrawing?> = emptyList()
     )
 
 }

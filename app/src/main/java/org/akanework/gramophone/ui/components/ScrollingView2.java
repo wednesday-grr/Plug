@@ -1871,6 +1871,12 @@ public abstract class ScrollingView2 extends View implements NestedScrollingChil
         mChildMeasuredWidth = width;
     }
 
+    protected void updateChildHeight(int height) {
+        mChildHeight = Math.max(0, height);
+        mHeight = mChildHeight;
+        scrollTo(getScrollX(), getScrollY());
+    }
+
     protected abstract void onLayoutForChild(int l, int t, int r, int b);
 
     protected abstract void onDrawForChild(@NonNull Canvas canvas);

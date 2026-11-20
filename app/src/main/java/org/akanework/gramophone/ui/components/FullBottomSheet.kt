@@ -324,7 +324,7 @@ class FullBottomSheet
         bottomSheetFullQualityDetails = findViewById(R.id.quality_details)
         refreshSettings(null)
         prefs.registerOnSharedPreferenceChangeListener(this)
-        activity.controllerViewModel.customCommandListeners.addCallback(activity.lifecycle) { _, command, _ ->
+        activity.controllerViewModel.customCommandListeners.addCallback(activity.lifecycle) { _, command, args ->
             when (command.customAction) {
                 PlugPlaybackService.SERVICE_TIMER_CHANGED -> updateTimer()
 
@@ -332,6 +332,10 @@ class FullBottomSheet
                     val (parsedLyrics, attribution) =
                         instance?.getLyricsAndAttribution() ?: (null to null)
                     bottomSheetFullLyricView.updateLyrics(parsedLyrics, attribution)
+                }
+
+                PlugPlaybackService.CLIENT_AUTOMIX_LYRICS -> {
+                    bottomSheetFullLyricView.updateAutomixLyrics(args)
                 }
 
                 PlugPlaybackService.SERVICE_GET_AUDIO_FORMAT -> {

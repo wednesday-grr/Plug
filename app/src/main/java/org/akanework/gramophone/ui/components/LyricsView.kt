@@ -19,6 +19,7 @@ package org.akanework.gramophone.ui.components
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.animation.ValueAnimator
 import android.graphics.Color
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.RenderEffect
@@ -26,12 +27,15 @@ import android.graphics.Shader
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.View
 import android.widget.FrameLayout
 import android.view.ViewGroup
 import android.widget.ImageView
 import androidx.core.graphics.Insets
+import androidx.core.os.BundleCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -80,6 +84,27 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
     private var recyclerView: MyRecyclerView? = null
     private var newView: NewLyricsView? = null
+    private var incomingContainer: FrameLayout? = null
+    private var incomingView: NewLyricsView? = null
+    private var incomingAdapter: LegacyLyricsAdapter? = null
+    private var splitAnimator: ValueAnimator? = null
+    private var splitAmount = 0f
+    private var incomingId: String? = null
+    private var incomingLyrics: SemanticLyrics? = null
+    private var incomingAttribution: SpicyLyricsAttribution? = null
+    private var incomingLyricsReady = false
+    private var incomingPosition = 0L
+    private var incomingSampleTime = 0L
+    private var incomingPlaying = false
+    private var incomingSpeed = 1f
+    private var outgoingPosition = 0L
+    private var outgoingSampleTime = 0L
+    private var outgoingPlaying = false
+    private var outgoingSpeed = 1f
+    private var endingSplit = false
+    private var splitHandoff = false
+    private var handoffStartAmount = 1f
+    private var incomingLyricsFromPlayer = false
     private val albumArtBackgrounds = mutableListOf<ImageView>()
     private var backgroundScrim: View? = null
     private var backgroundRequest: Disposable? = null
@@ -125,6 +150,17 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     private fun createView() {
+        val oldAnimator = splitAnimator
+        splitAnimator = null
+        oldAnimator?.cancel()
+        incomingAdapter?.callback?.destroy()
+        incomingView?.instance?.destroy()
+        incomingContainer = null
+        incomingView = null
+        incomingAdapter = null
+        incomingId = null
+        splitAmount = 0f
+        endingSplit = false
         albumArtBackgrounds.forEach { it.animate().cancel() }
         removeAllViews()
         val oldPaddingTop = newView?.paddingTop ?: recyclerView?.paddingTop ?: 0
@@ -156,12 +192,14 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             }
 
             override fun getCurrentPosition(): ULong =
-                activePlayer?.currentPosition?.coerceAtLeast(0L)?.toULong() ?: 0uL
+                if (incomingId != null) sampledPosition(
+                    outgoingPosition, outgoingSampleTime, outgoingPlaying, outgoingSpeed
+                ) else activePlayer?.currentPosition?.coerceAtLeast(0L)?.toULong() ?: 0uL
 
-            override fun isPlaying() = activePlayer?.isPlaying == true
+            override fun isPlaying() = if (incomingId != null) outgoingPlaying else activePlayer?.isPlaying == true
 
             override fun speed(): Float {
-                return activePlayer?.playbackParameters?.speed ?: 1f
+                return if (incomingId != null) outgoingSpeed else activePlayer?.playbackParameters?.speed ?: 1f
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -383,13 +421,18 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        if (key == "lyric_center" || key == "lyric_apple_music_effects")
+        if (key == "lyric_center" || key == "lyric_no_animation" || key == "lyric_apple_music_effects") {
             adapter?.onPrefsChanged()
+            incomingAdapter?.onPrefsChanged()
+        }
         if (key == "lyric_center" || key == "lyric_no_animation" ||
             key == "translation_auto_word" || key == "lyric_text_size" ||
             key == "lyric_apple_music_effects"
         )
+        {
             newView?.onPrefsChanged(key)
+            incomingView?.onPrefsChanged(key)
+        }
         else if (key == "lyric_ui_v2")
             createView()
         if (key == "lyric_apple_music_effects")
@@ -407,10 +450,18 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     fun updateLyricPositionFromPlaybackPos() {
         adapter?.updateLyricPositionFromPlaybackPos()
         newView?.updateLyricPositionFromPlaybackPos()
+        incomingAdapter?.updateLyricPositionFromPlaybackPos()
+        incomingView?.updateLyricPositionFromPlaybackPos()
     }
 
     fun updateLyrics(parsedLyrics: SemanticLyrics?) {
         lyrics = parsedLyrics
+        if (incomingId != null &&
+            (context as? MainActivity)?.getPlayer()?.currentMediaItem?.mediaId == incomingId
+        ) {
+            incomingLyricsFromPlayer = true
+            return
+        }
         adapter?.updateLyrics(lyrics, lyricsAttribution)
         newView?.updateLyrics(lyrics)
     }
@@ -418,7 +469,181 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     fun updateLyrics(parsedLyrics: SemanticLyrics?, attribution: SpicyLyricsAttribution?) {
         lyricsAttribution = attribution
         updateLyrics(parsedLyrics)
-        newView?.updateAttribution(attribution)
+        if (incomingId == null ||
+            (context as? MainActivity)?.getPlayer()?.currentMediaItem?.mediaId != incomingId
+        ) newView?.updateAttribution(attribution)
+    }
+
+    private fun sampledPosition(position: Long, sampleTime: Long, playing: Boolean, speed: Float): ULong {
+        val elapsed = if (playing) (SystemClock.elapsedRealtime() - sampleTime).coerceAtLeast(0) else 0
+        return (position + (elapsed * speed).toLong()).coerceAtLeast(0).toULong()
+    }
+
+    fun updateAutomixLyrics(args: Bundle) {
+        if (!args.getBoolean("fading")) {
+            if (incomingId == null) return
+            outgoingPosition = sampledPosition(
+                outgoingPosition, outgoingSampleTime, outgoingPlaying, outgoingSpeed
+            ).toLong()
+            outgoingPlaying = false
+            incomingPosition = sampledPosition(
+                incomingPosition, incomingSampleTime, incomingPlaying, incomingSpeed
+            ).toLong()
+            incomingSampleTime = SystemClock.elapsedRealtime()
+            endingSplit = true
+            animateSplit(0f, args.getBoolean("handoff"))
+            return
+        }
+        val id = args.getString("incoming_id") ?: return
+        if (incomingId != id || incomingContainer == null) {
+            incomingId = id
+            incomingLyrics = null
+            incomingAttribution = null
+            incomingLyricsReady = false
+            incomingLyricsFromPlayer = false
+            endingSplit = false
+            createIncomingRenderer()
+            animateSplit(1f, false)
+        } else if (endingSplit) {
+            endingSplit = false
+            animateSplit(1f, false)
+        }
+        incomingPosition = args.getLong("position")
+        incomingSampleTime = args.getLong("sample_time")
+        incomingPlaying = args.getBoolean("playing")
+        incomingSpeed = args.getFloat("speed", 1f)
+        outgoingPosition = args.getLong("outgoing_position")
+        outgoingSampleTime = incomingSampleTime
+        outgoingPlaying = args.getBoolean("outgoing_playing")
+        outgoingSpeed = args.getFloat("outgoing_speed", 1f)
+        if (args.getBoolean("lyrics_updated")) {
+            val newLyrics = BundleCompat.getParcelable(args, "lyrics", SemanticLyrics::class.java)
+            val newAttribution = BundleCompat.getParcelable(args, "attribution", SpicyLyricsAttribution::class.java)
+            val changed = !incomingLyricsReady || incomingLyrics != newLyrics || incomingAttribution != newAttribution
+            incomingLyrics = newLyrics
+            incomingAttribution = newAttribution
+            incomingLyricsReady = true
+            if (changed) {
+                incomingView?.updateLyrics(incomingLyrics)
+                incomingView?.updateAttribution(incomingAttribution)
+                incomingAdapter?.updateLyrics(incomingLyrics, incomingAttribution)
+            }
+        }
+        updateLyricPositionFromPlaybackPos()
+    }
+
+    private fun createIncomingRenderer() {
+        incomingAdapter?.callback?.destroy()
+        incomingView?.instance?.destroy()
+        incomingContainer?.let(::removeView)
+        val container = FrameLayout(context)
+        incomingContainer = container
+        addView(container, LayoutParams(LayoutParams.MATCH_PARENT, 0))
+        val callbacks = object : NewLyricsView.Callbacks {
+            override fun getCurrentPosition() = sampledPosition(
+                incomingPosition, incomingSampleTime, incomingPlaying, incomingSpeed
+            )
+            override fun isPlaying() = incomingPlaying
+            override fun speed() = incomingSpeed
+            override fun destroy() {}
+        }
+        if (prefs.getBooleanStrict("lyric_ui_v2", true)) {
+            inflate(context, R.layout.lyric_view_v2, container)
+            incomingView = container.findViewById<NewLyricsView>(R.id.lyric_view).also {
+                it.instance = callbacks
+                it.setPadding(contentPaddingLeft, contentPaddingTop, contentPaddingRight, contentPaddingBottom)
+                it.updateLyrics(null)
+            }
+            incomingAdapter = null
+        } else {
+            inflate(context, R.layout.lyric_view, container)
+            val list = container.findViewById<MyRecyclerView>(R.id.recycler_view)
+            list.setPadding(contentPaddingLeft, contentPaddingTop, contentPaddingRight, contentPaddingBottom)
+            list.addItemDecoration(LyricPaddingDecoration(context))
+            incomingAdapter = LegacyLyricsAdapter(context).also {
+                it.callback = callbacks
+                list.adapter = it
+                it.updateLyrics(null, null)
+            }
+            incomingView = null
+        }
+        appliedTextColors = null
+        applyTextColors()
+        layoutSplit()
+    }
+
+    private fun animateSplit(target: Float, handoff: Boolean) {
+        val oldAnimator = splitAnimator
+        splitAnimator = null
+        oldAnimator?.cancel()
+        splitHandoff = handoff
+        if (handoff) handoffStartAmount = splitAmount
+        if (prefs.getBooleanStrict("lyric_no_animation", false)) {
+            splitAmount = target
+            layoutSplit(handoff)
+            if (target == 0f) finishSplit(handoff)
+            return
+        }
+        val animator = ValueAnimator.ofFloat(splitAmount, target)
+        splitAnimator = animator
+        animator.duration = 400
+        animator.interpolator = android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f)
+        animator.addUpdateListener {
+            splitAmount = it.animatedValue as Float
+            layoutSplit(handoff)
+        }
+        animator.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                if (splitAnimator !== animator) return
+                splitAnimator = null
+                if (target == 0f) finishSplit(handoff)
+            }
+        })
+        animator.start()
+    }
+
+    private fun layoutSplit(handoff: Boolean = false) {
+        val total = height.coerceAtLeast(0)
+        val splitHeight = (total * (1f - splitAmount / 2f)).toInt()
+        val handoffStartHeight = (total * (1f - handoffStartAmount / 2f)).toInt()
+        val handoffProgress = if (handoffStartAmount > 0f)
+            (1f - splitAmount / handoffStartAmount).coerceIn(0f, 1f) else 1f
+        val main = newView ?: recyclerView
+        main?.layoutParams = (main?.layoutParams as? LayoutParams ?: LayoutParams(
+            LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT
+        )).apply {
+            height = if (incomingContainer == null) LayoutParams.MATCH_PARENT
+                else if (handoff) handoffStartHeight else splitHeight
+            topMargin = if (handoff) -(handoffStartHeight * handoffProgress).toInt() else 0
+        }
+        incomingContainer?.layoutParams = LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            if (handoff) total - (handoffStartHeight * (1f - handoffProgress)).toInt()
+            else total - splitHeight
+        ).apply { topMargin = if (handoff) (handoffStartHeight * (1f - handoffProgress)).toInt() else splitHeight }
+    }
+
+    private fun finishSplit(handoff: Boolean) {
+        if (handoff && !incomingLyricsFromPlayer) {
+            lyrics = if (incomingLyricsReady) incomingLyrics else null
+            lyricsAttribution = if (incomingLyricsReady) incomingAttribution else null
+        }
+        incomingContainer?.let(::removeView)
+        incomingContainer = null
+        incomingAdapter = null
+        incomingView = null
+        incomingId = null
+        endingSplit = false
+        splitAmount = 0f
+        layoutSplit()
+        adapter?.updateLyrics(lyrics, lyricsAttribution)
+        newView?.updateLyrics(lyrics)
+        newView?.updateAttribution(lyricsAttribution)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (incomingContainer != null) layoutSplit(splitHandoff)
     }
 
     private fun applyRendererPadding() {
@@ -469,5 +694,8 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         adapter?.updateTextColor(inactive, highlight, active != null)
         newView?.setCustomActiveColor(active)
         newView?.updateTextColor(inactive, highlight, translation)
+        incomingAdapter?.updateTextColor(inactive, highlight, active != null)
+        incomingView?.setCustomActiveColor(active)
+        incomingView?.updateTextColor(inactive, highlight, translation)
     }
 }

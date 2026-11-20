@@ -175,16 +175,22 @@ class SpicyLyricsClient(private val apiKey: String) {
         val sections = (0 until content.length()).mapNotNull(content::optJSONObject)
         val hasDuet = sections.any(::hasOppositeAlignment)
         val lines = mutableListOf<LyricLine>()
-        sections.forEach { section ->
+        sections.forEachIndexed { sectionIndex, section ->
             val sectionOpposite = section.optBooleanAny("OppositeAligned", "oppositeAligned") ||
                 section.optStringAny("VoiceRole", "voiceRole", "Role", "role").isOppositeVoice()
             val lead = section.optJSONObjectAny("Lead", "lead")
             val leadOpposite = sectionOpposite || (lead?.hasOppositeAlignmentFlag() == true)
-            lead?.optJSONArrayAny("Syllables", "syllables")?.let { syllables ->
-                lines += parseSyllableTrack(
+            val leadLines = lead?.optJSONArrayAny("Syllables", "syllables")?.let { syllables ->
+                parseSyllableTrack(
                     syllables,
                     sectionSpeaker(section, lead, leadOpposite, background = false, hasDuet)
                 )
+            }.orEmpty()
+            val groupStart = leadLines.filter { it.speaker?.isBackground != true }.minOfOrNull { it.start }
+            lines += leadLines.map {
+                if (it.speaker?.isBackground == true && groupStart != null)
+                    it.copy(backgroundGroupId = sectionIndex, backgroundGroupStart = groupStart)
+                else it
             }
 
             val background = section.optArrayOrObject("Background", "background")
@@ -196,7 +202,11 @@ class SpicyLyricsClient(private val apiKey: String) {
                 lines += parseSyllableTrack(
                     syllables,
                     sectionSpeaker(section, track, opposite, background = true, hasDuet)
-                )
+                ).map {
+                    if (groupStart != null) it.copy(
+                        backgroundGroupId = sectionIndex, backgroundGroupStart = groupStart
+                    ) else it
+                }
             }
         }
         if (lines.isEmpty()) return null
@@ -282,7 +292,7 @@ class SpicyLyricsClient(private val apiKey: String) {
             if (previous != null && (
                     previous.speaker != word.speaker ||
                         word.startMs - previous.endMs > 1_000 ||
-                        previous.text.lastOrNull() in setOf('.', '?', '!', ',', ';', ':') ||
+                        previous.text.lastOrNull() in setOf('.', '?', '!', ';', ':') ||
                         lineWords.sumOf { it.text.length } + word.text.length > 64
                     )
             ) {
@@ -297,7 +307,7 @@ class SpicyLyricsClient(private val apiKey: String) {
     private fun parseLineContent(body: JSONObject, content: JSONArray): SemanticLyrics? {
         val items = (0 until content.length()).mapNotNull(content::optJSONObject)
         val hasDuet = items.any(::hasOppositeAlignment)
-        val lines = items.flatMap { item ->
+        val lines = items.flatMapIndexed { itemIndex, item ->
             val parentOpposite = item.hasOppositeAlignmentFlag()
             fun parseLine(track: JSONObject, background: Boolean): LyricLine? {
                 val text = track.optStringAny("Text", "text").trim()
@@ -317,8 +327,15 @@ class SpicyLyricsClient(private val apiKey: String) {
                     isTranslated = false
                 )
             }
-            listOfNotNull(parseLine(item, false)) +
-                item.optArrayOrObject("Background", "background").mapNotNull { parseLine(it, true) }
+            val lead = parseLine(item, false)
+            listOfNotNull(lead) +
+                item.optArrayOrObject("Background", "background").mapNotNull { track ->
+                    parseLine(track, true)?.let {
+                        if (lead != null && lead.speaker?.isBackground != true)
+                            it.copy(backgroundGroupId = itemIndex, backgroundGroupStart = lead.start)
+                        else it
+                    }
+                }
         }
         if (lines.isEmpty()) return null
         return SyncedLyrics(addInterludeLines(lines.sortedBy { it.start }, body))

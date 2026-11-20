@@ -6,6 +6,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.os.Build
+import android.os.SystemClock
 import android.text.method.LinkMovementMethod
 import android.util.TypedValue
 import android.view.Gravity
@@ -59,7 +60,12 @@ class LegacyLyricsAdapter(
     private var highlightTextColor = 0
     private var customHighlight = false
     private var playbackPosition = 0uL
-    private var playbackStyles = emptyMap<Int, Triple<Boolean, Int, Int>>()
+    private data class PlaybackStyle(val visible: Boolean, val active: Boolean, val wordStart: Int, val scale: Int)
+    private data class PlaybackPayload(val animateBackground: Boolean)
+    private var playbackStyles = emptyMap<Int, PlaybackStyle>()
+    private var lastPlaybackPosition: ULong? = null
+    private var lastPlaybackUpdate = 0L
+    private var backgroundGroups = LyricBackgroundGroups(emptyList())
     private val interpolator = PathInterpolator(0.4f, 0.2f, 0f, 1f)
     private val lyricList = mutableListOf<Lyric>()
     var currentFocusPos = -1
@@ -105,18 +111,6 @@ class LegacyLyricsAdapter(
             setTextIsSelectable(false)
             customSelectionActionModeCallback = null
             text = lyric.content
-            val word = lyric.line?.words?.lastOrNull {
-                it.begin <= playbackPosition && playbackPosition <= (it.endInclusive ?: it.begin)
-            }
-            val scale = activeWordScale(word, playbackPosition, !forceNoAnimation)
-            if (word != null && scale > 1f && word.charRange.first >= 0 &&
-                word.charRange.last < lyric.content.length
-            ) {
-                text = SpannableString(lyric.content).apply {
-                    setSpan(RelativeSizeSpan(scale), word.charRange.first, word.charRange.last + 1,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
-            }
             gravity = when {
                 lyric.isAttributionFooter -> Gravity.START
                 isLyricCentered || lyric.speaker?.isGroup == true -> Gravity.CENTER
@@ -189,14 +183,103 @@ class LegacyLyricsAdapter(
                     setTextColor(defaultTextColor)
                 }
             }
-            val active = position == currentFocusPos
-            alpha = if (lyric.isBackground && lyric.line != null &&
-                !lyricBackgroundVisible(lyric.line, lyricList.mapNotNull { it.line }, playbackPosition)
-            ) 0f else if (lyric.isBackground) 0.75f else 1f
+            val active = if (lyric.isBackground && lyric.line != null) {
+                playbackPosition in lyric.line.timeRange
+            } else position == currentFocusPos
+            alpha = if (lyric.isBackground) 0.75f else 1f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setRenderEffect(null)
             if (active && !lyric.isTranslation) setTextColor(if (customHighlight) highlightTextColor else Color.WHITE)
             if (active) scaleText(1.03f)
         }
+        val visible = lyric.line?.let { backgroundGroups.visible(it, playbackPosition) } ?: true
+        val animate = payloads.filterIsInstance<PlaybackPayload>().any { it.animateBackground } &&
+            holder.boundPosition == position && holder.lyricCard.isAttachedToWindow
+        updateBackgroundVisibility(holder, position, visible, animate && lyric.isBackground)
+        updateWordEffect(holder, lyric, playbackPosition)
+    }
+
+    private fun updateWordEffect(holder: ViewHolder, lyric: Lyric, position: ULong) {
+        holder.wordFrame?.let { holder.lyricTextView.removeCallbacks(it) }
+        holder.wordFrame = null
+        val wordIndex = lyric.line?.words?.indexOfLast {
+            it.begin <= position && position <= (it.endInclusive ?: it.begin)
+        } ?: -1
+        val word = lyric.longWords.getOrNull(wordIndex)
+        val scale = activeWordScale(word, position, !forceNoAnimation)
+        holder.lyricTextView.text = if (word != null && scale > 1f && word.charRange.first >= 0 &&
+            word.charRange.last >= word.charRange.first && word.charRange.last < lyric.content.length
+        ) {
+            SpannableString(lyric.content).apply {
+                setSpan(RelativeSizeSpan(scale), word.charRange.first, word.charRange.last + 1,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        } else lyric.content
+        if (word != null && !forceNoAnimation && callback?.isPlaying() == true &&
+            holder.lyricTextView.isAttachedToWindow
+        ) {
+            val boundPosition = holder.boundPosition
+            val frame = Runnable {
+                if (holder.boundPosition == boundPosition && holder.lyricTextView.isAttachedToWindow) {
+                    updateWordEffect(holder, lyric, callback?.getCurrentPosition() ?: position)
+                }
+            }
+            holder.wordFrame = frame
+            holder.lyricTextView.postOnAnimation(frame)
+        }
+    }
+
+    private fun updateBackgroundVisibility(holder: ViewHolder, position: Int, visible: Boolean, animate: Boolean) {
+        val card = holder.lyricCard
+        if (holder.boundPosition != position || !animate) {
+            val oldAnimator = holder.backgroundAnimator
+            holder.backgroundAnimator = null
+            oldAnimator?.cancel()
+            holder.boundPosition = position
+            holder.backgroundTarget = visible
+            card.layoutParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            card.alpha = 1f
+            card.visibility = if (visible) VISIBLE else GONE
+            return
+        }
+        if (holder.backgroundTarget == visible) return
+        holder.backgroundTarget = visible
+        val from = if (card.visibility == GONE) 0 else
+            if (holder.backgroundAnimator != null) card.layoutParams.height.coerceAtLeast(0) else card.height
+        val oldAnimator = holder.backgroundAnimator
+        holder.backgroundAnimator = null
+        oldAnimator?.cancel()
+        card.visibility = VISIBLE
+        val width = card.width.takeIf { it > 0 } ?: (card.parent as? View)?.width ?: 0
+        if (width <= 0) {
+            card.layoutParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
+            card.alpha = 1f
+            card.visibility = if (visible) VISIBLE else GONE
+            return
+        }
+        card.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val fullHeight = card.measuredHeight
+        val target = if (visible) fullHeight else 0
+        val animator = ValueAnimator.ofInt(from, target)
+        holder.backgroundAnimator = animator
+        animator.duration = BACKGROUND_ROW_ANIMATION_MS
+        animator.interpolator = interpolator
+        animator.addUpdateListener {
+            val height = it.animatedValue as Int
+            card.layoutParams = card.layoutParams.apply { this.height = height }
+            card.alpha = if (fullHeight > 0) (height.toFloat() / fullHeight).coerceIn(0f, 1f) else 1f
+        }
+        animator.doOnEnd {
+            if (holder.backgroundAnimator === animator) {
+                holder.backgroundAnimator = null
+                card.layoutParams = card.layoutParams.apply { height = ViewGroup.LayoutParams.WRAP_CONTENT }
+                card.alpha = 1f
+                card.visibility = if (visible) VISIBLE else GONE
+            }
+        }
+        animator.start()
     }
 
     private fun TextView.animateText(targetScale: Float, targetColor: Int) {
@@ -248,6 +331,22 @@ class LegacyLyricsAdapter(
     ) : RecyclerView.ViewHolder(view) {
         val lyricTextView: TextView = view.findViewById(R.id.lyric)
         val lyricCard: MaterialCardView = view.findViewById(R.id.cardview)
+        internal var boundPosition = -1
+        internal var backgroundTarget = true
+        internal var backgroundAnimator: ValueAnimator? = null
+        internal var wordFrame: Runnable? = null
+    }
+
+    override fun onViewRecycled(holder: ViewHolder) {
+        val oldAnimator = holder.backgroundAnimator
+        holder.backgroundAnimator = null
+        oldAnimator?.cancel()
+        holder.wordFrame?.let { holder.lyricTextView.removeCallbacks(it) }
+        holder.wordFrame = null
+        holder.boundPosition = -1
+        holder.lyricCard.alpha = 1f
+        holder.lyricCard.layoutParams.height = ViewGroup.LayoutParams.WRAP_CONTENT
+        super.onViewRecycled(holder)
     }
 
     fun updateHighlight(position: Int) {
@@ -360,22 +459,34 @@ class LegacyLyricsAdapter(
 
     fun updateLyricPositionFromPlaybackPos() {
         playbackPosition = callback?.getCurrentPosition() ?: 0uL
-        val lines = lyricList.mapNotNull { it.line }
+        val now = SystemClock.elapsedRealtime()
+        val previous = lastPlaybackPosition
+        val elapsed = (now - lastPlaybackUpdate).coerceAtLeast(0)
+        val seek = previous != null && (playbackPosition < previous ||
+            playbackPosition - previous > (elapsed * speed * 4 + 500).toULong())
+        val animateBackground = previous != null && !seek && !forceNoAnimation &&
+            callback?.isPlaying() == true
+        lastPlaybackPosition = playbackPosition
+        lastPlaybackUpdate = now
         val newStyles = lyricList.mapIndexedNotNull { index, lyric ->
             val line = lyric.line ?: return@mapIndexedNotNull null
-            val word = line.words?.lastOrNull {
+            val wordIndex = line.words?.indexOfLast {
                 it.begin <= playbackPosition && playbackPosition <= (it.endInclusive ?: it.begin)
-            }
+            } ?: -1
+            val word = lyric.longWords.getOrNull(wordIndex)
             val scale = activeWordScale(word, playbackPosition, !forceNoAnimation)
             if (lyric.isBackground || word != null)
-                index to Triple(
-                    lyricBackgroundVisible(line, lines, playbackPosition),
+                index to PlaybackStyle(
+                    backgroundGroups.visible(line, playbackPosition),
+                    lyric.isBackground && playbackPosition in line.timeRange,
                     word?.charRange?.first ?: -1, (scale * 100).toInt()
                 )
             else null
         }.toMap()
         (playbackStyles.keys + newStyles.keys).forEach {
-            if (playbackStyles[it] != newStyles[it]) notifyItemChanged(it)
+            if (playbackStyles[it] != newStyles[it]) {
+                notifyItemChanged(it, PlaybackPayload(animateBackground))
+            }
         }
         playbackStyles = newStyles
         if (lyricList.isNotEmpty()) {
@@ -394,33 +505,9 @@ class LegacyLyricsAdapter(
     }
 
     private fun updateNewIndex(): Int {
-        val position = callback?.getCurrentPosition()?.toLong() ?: 0L
-        val primaryLines = lyricList.indices.filter(::isPrimaryVocalLine)
-        if (primaryLines.isEmpty()) return -1
-        val previous = primaryLines.lastOrNull {
-            lyricList[it].timeStamp!! <= position
-        }
-        val next = primaryLines.firstOrNull {
-            lyricList[it].timeStamp!! > position
-        }
-        val activeInstrumentalBreak = lyricList.indices.lastOrNull { index ->
-            val lyric = lyricList[index]
-            lyric.isInstrumentalBreak() && lyric.timeStamp!! <= position &&
-                lyric.endTime?.let { it >= position } == true
-        }
-        val previousEnded = previous?.let {
-            lyricList[it].endTime?.let { end -> end < position } == true
-        } == true
-        if (activeInstrumentalBreak != null) {
-            val breakStart = lyricList[activeInstrumentalBreak].timeStamp!!
-            val upcomingAfterBreak = primaryLines.firstOrNull {
-                lyricList[it].timeStamp!! > breakStart
-            }
-            if (previous != null && lyricList[previous].timeStamp!! >= breakStart)
-                return previous
-            return upcomingAfterBreak ?: previous ?: -1
-        }
-        return if (previousEnded && next != null) next else previous ?: next ?: -1
+        return primaryLyricScrollIndex(
+            lyricList.map { it.line }, callback?.getCurrentPosition() ?: 0uL
+        ) ?: -1
     }
 
     fun updateLyrics(
@@ -435,12 +522,19 @@ class LegacyLyricsAdapter(
         buildAttributionLyric(attribution)?.let(updatedLyrics::add)
         if (lyricList != updatedLyrics) {
             playbackStyles = emptyMap()
+            lastPlaybackPosition = null
             lyricList.clear()
             lyricList.addAll(updatedLyrics)
+            backgroundGroups = LyricBackgroundGroups(lyricList.mapNotNull { it.line })
             @SuppressLint("NotifyDataSetChanged")
             notifyDataSetChanged()
-            smoothScrollTo(0)
-            updateHighlight(0)
+            val initialFocus = updateNewIndex()
+            if (initialFocus >= 0) {
+                smoothScrollTo(initialFocus, initialFocus == 0)
+                updateHighlight(initialFocus)
+            } else {
+                updateHighlight(-1)
+            }
         }
     }
 
@@ -460,21 +554,9 @@ class LegacyLyricsAdapter(
         var endTime: Long? = null,
         var speaker: SpeakerEntity? = null,
         var isBackground: Boolean = speaker?.isBackground == true,
-        val line: SemanticLyrics.LyricLine? = null
+        val line: SemanticLyrics.LyricLine? = null,
+        val longWords: List<LongLyricWord?> = prepareLongLyricWords(line?.words)
     )
-
-    private fun Lyric.isInstrumentalBreak(): Boolean {
-        if (isAttributionFooter || timeStamp == null) return false
-        val visibleText = content.toString().filterNot(Char::isWhitespace)
-        return visibleText.isNotEmpty() && visibleText.all { it == '•' || it == '·' }
-    }
-
-    private fun isPrimaryVocalLine(position: Int): Boolean {
-        val lyric = lyricList[position]
-        return !lyric.isAttributionFooter && !lyric.isTranslation &&
-            lyric.timeStamp != null && !lyric.isBackground &&
-            lyric.content.isNotBlank() && !lyric.isInstrumentalBreak()
-    }
 
     private fun buildAttributionLyric(attribution: SpicyLyricsAttribution?): Lyric? {
         attribution ?: return null

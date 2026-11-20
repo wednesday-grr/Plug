@@ -196,6 +196,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         const val SERVICE_GET_AUDIO_FORMAT = "get_audio_format"
         const val SERVICE_GET_DJ_METRICS = "get_dj_metrics"
         const val SERVICE_GET_LYRICS = "get_lyrics"
+        const val CLIENT_AUTOMIX_LYRICS = "automix_lyrics"
         const val SERVICE_TIMER_CHANGED = "changed_timer"
         const val SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY = "set_media_items_seamlessly"
         const val SERVICE_SET_MEDIA_ITEMS_ATOMIC = "set_media_items_atomic"
@@ -271,6 +272,91 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
     private val scope = CoroutineScope(Dispatchers.Main)
     private val lastPlaylistLoaded = CompletableDeferred<Unit>()
     private val lyricsFetcher = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
+    private val upcomingLyricsFetcher = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
+    private var upcomingLyricsItem: MediaItem? = null
+    private var upcomingLyricsResult: Pair<SemanticLyrics?, SpicyLyricsAttribution?>? = null
+    private var upcomingLyricsVersion = 0
+    private var upcomingLyricsGeneration = 0
+    private var upcomingLyricsLoadingGeneration: Int? = null
+    private var sentUpcomingLyricsVersion = -1
+    private var sentUpcomingLyricsAt = 0L
+    private var wasLyricsCrossfading = false
+    private var lyricsCrossfadeEngine: AutomixPlayer? = null
+    private var lyricsOutgoingDeck: ExoPlayer? = null
+    private val automixLyricsTick = object : Runnable {
+        override fun run() {
+            updateAutomixLyrics()
+            handler.postDelayed(this, 200L)
+        }
+    }
+
+    private fun updateAutomixLyrics() {
+        val engine = automixPlayer
+        val standby = engine?.upcomingStandbyPlayer
+        val item = standby?.currentMediaItem
+        if (item != upcomingLyricsItem) {
+            upcomingLyricsItem = item
+            upcomingLyricsResult = null
+            upcomingLyricsVersion++
+            upcomingLyricsGeneration++
+            upcomingLyricsLoadingGeneration = null
+        }
+        if (item != null && standby != null && upcomingLyricsResult == null) {
+            val format = standby.currentTracks.getFirstSelectedTrackFormatByType(C.TRACK_TYPE_AUDIO)
+            if (format != null && upcomingLyricsLoadingGeneration == null) {
+                val generation = upcomingLyricsGeneration
+                upcomingLyricsLoadingGeneration = generation
+                val duration = standby.duration.takeIf { it > 0 }
+                upcomingLyricsFetcher.launch {
+                    val result = loadTrackLyrics(item, format, duration)
+                    withContext(Dispatchers.Main) {
+                        if (upcomingLyricsLoadingGeneration == generation) upcomingLyricsLoadingGeneration = null
+                        if (upcomingLyricsGeneration == generation && upcomingLyricsItem == item) {
+                            upcomingLyricsResult = result
+                            upcomingLyricsVersion++
+                        }
+                    }
+                }
+            }
+        }
+        val fading = engine?.isCrossfading == true && standby != null && item != null
+        if (fading && !wasLyricsCrossfading) {
+            lyricsCrossfadeEngine = engine
+            lyricsOutgoingDeck = engine?.activeExoPlayer
+        }
+        if (fading || wasLyricsCrossfading) {
+            val args = Bundle().apply {
+                putBoolean("fading", fading)
+                putString("current_id", engine?.currentMediaItem?.mediaId)
+                if (!fading) putBoolean("handoff", engine != null &&
+                    engine === lyricsCrossfadeEngine && engine.activeExoPlayer !== lyricsOutgoingDeck)
+                if (fading) {
+                    putString("incoming_id", item?.mediaId)
+                    putLong("outgoing_position", engine?.currentPosition?.coerceAtLeast(0) ?: 0L)
+                    putBoolean("outgoing_playing", engine?.isPlaying == true)
+                    putFloat("outgoing_speed", engine?.playbackParameters?.speed ?: 1f)
+                    putLong("position", standby!!.currentPosition.coerceAtLeast(0))
+                    putLong("sample_time", SystemClock.elapsedRealtime())
+                    putBoolean("playing", standby.isPlaying)
+                    putFloat("speed", standby.playbackParameters.speed)
+                    if (upcomingLyricsResult != null && (sentUpcomingLyricsVersion != upcomingLyricsVersion ||
+                            SystemClock.elapsedRealtime() - sentUpcomingLyricsAt >= 2000L)) {
+                        putBoolean("lyrics_updated", true)
+                        putParcelable("lyrics", upcomingLyricsResult?.first)
+                        putParcelable("attribution", upcomingLyricsResult?.second)
+                        sentUpcomingLyricsVersion = upcomingLyricsVersion
+                        sentUpcomingLyricsAt = SystemClock.elapsedRealtime()
+                    }
+                    if (!fading) {
+                        lyricsCrossfadeEngine = null
+                        lyricsOutgoingDeck = null
+                    }
+                }
+            }
+            mediaSession?.broadcastCustomCommand(SessionCommand(CLIENT_AUTOMIX_LYRICS, Bundle.EMPTY), args)
+        }
+        wasLyricsCrossfading = fading
+    }
     private val bitrateFetcher = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
 
     private fun getRepeatCommand() =
@@ -357,6 +443,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         internalPlaybackThread.start()
         playbackHandler = Handler(internalPlaybackThread.looper)
         handler = Handler(Looper.getMainLooper())
+        handler.post(automixLyricsTick)
         mainExecutor = ContextCompat.getMainExecutor(this)
         nm = NotificationManagerCompat.from(this)
         prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
@@ -823,6 +910,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         // Important: this must happen before sending stop() as that changes state ENDED -> IDLE
         lastPlayedManager.save()
         scope.cancel()
+        lyricsFetcher.cancel()
+        upcomingLyricsFetcher.cancel()
+        handler.removeCallbacks(automixLyricsTick)
         audioAnalysis.close()
         endedWorkaroundPlayer!!.stop()
         handler.removeCallbacks(timer)
@@ -900,6 +990,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
 
     override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
         Log.i(TAG, "onPostConnect(): $controller")
+        sentUpcomingLyricsVersion = -1
         session.sendCustomCommand(
             controller,
             SessionCommand(SERVICE_GET_LYRICS, Bundle.EMPTY),
@@ -938,6 +1029,10 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
             endedWorkaroundPlayer?.updateLyricNow()
         }
         if (key == "spicy_lyrics_enabled" || key == "spicy_lyrics_api_key") {
+            upcomingLyricsResult = null
+            upcomingLyricsVersion++
+            upcomingLyricsGeneration++
+            upcomingLyricsLoadingGeneration = null
             controller?.currentTracks?.let(::onTracksChanged)
         }
         if (key == null || key == "rg_mode") {
@@ -1808,6 +1903,73 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         return null
     }
 
+    private fun loadTrackLyrics(
+        mediaItem: MediaItem?, format: Format?, durationMs: Long?
+    ): Pair<SemanticLyrics?, SpicyLyricsAttribution?> {
+        val mediaId = mediaItem?.mediaId
+        val trackTitle = mediaItem?.mediaMetadata?.title?.toString()
+        val trackArtist = mediaItem?.mediaMetadata?.artist?.toString()
+        val trim = prefs.getBoolean("trim_lyrics", true)
+        val options = LrcParserOptions(
+            trim = trim, multiLine = true,
+            errorText = getString(R.string.failed_to_parse_lyric)
+        )
+        // TODO: allow multiple lyric files/tags combining them for translations...maybe?
+        var lrc: SemanticLyrics? = null
+        var attribution: SpicyLyricsAttribution? = null
+        var trackMetadata: Metadata? = null
+        if (format != null) {
+            lrc = loadAndParseLyricsFile(
+                applicationContext,
+                mediaItem?.getFile(),
+                format.sampleMimeType, options
+            )
+            if (lrc == null) {
+                // note: wav files can have null metadata
+                trackMetadata = format.metadata
+                if (trackMetadata != null) {
+                    lrc = extractAndParseLyrics(
+                        format.sampleRate.takeIf { it != Format.NO_VALUE } ?: 0,
+                        format.sampleMimeType,
+                        trackMetadata,
+                        options).firstOrNull()
+                }
+            }
+        }
+        val apiKey = prefs.getString("spicy_lyrics_api_key", null)?.trim()
+        if (lrc == null && prefs.getBoolean("spicy_lyrics_enabled", false) &&
+            !apiKey.isNullOrEmpty() && mediaId != null
+        ) {
+            val isrc = trackMetadata?.let(::extractIsrc)
+            val cacheKey = "media:$mediaId"
+            val client = SpicyLyricsClient(apiKey)
+            var responseJson = spicyLyricsCache.getString(cacheKey, null)
+            var result: SpicyLyricsResult? = null
+            try {
+                result = responseJson?.let(client::parse)
+                if (result == null) {
+                    if (responseJson != null) {
+                        spicyLyricsCache.edit().remove(cacheKey).apply()
+                    }
+                    responseJson = client.lookup(isrc, trackTitle, trackArtist, durationMs)
+                    if (responseJson != null) {
+                        result = client.parse(responseJson)
+                        if (result != null) {
+                            spicyLyricsCache.edit().putString(cacheKey, responseJson).apply()
+                        }
+                    }
+                }
+            } catch (e: java.io.IOException) {
+                Log.w(TAG, "Spicy Lyrics lookup failed: ${e.message}")
+            } catch (e: org.json.JSONException) {
+                Log.w(TAG, "Spicy Lyrics response could not be parsed: ${e.message}")
+            }
+            lrc = result?.lyrics
+            attribution = result?.attribution
+        }
+        return lrc to attribution
+    }
+
     override fun onTracksChanged(tracks: Tracks) {
         if (!tracks.isEmpty && !tracks.isTypeSelected(C.TRACK_TYPE_AUDIO)) {
             Log.e(TAG, "No audio track selected: $tracks")
@@ -1816,69 +1978,10 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
 
         val mediaItem = controller?.currentMediaItem
         val mediaId = mediaItem?.mediaId
-        val trackTitle = mediaItem?.mediaMetadata?.title?.toString()
-        val trackArtist = mediaItem?.mediaMetadata?.artist?.toString()
         val durationMs = controller?.duration?.takeIf { it > 0 }
+        val format = tracks.getFirstSelectedTrackFormatByType(C.TRACK_TYPE_AUDIO)
         lyricsFetcher.launch {
-            val trim = prefs.getBoolean("trim_lyrics", true)
-            val options = LrcParserOptions(
-                trim = trim, multiLine = true,
-                errorText = getString(R.string.failed_to_parse_lyric)
-            )
-            // TODO: allow multiple lyric files/tags combining them for translations...maybe?
-            val format = tracks.getFirstSelectedTrackFormatByType(C.TRACK_TYPE_AUDIO)
-            var lrc: SemanticLyrics? = null
-            var attribution: SpicyLyricsAttribution? = null
-            var trackMetadata: Metadata? = null
-            if (format != null) {
-                lrc = loadAndParseLyricsFile(
-                    applicationContext,
-                    mediaItem?.getFile(),
-                    format.sampleMimeType, options
-                )
-                if (lrc == null) {
-                    // note: wav files can have null metadata
-                    trackMetadata = format.metadata
-                    if (trackMetadata != null) {
-                        lrc = extractAndParseLyrics(
-                            format.sampleRate.takeIf { it != Format.NO_VALUE } ?: 0,
-                            format.sampleMimeType,
-                            trackMetadata,
-                            options).firstOrNull()
-                    }
-                }
-            }
-            val apiKey = prefs.getString("spicy_lyrics_api_key", null)?.trim()
-            if (lrc == null && prefs.getBoolean("spicy_lyrics_enabled", false) &&
-                !apiKey.isNullOrEmpty() && mediaId != null
-            ) {
-                val isrc = trackMetadata?.let(::extractIsrc)
-                val cacheKey = "media:$mediaId"
-                val client = SpicyLyricsClient(apiKey)
-                var responseJson = spicyLyricsCache.getString(cacheKey, null)
-                var result: SpicyLyricsResult? = null
-                try {
-                    result = responseJson?.let(client::parse)
-                    if (result == null) {
-                        if (responseJson != null) {
-                            spicyLyricsCache.edit().remove(cacheKey).apply()
-                        }
-                        responseJson = client.lookup(isrc, trackTitle, trackArtist, durationMs)
-                        if (responseJson != null) {
-                            result = client.parse(responseJson)
-                            if (result != null) {
-                                spicyLyricsCache.edit().putString(cacheKey, responseJson).apply()
-                            }
-                        }
-                    }
-                } catch (e: java.io.IOException) {
-                    Log.w(TAG, "Spicy Lyrics lookup failed: ${e.message}")
-                } catch (e: org.json.JSONException) {
-                    Log.w(TAG, "Spicy Lyrics response could not be parsed: ${e.message}")
-                }
-                lrc = result?.lyrics
-                attribution = result?.attribution
-            }
+            val (lrc, attribution) = loadTrackLyrics(mediaItem, format, durationMs)
             withContext(Dispatchers.Main) {
                 if (mediaItem != null && controller?.currentMediaItem?.mediaId != mediaId) {
                     return@withContext
