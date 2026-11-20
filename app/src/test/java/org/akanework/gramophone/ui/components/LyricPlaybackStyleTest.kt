@@ -291,8 +291,9 @@ class LyricPlaybackStyleTest {
         val primary = line("lead", 1000uL, 4000uL, null)
         val bg1 = line("one", 1200uL, 2700uL, SpeakerEntity.VoiceBackground)
         val bg2 = line("two", 2500uL, 3000uL, SpeakerEntity.Voice2Background)
+        val nextPrimary = line("next lead", 4500uL, 7000uL, null)
         val later = line("later", 5000uL, 6000uL, SpeakerEntity.VoiceBackground)
-        val lines = listOf(primary, bg1, bg2, later)
+        val lines = listOf(primary, bg1, bg2, nextPrimary, later)
         assertFalse(lyricBackgroundVisible(bg1, lines, 999uL))
         assertTrue(lyricBackgroundVisible(bg1, lines, 1000uL))
         assertTrue(lyricBackgroundVisible(bg2, lines, 1000uL))
@@ -306,6 +307,7 @@ class LyricPlaybackStyleTest {
         assertFalse(lyricBackgroundVisible(bg1, lines, 3001uL))
         assertFalse(lyricBackgroundVisible(bg2, lines, 3001uL))
         assertFalse(lyricBackgroundVisible(later, lines, 2000uL))
+        assertTrue(lyricBackgroundVisible(later, lines, 4500uL))
         assertFalse(lyricBackgroundVisible(bg1, lines, 4001uL))
         assertTrue(lyricBackgroundVisible(primary, lines, 0uL))
         val instrumental = line("• •", 1000uL, 4000uL, null)
@@ -326,22 +328,25 @@ class LyricPlaybackStyleTest {
         assertTrue(lyricBackgroundVisible(backing, lines, 3500uL))
         assertTrue(lyricBackgroundVisible(backing, lines, 4000uL))
         assertFalse(lyricBackgroundVisible(backing, lines, 4001uL))
-        assertFalse(lyricBackgroundVisible(future, lines, 3500uL))
+        assertTrue(lyricBackgroundVisible(future, lines, 2500uL))
+        assertFalse(lyricBackgroundVisible(future, lines, 2499uL))
         assertTrue(lyricBackgroundVisible(backing, lines, 1500uL))
     }
 
     @Test
-    fun overlappingPrimaryGroupsDoNotExtendEachOther() {
+    fun backgroundLinesWithoutOverlapFollowTheirLatestPrimary() {
         val first = line("first", 1000uL, 2000uL, null)
-        val firstBg = line("first backing", 1500uL, 5000uL, SpeakerEntity.VoiceBackground)
+        val firstBg = line("first backing", 1500uL, 2400uL, SpeakerEntity.VoiceBackground)
         val second = line("second", 2500uL, 4000uL, null)
         val secondBg = line("second backing", 3000uL, 3500uL, SpeakerEntity.VoiceBackground)
         val translation = line("translation", 2500uL, 4000uL, null).copy(isTranslated = true)
         val lines = listOf(first, firstBg, second, translation, secondBg)
-        assertTrue(lyricBackgroundVisible(firstBg, lines, 4000uL))
-        assertFalse(lyricBackgroundVisible(secondBg, lines, 4000uL))
-        assertFalse(lyricBackgroundVisible(secondBg, lines, 2499uL))
+        assertTrue(lyricBackgroundVisible(firstBg, lines, 2000uL))
+        assertFalse(lyricBackgroundVisible(firstBg, lines, 2401uL))
         assertTrue(lyricBackgroundVisible(secondBg, lines, 2500uL))
+        assertFalse(lyricBackgroundVisible(secondBg, lines, 2499uL))
+        assertTrue(lyricBackgroundVisible(secondBg, lines, 3500uL))
+        assertFalse(lyricBackgroundVisible(secondBg, lines, 3501uL))
         assertTrue(lyricBackgroundVisible(firstBg, lines, 1500uL))
     }
 
@@ -358,8 +363,11 @@ class LyricPlaybackStyleTest {
         val lines = listOf(first, early, second, other, late)
         assertTrue(lyricBackgroundVisible(late, lines, 1000uL))
         assertTrue(lyricBackgroundVisible(early, lines, 4000uL))
+        assertFalse(lyricBackgroundVisible(other, lines, 1000uL))
         assertFalse(lyricBackgroundVisible(other, lines, 4000uL))
+        assertTrue(lyricBackgroundVisible(other, lines, 2000uL))
         assertFalse(lyricBackgroundVisible(early, lines, 5001uL))
+        assertFalse(lyricBackgroundVisible(other, lines, 5001uL))
     }
 
     @Test
@@ -589,23 +597,81 @@ class LyricPlaybackStyleTest {
     }
 
     @Test
-    fun backgroundRowRemainsExpandedAfterPrimaryEnds() {
+    fun backgroundRowsRemainExpandedThroughGapsUntilLastLineEnds() {
         val context = RuntimeEnvironment.getApplication()
         val primary = line("lead", 1000uL, 2000uL, null)
-        val background = line("back", 1500uL, 4000uL, SpeakerEntity.VoiceBackground)
-        val lyrics = SemanticLyrics.SyncedLyrics(listOf(primary, background))
+        val firstBackground = line("back one", 1500uL, 2500uL, SpeakerEntity.VoiceBackground)
+        val lastBackground = line("back two", 3500uL, 5000uL, SpeakerEntity.Voice2Background)
+        val lyrics = SemanticLyrics.SyncedLyrics(listOf(primary, firstBackground, lastBackground))
         val view = NewLyricsView(context, null)
         view.updateLyrics(lyrics)
         val items = view.buildSpForMeasure(lyrics, 800).second
-        view.updateBackgroundRows(items, 1800uL, 1000L, true)
+        fun firstFraction() = view.backgroundRowFraction(1, items[1])
+        fun lastFraction() = view.backgroundRowFraction(2, items[2])
+
+        view.updateBackgroundRows(items, 900uL, 900L, true)
+        assertEquals(0f, firstFraction(), 0.001f)
+        assertEquals(0f, lastFraction(), 0.001f)
+        view.updateBackgroundRows(items, 1000uL, 1000L, true)
+        view.updateBackgroundRows(items, 1200uL, 1200L, true)
+        assertTrue(firstFraction() > 0f && firstFraction() < 1f)
+        assertEquals(firstFraction(), lastFraction(), 0.001f)
+        view.updateBackgroundRows(items, 2001uL, 2001L, true)
+        view.updateBackgroundRows(items, 3200uL, 3200L, true)
         assertEquals(1f, view.backgroundRowFraction(1, items[1]), 0.001f)
-        view.updateBackgroundRows(items, 2200uL, 1400L, true)
+        assertEquals(1f, view.backgroundRowFraction(2, items[2]), 0.001f)
+        assertTrue(lyricBackgroundVisible(lastBackground, lyrics.text, 4500uL))
+        assertFalse(lyricBackgroundVisible(lastBackground, lyrics.text, 5001uL))
+        view.updateBackgroundRows(items, 5001uL, 5001L, true)
+        view.updateBackgroundRows(items, 5201uL, 5201L, true)
+        assertTrue(firstFraction() > 0f && firstFraction() < 1f)
+        assertEquals(firstFraction(), lastFraction(), 0.001f)
+        view.updateBackgroundRows(items, 5401uL, 5401L, true)
+        assertEquals(0f, firstFraction(), 0.001f)
+        assertEquals(0f, lastFraction(), 0.001f)
+    }
+
+    @Test
+    fun overlappingBackgroundRowsExpandTogetherAndRemainUntilLastOneEnds() {
+        val context = RuntimeEnvironment.getApplication()
+        val first = line("first", 1000uL, 2000uL, null)
+        val firstBg = line("first backing", 1500uL, 5000uL, SpeakerEntity.VoiceBackground)
+        val second = line("second", 2500uL, 4000uL, null)
+        val secondBg = line("second backing", 3000uL, 3500uL, SpeakerEntity.Voice2Background)
+        val lyrics = SemanticLyrics.SyncedLyrics(listOf(first, firstBg, second, secondBg))
+        val view = NewLyricsView(context, null)
+        view.instance = object : NewLyricsView.Callbacks {
+            override fun getCurrentPosition() = 0uL
+            override fun isPlaying() = true
+            override fun speed() = 1f
+            override fun destroy() {}
+        }
+        view.updateLyrics(lyrics)
+        val items = view.buildSpForMeasure(lyrics, 800).second
+        fun assertFractionsMatch() = assertEquals(
+            view.backgroundRowFraction(1, items[1]),
+            view.backgroundRowFraction(3, items[3]),
+            0.001f
+        )
+
+        view.updateBackgroundRows(items, 900uL, 1000L, true)
+        view.updateBackgroundRows(items, 1000uL, 1100L, true)
+        view.updateBackgroundRows(items, 1200uL, 1300L, true)
+        assertFractionsMatch()
+        assertTrue(view.backgroundRowFraction(1, items[1]) > 0f)
+        assertTrue(view.backgroundRowFraction(1, items[1]) < 1f)
+
+        view.updateBackgroundRows(items, 4000uL, 4100L, true)
         assertEquals(1f, view.backgroundRowFraction(1, items[1]), 0.001f)
-        view.updateBackgroundRows(items, 4001uL, 3201L, true)
-        view.updateBackgroundRows(items, 4401uL, 3601L, true)
+        assertFractionsMatch()
+        view.updateBackgroundRows(items, 5001uL, 5101L, true)
+        view.updateBackgroundRows(items, 5201uL, 5301L, true)
+        assertFractionsMatch()
+        assertTrue(view.backgroundRowFraction(1, items[1]) < 1f)
+        assertTrue(view.backgroundRowFraction(1, items[1]) > 0f)
+        view.updateBackgroundRows(items, 5501uL, 5601L, true)
         assertEquals(0f, view.backgroundRowFraction(1, items[1]), 0.001f)
-        view.updateBackgroundRows(items, 2500uL, 3650L, false)
-        assertEquals(1f, view.backgroundRowFraction(1, items[1]), 0.001f)
+        assertFractionsMatch()
     }
 
     private fun line(text: String, start: ULong, end: ULong, speaker: SpeakerEntity?) =

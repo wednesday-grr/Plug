@@ -21,33 +21,74 @@ internal class LyricBackgroundGroups(lines: List<SemanticLyrics.LyricLine>) {
     private val ranges = IdentityHashMap<SemanticLyrics.LyricLine, ULongRange>()
 
     init {
+        data class Group(
+            val members: MutableList<SemanticLyrics.LyricLine>,
+            var start: ULong,
+            var end: ULong,
+            val explicitGroupId: Int?
+        )
+
         val primary = lines.filter(::isPrimaryLyric)
-        val groups = mutableMapOf<Pair<Boolean, Int>, MutableList<SemanticLyrics.LyricLine>>()
-        val starts = mutableMapOf<Pair<Boolean, Int>, ULong>()
+        val groups = mutableMapOf<Pair<Boolean, Int>, Group>()
         lines.filter { it.speaker?.isBackground == true }.forEach { line ->
             val explicitId = line.backgroundGroupId
             val explicitStart = line.backgroundGroupStart
             val owner = if (explicitId == null || explicitStart == null) {
-                primary.indices.filter { overlaps(primary[it], line) }
+                val overlapping = primary.indices.filter { overlaps(primary[it], line) }
+                overlapping
                     .maxByOrNull { index ->
                         if (primary[index].start <= line.start) primary[index].start else 0uL
                     }
+                    ?: primary.indices.filter { primary[it].start <= line.start }
+                        .maxByOrNull { primary[it].start }
             } else null
             val key = when {
                 explicitId != null && explicitStart != null -> true to explicitId
                 owner != null -> false to owner
                 else -> null
             }
+            val start = explicitStart ?: owner?.let { primary[it].start } ?: line.start
             if (key == null) {
                 ranges[line] = line.timeRange
             } else {
-                groups.getOrPut(key) { mutableListOf() }.add(line)
-                starts[key] = explicitStart ?: primary[owner!!].start
+                val group = groups.getOrPut(key) {
+                    Group(mutableListOf(), start, line.end, explicitId)
+                }
+                group.members += line
+                group.start = minOf(group.start, start)
+                group.end = maxOf(group.end, line.end)
             }
         }
-        groups.forEach { (key, members) ->
-            val range = starts.getValue(key)..members.maxOf { it.end }
-            members.forEach { ranges[it] = range }
+
+        val mergedGroups = groups.values.toMutableList()
+        var merged: Boolean
+        do {
+            merged = false
+            mergeLoop@ for (i in mergedGroups.indices) {
+                for (j in i + 1 until mergedGroups.size) {
+                    val first = mergedGroups[i]
+                    val second = mergedGroups[j]
+                    if (first.explicitGroupId != null && second.explicitGroupId != null &&
+                        first.explicitGroupId != second.explicitGroupId
+                    ) continue
+                    if (first.members.any { firstLine ->
+                            second.members.any { secondLine -> overlaps(firstLine, secondLine) }
+                        }
+                    ) {
+                        first.members += second.members
+                        first.start = minOf(first.start, second.start)
+                        first.end = maxOf(first.end, second.end)
+                        mergedGroups.removeAt(j)
+                        merged = true
+                        break@mergeLoop
+                    }
+                }
+            }
+        } while (merged)
+
+        mergedGroups.forEach { group ->
+            val range = group.start..group.end
+            group.members.forEach { ranges[it] = range }
         }
     }
 
