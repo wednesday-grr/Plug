@@ -28,7 +28,7 @@ internal object EssentiaTrackAnalyzer {
             "Essentia could not determine a usable rhythm"
         }
         return TrackAnalysis(
-            rhythm.bpm.toFloat(), null, null, 0f, window.startMs,
+            rhythm.bpm.toFloat(), rhythm.camelotKey, null, 0f, window.startMs,
             window.startMs + window.samples.size.toLong() * 1000 / 44_100,
         )
     }

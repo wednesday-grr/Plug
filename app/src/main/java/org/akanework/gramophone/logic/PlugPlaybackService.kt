@@ -197,6 +197,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         const val SERVICE_QUERY_TIMER = "query_timer"
         const val SERVICE_GET_AUDIO_FORMAT = "get_audio_format"
         const val SERVICE_GET_DJ_METRICS = "get_dj_metrics"
+        const val SERVICE_GET_TRANSITION_INFO = "get_transition_info"
         const val SERVICE_GET_LYRICS = "get_lyrics"
         const val LYRICS_CACHE_PREFERENCES = "lyrics_response_cache"
         const val CLIENT_AUTOMIX_LYRICS = "automix_lyrics"
@@ -986,6 +987,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         availableSessionCommands.add(SessionCommand(SERVICE_QB_REORDER, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_SORT_AUTOMIX, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_GET_DJ_METRICS, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_GET_TRANSITION_INFO, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_PIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_UNPIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_RENAME_QUEUE, Bundle.EMPTY))
@@ -1407,6 +1409,58 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
             }
         }
 
+        if (customCommand.customAction == SERVICE_GET_TRANSITION_INFO) {
+            val engine = endedWorkaroundPlayer?.playbackEngine as? AutomixPlayer
+            val snapshot = engine?.currentTransitionExplanation()
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS).also { result ->
+                if (snapshot != null) {
+                    result.extras.apply {
+                        putLong("generation", snapshot.generation)
+                        putString("outgoing_id", snapshot.outgoingId)
+                        putString("incoming_id", snapshot.incomingId)
+                        putInt("outgoing_index", snapshot.outgoingIndex)
+                        putInt("incoming_index", snapshot.incomingIndex)
+                        putString("outgoing_title", snapshot.outgoingTitle)
+                        putString("incoming_title", snapshot.incomingTitle)
+                        putLong("duration", snapshot.durationMs)
+                        putString("style", snapshot.transitionStyle)
+                        putStringArrayList("style_reasons", ArrayList(snapshot.transitionReasons.map { it.name }))
+                        snapshot.selectorDifferencePercent?.let { putFloat("selector_difference", it) }
+                        snapshot.selectorThresholdPercent?.let { putFloat("selector_threshold", it) }
+                        snapshot.selectorRisingPercent?.let { putFloat("selector_rising", it) }
+                        snapshot.selectorRisingThresholdPercent?.let { putFloat("selector_rising_threshold", it) }
+                        snapshot.selectorVocalThreshold?.let { putFloat("selector_vocal_threshold", it) }
+                        putString("status", snapshot.status.name)
+                        putString("analyzer", snapshot.analyzer)
+                        snapshot.outgoingBpm?.let { putFloat("outgoing_bpm", it) }
+                        snapshot.incomingBpm?.let { putFloat("incoming_bpm", it) }
+                        snapshot.outgoingGridConfidence?.let { putFloat("outgoing_grid", it) }
+                        snapshot.incomingGridConfidence?.let { putFloat("incoming_grid", it) }
+                        putString("outgoing_key", snapshot.outgoingKey)
+                        putString("incoming_key", snapshot.incomingKey)
+                        snapshot.outgoingVocalEnergy?.let { putFloat("outgoing_vocal", it) }
+                        snapshot.incomingVocalEnergy?.let { putFloat("incoming_vocal", it) }
+                        putParcelableArrayList("effects", ArrayList(snapshot.effects.map { effect ->
+                            Bundle().apply {
+                                putString("id", effect.effectId)
+                                putString("selection", effect.selectionStatus.name)
+                                putString("execution", effect.executionStatus?.name)
+                                putStringArrayList("reasons", ArrayList(effect.reasons.map { it.name }))
+                                effect.beatmatchEvidence?.let { evidence ->
+                                    evidence.outgoingBpm?.let { putFloat("out_bpm", it) }
+                                    evidence.incomingBpm?.let { putFloat("in_bpm", it) }
+                                    evidence.outgoingGridConfidence?.let { putFloat("out_grid", it) }
+                                    evidence.incomingGridConfidence?.let { putFloat("in_grid", it) }
+                                    putFloat("minimum_grid", evidence.minimumGridConfidence)
+                                    putFloat("max_tempo_deviation", evidence.maximumTempoDeviation)
+                                }
+                            }
+                        }))
+                    }
+                }
+            })
+        }
+
         if (customCommand.customAction == SERVICE_GET_DJ_METRICS) {
             return lifecycleScope.future {
                 val wrapper = endedWorkaroundPlayer
@@ -1443,12 +1497,24 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
                     res.extras.putString("media_id", item.mediaId)
                     res.extras.putInt("index", index)
+                    res.extras.putString("title", item.mediaMetadata.title?.toString())
                     res.extras.putString("analyzer", selectedAnalyzer)
                     res.extras.putBoolean("analysis_failed", key?.let(audioAnalysis::analysisFailed) == true)
+                    key?.let {
+                        res.extras.putString("analysis_status", audioAnalysis.displayStatus(it).name)
+                    }
                     metadata.bpm?.let { res.extras.putFloat("bpm", it) }
                     res.extras.putString("key", metadata.camelotKey)
                     res.extras.putFloat("speed", player.playbackParameters.speed)
                     res.extras.putBoolean("next_available", nextItem != null)
+                    nextItem?.let {
+                        res.extras.putString("next_media_id", it.mediaId)
+                        res.extras.putString("next_title", it.mediaMetadata.title?.toString())
+                    }
+                    nextKey?.let {
+                        res.extras.putString("next_analysis_status", audioAnalysis.displayStatus(it).name)
+                        res.extras.putBoolean("next_analysis_failed", audioAnalysis.analysisFailed(it))
+                    }
                     nextMetadata?.bpm?.let { res.extras.putFloat("next_bpm", it) }
                     res.extras.putString("next_key", nextMetadata?.camelotKey)
                     if (nextItem != null) {

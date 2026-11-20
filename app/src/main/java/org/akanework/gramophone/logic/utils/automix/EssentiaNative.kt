@@ -17,7 +17,13 @@ import org.akanework.gramophone.BuildConfig
  */
 @Keep
 internal object EssentiaNative {
-    data class RhythmResult(val bpm: Double, val rawConfidence: Double, val beatPositionsMs: List<Double>)
+    data class RhythmResult(
+        val bpm: Double,
+        val rawConfidence: Double,
+        val camelotKey: String,
+        val keyStrength: Double,
+        val beatPositionsMs: List<Double>,
+    )
 
     fun analyze(samples: FloatArray, startMs: Long): RhythmResult {
         require(startMs >= 0)
@@ -32,16 +38,34 @@ internal object EssentiaNative {
     }
 
     internal fun parse(result: DoubleArray, startMs: Long, sampleCount: Int): RhythmResult {
-        require(startMs >= 0 && sampleCount > 0 && result.size >= 2) { "Invalid rhythm result" }
+        require(startMs >= 0 && sampleCount > 0 && result.size >= 5) { "Invalid Essentia result" }
         require(result[0].isFinite() && result[0] > 0 && result[1].isFinite()) {
             "Essentia did not return a valid BPM or confidence"
         }
+        val keyIndex = result[2].toInt()
+        require(result[2] == keyIndex.toDouble() && keyIndex in keyNames.indices) {
+            "Essentia returned an invalid key"
+        }
+        val minor = when (result[3]) {
+            0.0 -> false
+            1.0 -> true
+            else -> throw IllegalArgumentException("Essentia returned an invalid key scale")
+        }
+        require(result[4].isFinite()) { "Essentia returned an invalid key strength" }
+        val camelotKey = checkNotNull(
+            MusicalKey.parse("${keyNames[keyIndex]} ${if (minor) "minor" else "major"}")
+        ).camelot
         val durationSeconds = sampleCount / 44_100.0
-        val ticks = result.drop(2)
+        val ticks = result.drop(5)
         require(ticks.all { it.isFinite() && it >= 0 && it <= durationSeconds } &&
             ticks.zipWithNext().all { (a, b) -> a < b }) { "Invalid Essentia beat timestamps" }
-        return RhythmResult(result[0], result[1], ticks.map { startMs + it * 1000.0 })
+        return RhythmResult(
+            result[0], result[1], camelotKey, result[4],
+            ticks.map { startMs + it * 1000.0 },
+        )
     }
+
+    private val keyNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
     @Keep
     private external fun analyzeNative(samples: FloatArray): DoubleArray

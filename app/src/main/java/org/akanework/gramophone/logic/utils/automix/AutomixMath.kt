@@ -23,6 +23,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 object AutomixMath {
+    const val DEFAULT_MAX_TEMPO_DEVIATION = 0.15f
     data class Volumes(val outgoing: Float, val incoming: Float)
 
     fun automaticDurationMs(bpm: Float?): Long {
@@ -42,7 +43,7 @@ object AutomixMath {
         return (1f - 0.15f * sin(angle).toFloat()).coerceIn(0.85f, 1f)
     }
 
-    fun tempoRatio(outgoingBpm: Float?, incomingBpm: Float?, maxDeviation: Float = 0.15f): Float? {
+    fun tempoRatio(outgoingBpm: Float?, incomingBpm: Float?, maxDeviation: Float = DEFAULT_MAX_TEMPO_DEVIATION): Float? {
         require(maxDeviation.isFinite() && maxDeviation in 0f..<1f)
         if (outgoingBpm == null || incomingBpm == null ||
             !outgoingBpm.isFinite() || !incomingBpm.isFinite() ||

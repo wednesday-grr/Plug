@@ -9,10 +9,13 @@
 #include <jni.h>
 #include <essentia/algorithmfactory.h>
 #include <essentia/essentia.h>
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -56,10 +59,32 @@ Java_org_akanework_gramophone_logic_utils_automix_EssentiaNative_analyzeNative(
         rhythm->output("estimates").set(estimates);
         rhythm->output("bpmIntervals").set(intervals);
         rhythm->compute();
+
+        std::unique_ptr<essentia::standard::Algorithm> keyExtractor(
+            essentia::standard::AlgorithmFactory::create("KeyExtractor"));
+        std::string key, scale;
+        essentia::Real keyStrength = 0;
+        keyExtractor->input("audio").set(signal);
+        keyExtractor->output("key").set(key);
+        keyExtractor->output("scale").set(scale);
+        keyExtractor->output("strength").set(keyStrength);
+        keyExtractor->compute();
+        static const std::vector<std::string> keys = {
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+        };
+        auto keyIndex = std::find(keys.begin(), keys.end(), key);
+        if (keyIndex == keys.end() || (scale != "major" && scale != "minor") ||
+            !std::isfinite(keyStrength)) {
+            throw std::runtime_error("Essentia returned an invalid musical key");
+        }
+
         std::vector<jdouble> result;
-        result.reserve(ticks.size() + 2);
+        result.reserve(ticks.size() + 5);
         result.push_back(bpm);
         result.push_back(confidence);
+        result.push_back(std::distance(keys.begin(), keyIndex));
+        result.push_back(scale == "minor" ? 1 : 0);
+        result.push_back(keyStrength);
         for (auto tick : ticks) result.push_back(tick);
         auto output = env->NewDoubleArray(static_cast<jsize>(result.size()));
         if (output != nullptr) env->SetDoubleArrayRegion(output, 0, result.size(), result.data());

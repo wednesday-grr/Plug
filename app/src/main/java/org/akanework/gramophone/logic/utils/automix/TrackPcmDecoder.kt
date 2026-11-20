@@ -22,6 +22,7 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import androidx.media3.common.util.Log
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.nio.ByteOrder
@@ -46,6 +47,8 @@ class TrackPcmDecoder(private val context: Context) {
             } ?: error("No audio track in $uri")
             extractor.selectTrack(track)
             val inputFormat = extractor.getTrackFormat(track)
+            val encoderDelay = if (inputFormat.containsKey(MediaFormat.KEY_ENCODER_DELAY))
+                inputFormat.getInteger(MediaFormat.KEY_ENCODER_DELAY) else 0
             val durationUs = if (inputFormat.containsKey(MediaFormat.KEY_DURATION))
                 inputFormat.getLong(MediaFormat.KEY_DURATION) else 0L
             require(sampleRate != 44_100 || durationUs > 0) {
@@ -78,6 +81,9 @@ class TrackPcmDecoder(private val context: Context) {
             var sourceSamples: FloatArray? = null
             var sourceSize = 0
             var sourceRate = 0
+            var sourceFirstBuffer = -1
+            var bufferSequence = 0
+            var discardedStartupBuffer = false
             var inputEnded = false
             var outputEnded = false
             val info = MediaCodec.BufferInfo()
@@ -117,6 +123,7 @@ class TrackPcmDecoder(private val context: Context) {
                     }
                     progressed = true
                 } else if (index >= 0) {
+                    bufferSequence++
                     progressed = true
                     val buffer = checkNotNull(decoder.getOutputBuffer(index)).order(ByteOrder.nativeOrder())
                     buffer.position(info.offset)
@@ -145,9 +152,23 @@ class TrackPcmDecoder(private val context: Context) {
                         if (sampleRate == 44_100) {
                             val source = checkNotNull(sourceSamples)
                             if (sourceSize < source.size) {
-                                val expectedUs = checkNotNull(firstUs) + sourceSize.toLong() * 1_000_000L / rate
-                                require(kotlin.math.abs(timeUs - expectedUs) <= 20_000L) {
-                                    "Discontinuous PCM timestamps in analysis window"
+                                if (sourceSize == 0) sourceFirstBuffer = bufferSequence
+                                else {
+                                    val expectedUs = checkNotNull(firstUs) + sourceSize.toLong() * 1_000_000L / rate
+                                    if (kotlin.math.abs(timeUs - expectedUs) > PcmTimestampContinuity.TOLERANCE_US) {
+                                        val discardStartup = PcmTimestampContinuity.canDiscardInitialBuffer(
+                                            expectedUs, timeUs, rate, encoderDelay, sourceSize, startUs,
+                                            !discardedStartupBuffer && bufferSequence == sourceFirstBuffer + 1,
+                                        )
+                                        require(discardStartup) {
+                                            "Discontinuous PCM timestamps: expected=$expectedUs actual=$timeUs rate=$rate"
+                                        }
+                                        Log.w("AudioAnalysis", "Discarding seek-trimmed initial PCM buffer")
+                                        sourceSize = 0
+                                        sourceFirstBuffer = bufferSequence
+                                        firstUs = timeUs
+                                        discardedStartupBuffer = true
+                                    }
                                 }
                                 source[sourceSize++] = mono.toFloat()
                             }

@@ -305,6 +305,7 @@ class FullBottomSheet
     val bottomSheetFullLyricView: LyricsView by lazy { (parent as ViewGroup).findViewById(R.id.lyric_frame)!! }
     private val progressDrawable: SquigglyProgress
     private var pqs: PlaylistQueueSheet? = null
+    private var transitionInfoSheet: AudioQualityInfoBottomSheet? = null
 
     init {
         inflate(context, R.layout.full_player, this)
@@ -328,6 +329,12 @@ class FullBottomSheet
         bottomSheetPlaylistButton = findViewById(R.id.playlist)
         bottomSheetLyricButton = findViewById(R.id.lyrics)
         bottomSheetFullQualityDetails = findViewById(R.id.quality_details)
+        findViewById<MaterialButton>(R.id.transition_info).setOnClickListener {
+            transitionInfoSheet?.dismiss()
+            transitionInfoSheet = AudioQualityInfoBottomSheet(wrappedContext ?: context, { instance }).also { sheet ->
+                sheet.show()
+            }
+        }
         refreshSettings(null)
         prefs.registerOnSharedPreferenceChangeListener(this)
         activity.controllerViewModel.customCommandListeners.addCallback(activity.lifecycle) { _, command, args ->
@@ -904,6 +911,8 @@ class FullBottomSheet
 
     fun onStop() {
         pqs?.dismiss()
+        transitionInfoSheet?.dismiss()
+        transitionInfoSheet = null
         runnableRunning = false
         djScope?.cancel()
         djScope = null
@@ -1152,21 +1161,17 @@ class FullBottomSheet
                 ).let { context.getString(R.string.dj_metrics_analyzer, it, analyzer) } else ""
                 val primaryEffect = data.getString("transition_effect")
                 val effectIds = data.getStringArrayList("transition_effects").orEmpty()
-                val effect = (listOfNotNull(primaryEffect) + effectIds).distinct()
-                    .ifEmpty { listOf("smooth") }
-                    .joinToString(" + ") { context.getString(djTransitionEffectLabelResource(it)) }
                 val beatmatch = data.getBoolean("beatmatch")
+                val effect = (listOfNotNull(primaryEffect) + effectIds).distinct()
+                    .map { context.getString(djTransitionEffectLabelResource(it)) }
+                    .let { if (beatmatch) it + context.getString(R.string.transition_info_beatmatch) else it }
+                    .joinToString(" + ")
+                    .ifEmpty { context.getString(R.string.transition_info_no_data) }
                 djStatusText = when {
                     data.getBoolean("mixing") ->
-                        context.getString(
-                            if (beatmatch) R.string.dj_mixing_beatmatch else R.string.dj_mixing,
-                            effect
-                        )
+                        context.getString(R.string.transition_info_compact_active, effect)
                     data.getBoolean("mixed") ->
-                        context.getString(
-                            if (beatmatch) R.string.dj_mixed_beatmatch else R.string.dj_mixed,
-                            effect
-                        )
+                        context.getString(R.string.transition_info_compact_completed, effect)
                     else -> null
                 }
                 updateDjDisplay()

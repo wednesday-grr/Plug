@@ -43,6 +43,8 @@ class AudioAnalysisScheduler(
     val cache: TrackAnalysisCache,
     private val analyze: (suspend (MediaItem) -> TrackAnalysis)? = null,
 ) {
+    enum class DisplayStatus { ANALYZING, READY, FAILED, PENDING }
+
     private val decoder = TrackPcmDecoder(context.applicationContext)
     private val dispatcher = Executors.newSingleThreadExecutor { task ->
         Thread({
@@ -197,6 +199,19 @@ class AudioAnalysisScheduler(
     }
 
     fun analysisFailed(key: AnalysisKey): Boolean = cache.selectedKey(key) in failures
+
+    fun displayStatus(key: AnalysisKey): DisplayStatus {
+        val selected = cache.selectedKey(key)
+        if (cache.peek(selected) != null) return DisplayStatus.READY
+        return synchronized(lock) {
+            when {
+                selected in failures -> DisplayStatus.FAILED
+                currentKey == selected && currentJob?.isActive == true -> DisplayStatus.ANALYZING
+                selected in attempted -> DisplayStatus.FAILED
+                else -> DisplayStatus.PENDING
+            }
+        }
+    }
 
     fun updateQueue(items: List<MediaItem>) {
         synchronized(lock) {

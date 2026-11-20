@@ -103,12 +103,15 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
         }
     }
 
-    fun peek(key: AnalysisKey): TrackAnalysis? = memory[key]
+    fun peek(key: AnalysisKey): TrackAnalysis? = memory[key]?.takeIf { isCurrent(key, it) }
+
+    private fun isCurrent(key: AnalysisKey, result: TrackAnalysis): Boolean =
+        key.analyzer != "essentia" || result.camelotKey != null
 
     /** Call on a background dispatcher. */
     @Synchronized
     fun load(key: AnalysisKey): TrackAnalysis? {
-        memory[key]?.let { return it }
+        memory[key]?.takeIf { isCurrent(key, it) }?.let { return it }
         readableDatabase.query(
             "analysis", arrayOf(
                 "bpm", "camelot", "beat_offset", "confidence", "window_start", "window_end",
@@ -139,6 +142,7 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                     if (cursor.isNull(19)) 0 else cursor.getLong(19),
                 ),
             )
+            if (!isCurrent(key, result)) return null
             memory[key] = result
             return result
         }

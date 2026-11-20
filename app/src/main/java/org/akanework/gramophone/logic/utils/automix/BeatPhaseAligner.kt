@@ -30,6 +30,7 @@ import kotlin.math.sqrt
  * downbeat; callers must fall back when it cannot be identified reliably.
  */
 object BeatPhaseAligner {
+    const val DEFAULT_MINIMUM_CONFIDENCE = 0.8f
     data class Grid(val beatPeriodMs: Double, val phaseOffsetMs: Double, val confidence: Float)
     data class Alignment(val startDelayMs: Double, val incomingSpeed: Float)
 
@@ -70,7 +71,7 @@ object BeatPhaseAligner {
         incomingGrid: Grid?,
         outgoingPositionMs: Double,
         incomingPositionMs: Double,
-        minimumConfidence: Float = 0.8f,
+        minimumConfidence: Float = DEFAULT_MINIMUM_CONFIDENCE,
     ): Alignment? {
         require(minimumConfidence.isFinite() && minimumConfidence in 0f..1f)
         require(outgoingPositionMs.isFinite() && outgoingPositionMs >= 0)

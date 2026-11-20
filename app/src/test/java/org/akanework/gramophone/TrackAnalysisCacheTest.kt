@@ -74,7 +74,7 @@ class TrackAnalysisCacheTest {
         val existing = AnalysisKey("engine-cache-test", 1, "content://media/engine")
         val essentia = existing.copy(analyzer = "essentia")
         val first = TrackAnalysis(120f, "8A", 500.0, 0.9f, 100, 50_000)
-        val second = TrackAnalysis(123f, null, null, 0f, 100, 50_000)
+        val second = TrackAnalysis(123f, "8B", null, 0f, 100, 50_000)
         TrackAnalysisCache(context).also {
             it.store(existing, first)
             it.store(essentia, second)
@@ -86,6 +86,25 @@ class TrackAnalysisCacheTest {
             assertEquals(first, it.load(existing))
             assertEquals(second, it.load(essentia))
             it.close()
+        }
+    }
+
+    @Test
+    fun reanalyzesEssentiaCacheEntriesWithoutAKey() {
+        val essentia = AnalysisKey(
+            "essentia-key-cache-test", 1, "content://media/essentia-key", "essentia",
+        )
+        val oldResult = TrackAnalysis(123f, null, null, 0f, 100, 50_000)
+        val updatedResult = oldResult.copy(camelotKey = "8B")
+        val cache = TrackAnalysisCache(RuntimeEnvironment.getApplication())
+        try {
+            cache.store(essentia, oldResult)
+            assertNull(cache.peek(essentia))
+            assertNull(cache.load(essentia))
+            cache.store(essentia, updatedResult)
+            assertEquals(updatedResult, cache.load(essentia))
+        } finally {
+            cache.close()
         }
     }
 

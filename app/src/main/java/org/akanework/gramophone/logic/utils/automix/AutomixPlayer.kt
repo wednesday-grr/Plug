@@ -47,6 +47,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.ReplayGainUtil
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
@@ -62,7 +64,18 @@ import kotlin.random.Random
 internal object AutomixEffectSelector {
     private const val CLOSE_BPM_DIFFERENCE = 0.06f
     private const val MODERATE_BPM_DIFFERENCE = 0.12f
+    private const val MAX_BPM_DIFFERENCE = 0.15f
     private const val HIGH_VOCAL_ENERGY = 0.55f
+
+    data class Decision(
+        val style: String,
+        val reasons: List<EffectDecisionReason>,
+        val differencePercent: Float? = null,
+        val thresholdPercent: Float? = null,
+        val risingPercent: Float? = null,
+        val risingThresholdPercent: Float? = null,
+        val vocalThreshold: Float? = null,
+    )
 
     fun select(
         outgoingBpm: Float?,
@@ -70,20 +83,42 @@ internal object AutomixEffectSelector {
         phaseConfident: Boolean,
         outgoingVocalEnergy: Float?,
         incomingVocalEnergy: Float?,
-    ): String {
+    ): String = decide(outgoingBpm, incomingBpm, phaseConfident, outgoingVocalEnergy,
+        incomingVocalEnergy).style
+
+    fun decide(
+        outgoingBpm: Float?,
+        incomingBpm: Float?,
+        phaseConfident: Boolean,
+        outgoingVocalEnergy: Float?,
+        incomingVocalEnergy: Float?,
+    ): Decision {
         val out = outgoingBpm?.takeIf { it.isFinite() && it in 30f..300f }
         val incoming = incomingBpm?.takeIf { it.isFinite() && it in 30f..300f }
-        if (out == null || incoming == null) return "fade"
+        if (out == null || incoming == null) return Decision("fade", listOf(EffectDecisionReason.BPM_UNAVAILABLE))
         val difference = kotlin.math.abs(incoming / out - 1f)
-        if (difference > 0.15f) return "fade"
+        if (difference > MAX_BPM_DIFFERENCE) return Decision("fade",
+            listOf(EffectDecisionReason.BPM_DIFFERENCE_TOO_LARGE), difference * 100f, MAX_BPM_DIFFERENCE * 100f)
         if (difference <= CLOSE_BPM_DIFFERENCE && phaseConfident) {
             return if ((outgoingVocalEnergy ?: 0f) >= HIGH_VOCAL_ENERGY &&
                 (incomingVocalEnergy ?: 0f) >= HIGH_VOCAL_ENERGY
-            ) "vocal_swap" else "bass_swap"
+            ) Decision("vocal_swap", listOf(EffectDecisionReason.BPM_COMPATIBLE,
+                EffectDecisionReason.VOCAL_ENERGY_HIGH), difference * 100f, CLOSE_BPM_DIFFERENCE * 100f,
+                vocalThreshold = HIGH_VOCAL_ENERGY)
+            else Decision("bass_swap", listOf(EffectDecisionReason.BPM_COMPATIBLE,
+                EffectDecisionReason.VOCAL_THRESHOLD_NOT_MET_OR_UNAVAILABLE),
+                difference * 100f, CLOSE_BPM_DIFFERENCE * 100f, vocalThreshold = HIGH_VOCAL_ENERGY)
         }
         return if (difference <= MODERATE_BPM_DIFFERENCE) {
-            if (incoming > out * 1.06f) "rise" else "filter_sweep"
-        } else "echo_out"
+            val rising = incoming > out * 1.06f
+            Decision(if (rising) "rise" else "filter_sweep",
+                listOf(EffectDecisionReason.BPM_MODERATE_DIFFERENCE,
+                    if (rising) EffectDecisionReason.BPM_RISING else EffectDecisionReason.BPM_NOT_RISING_FAST) +
+                    if (!phaseConfident) listOf(EffectDecisionReason.BEAT_ALIGNMENT_UNAVAILABLE) else emptyList(),
+                difference * 100f, MODERATE_BPM_DIFFERENCE * 100f,
+                (incoming / out - 1f) * 100f, (1.06f - 1f) * 100f)
+        } else Decision("echo_out", listOf(EffectDecisionReason.BPM_DIFFERENCE_WITHIN_RANGE),
+            difference * 100f, MODERATE_BPM_DIFFERENCE * 100f)
     }
 }
 
@@ -225,6 +260,10 @@ class AutomixPlayer private constructor(
     private var effectIntensity = 100
     private var activeEffectPlan = TransitionEffectPlan.create("smooth", emptySet())
     private var lastEffectIds: List<String> = emptyList()
+    private val mutableTransitionExplanation = MutableStateFlow<TransitionAnalysisSnapshot?>(null)
+    internal val transitionExplanation = mutableTransitionExplanation.asStateFlow()
+    private var explanationGeneration = 0L
+    private var explanationQueue: QueueSnapshot? = null
     private var activeTransitionBeatmatched = false
     private var lastTransitionStyle: String? = null
     private var lastTransitionBeatmatched = false
@@ -251,6 +290,7 @@ class AutomixPlayer private constructor(
     var lastHandoffElapsedRealtimeMs: Long? = null
         private set
     private var pendingStartPositionMs: Long? = null
+    private var pendingBeatmatchExplanation: EffectSelectionExplanation? = null
     private val samplesA = ArrayDeque<Long>()
     private val samplesB = ArrayDeque<Long>()
     private var samplesPeriodA: Any? = null
@@ -345,6 +385,26 @@ class AutomixPlayer private constructor(
     }
 
     val isCrossfading: Boolean get() = transition.phase == DeckTransition.Phase.FADING
+    internal fun currentTransitionExplanation(): TransitionAnalysisSnapshot? {
+        val snapshot = mutableTransitionExplanation.value ?: return null
+        if (explanationQueue != queueSnapshot() ||
+            snapshot.analyzer != decks.analysisCache?.selectedAnalyzer
+        ) {
+            mutableTransitionExplanation.value = null
+            explanationQueue = null
+            return null
+        }
+        val expectedIndex = if (snapshot.status == TransitionExecutionStatus.ACTIVE)
+            snapshot.outgoingIndex else snapshot.incomingIndex
+        val expectedId = if (snapshot.status == TransitionExecutionStatus.ACTIVE)
+            snapshot.outgoingId else snapshot.incomingId
+        if (active.currentMediaItemIndex != expectedIndex || active.currentMediaItem?.mediaId != expectedId) {
+            mutableTransitionExplanation.value = null
+            explanationQueue = null
+            return null
+        }
+        return snapshot
+    }
     val isAutomixEnabled: Boolean get() = enabled
     val isBeatmatchEnabled: Boolean get() = beatmatchEnabled
     val transitionEffect: String?
@@ -535,7 +595,11 @@ class AutomixPlayer private constructor(
     override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
         assertThread()
         cancelTransition()
-        if (mediaItemIndex != active.currentMediaItemIndex) nextItem = null
+        if (mediaItemIndex != active.currentMediaItemIndex) {
+            mutableTransitionExplanation.value = null
+            explanationQueue = null
+            nextItem = null
+        }
         super.seekTo(mediaItemIndex, positionMs)
     }
 
@@ -548,7 +612,11 @@ class AutomixPlayer private constructor(
     override fun seekToDefaultPosition(mediaItemIndex: Int) {
         assertThread()
         cancelTransition()
-        if (mediaItemIndex != active.currentMediaItemIndex) nextItem = null
+        if (mediaItemIndex != active.currentMediaItemIndex) {
+            mutableTransitionExplanation.value = null
+            explanationQueue = null
+            nextItem = null
+        }
         super.seekToDefaultPosition(mediaItemIndex)
     }
 
@@ -562,6 +630,8 @@ class AutomixPlayer private constructor(
     override fun setRepeatMode(repeatMode: Int) {
         assertThread()
         cancelTransition()
+        mutableTransitionExplanation.value = null
+        explanationQueue = null
         nextItem = null
         super.setRepeatMode(repeatMode)
     }
@@ -569,6 +639,8 @@ class AutomixPlayer private constructor(
     override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
         assertThread()
         cancelTransition()
+        mutableTransitionExplanation.value = null
+        explanationQueue = null
         nextItem = null
         super.setShuffleModeEnabled(shuffleModeEnabled)
     }
@@ -576,6 +648,8 @@ class AutomixPlayer private constructor(
     private fun invalidateNext() {
         assertThread()
         cancelTransition()
+        mutableTransitionExplanation.value = null
+        explanationQueue = null
         nextItem = null
     }
 
@@ -690,6 +764,10 @@ class AutomixPlayer private constructor(
     }
 
     private fun cancelTransition() {
+        if (isCrossfading) {
+            mutableTransitionExplanation.value = null
+            explanationQueue = null
+        }
         decks.factoryA.djTransitionAudioProcessor.bypass()
         decks.factoryB.djTransitionAudioProcessor.bypass()
         if (vinylBrakeTransition) {
@@ -702,6 +780,7 @@ class AutomixPlayer private constructor(
         activeFadeDurationMs = 0L
         transitionProgress = 0f
         pendingStartPositionMs = null
+        pendingBeatmatchExplanation = null
         preparedItem = null
         preparedQueue = null
         standby.playWhenReady = false
@@ -732,6 +811,13 @@ class AutomixPlayer private constructor(
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val snapshot = mutableTransitionExplanation.value
+            if (!released && deck === active && snapshot?.status == TransitionExecutionStatus.COMPLETED &&
+                (deck.currentMediaItemIndex != snapshot.incomingIndex || mediaItem?.mediaId != snapshot.incomingId)
+            ) {
+                mutableTransitionExplanation.value = null
+                explanationQueue = null
+            }
             if (!released && deck === active && preparedItem != null) {
                 cancelTransition()
                 nextItem = null
@@ -889,12 +975,13 @@ class AutomixPlayer private constructor(
             outBpm, inBpm, outgoingGrid, incomingGrid,
             active.currentPosition.toDouble(), standby.currentPosition.toDouble()
         )
-        activeTransitionStyle = if (transitionStyle == "auto") {
-            AutomixEffectSelector.select(
+        val automaticDecision = if (transitionStyle == "auto") {
+            AutomixEffectSelector.decide(
                 outBpm, inBpm, phaseAlignment != null,
                 outgoing.vocalEnergy, incoming.vocalEnergy
             )
-        } else transitionStyle
+        } else null
+        activeTransitionStyle = automaticDecision?.style ?: transitionStyle
         vinylBrakeTransition = activeTransitionStyle == "vinyl_brake"
         var requestedFadeDuration = if (automaticDuration) {
             AutomixMath.automaticDurationMs(outBpm)
@@ -930,6 +1017,10 @@ class AutomixPlayer private constructor(
             val alignment = if (beatmatchEnabled && !vinylBrakeTransition) phaseAlignment else null
             matchedSpeed = if (vinylBrakeTransition) 1f else alignment?.incomingSpeed ?: 1f
             activeTransitionBeatmatched = alignment != null
+            pendingBeatmatchExplanation = if (beatmatchEnabled && !vinylBrakeTransition) {
+                TransitionExplanationEngine.explainBeatmatch(
+                    alignment != null, outBpm, inBpm, outgoingGrid, incomingGrid)
+            } else null
             val delayMs = alignment?.startDelayMs?.let { ceil(it).toLong() } ?: 0L
             pendingStartPositionMs = active.currentPosition +
                 delayMs.coerceAtMost(remaining - END_MARGIN_MS - 1)
@@ -968,6 +1059,40 @@ class AutomixPlayer private constructor(
         transitionProgress = 0f
         transition.start(fadeDuration, SystemClock.elapsedRealtime())
         transition.pause(SystemClock.elapsedRealtime())
+        val outgoingItem = active.currentMediaItem
+        val incomingItem = standby.currentMediaItem
+        if (outgoingItem != null && incomingItem != null) {
+            explanationQueue = queueSnapshot()
+            mutableTransitionExplanation.value = TransitionAnalysisSnapshot(
+                generation = ++explanationGeneration,
+                outgoingId = outgoingItem.mediaId,
+                incomingId = incomingItem.mediaId,
+                outgoingIndex = active.currentMediaItemIndex,
+                incomingIndex = active.nextMediaItemIndex,
+                outgoingTitle = outgoingItem.mediaMetadata.title?.toString(),
+                incomingTitle = incomingItem.mediaMetadata.title?.toString(),
+                durationMs = fadeDuration,
+                transitionStyle = activeTransitionStyle,
+                transitionReasons = automaticDecision?.reasons ?: listOf(EffectDecisionReason.USER_PRESET),
+                selectorDifferencePercent = automaticDecision?.differencePercent,
+                selectorThresholdPercent = automaticDecision?.thresholdPercent,
+                selectorRisingPercent = automaticDecision?.risingPercent,
+                selectorRisingThresholdPercent = automaticDecision?.risingThresholdPercent,
+                selectorVocalThreshold = automaticDecision?.vocalThreshold,
+                status = TransitionExecutionStatus.ACTIVE,
+                analyzer = decks.analysisCache?.selectedAnalyzer,
+                outgoingBpm = outBpm,
+                incomingBpm = inBpm,
+                outgoingGridConfidence = outgoingGrid?.confidence,
+                incomingGridConfidence = incomingGrid?.confidence,
+                outgoingKey = outgoing.camelotKey,
+                incomingKey = incoming.camelotKey,
+                outgoingVocalEnergy = outgoing.vocalEnergy,
+                incomingVocalEnergy = incoming.vocalEnergy,
+                effects = TransitionExplanationEngine.explain(activeEffectPlan, activeTransitionStyle,
+                    automaticDecision?.reasons, additionalEffects) + listOfNotNull(pendingBeatmatchExplanation),
+            )
+        }
         applyVolumes()
         standby.playWhenReady = true
     }
@@ -1044,6 +1169,7 @@ class AutomixPlayer private constructor(
         preparedItem = null
         preparedQueue = null
         pendingStartPositionMs = null
+        pendingBeatmatchExplanation = null
         lastHandoffElapsedRealtimeMs = now
         vinylBrakeTransition = false
         activeTransitionBeatmatched = false
@@ -1052,6 +1178,10 @@ class AutomixPlayer private constructor(
         applyVolumes()
         onActiveDeckChanged?.invoke(outgoing, incoming)
         forwarding.handoff(incoming)
+        explanationQueue = queueSnapshot()
+        mutableTransitionExplanation.value = mutableTransitionExplanation.value?.copy(
+            status = TransitionExecutionStatus.COMPLETED
+        )
         outgoing.playWhenReady = false
         outgoing.stop()
         outgoing.shuffleOrder = ShuffleOrder.DefaultShuffleOrder(outgoing.mediaItemCount)
