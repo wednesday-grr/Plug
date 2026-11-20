@@ -30,9 +30,13 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentHashMap
+import org.akanework.gramophone.BuildConfig
 
 class AudioAnalysisScheduler(
     context: Context,
@@ -58,6 +62,7 @@ class AudioAnalysisScheduler(
     private var currentKey: AnalysisKey? = null
     private var libraryIndex = 0
     private val displayLoads = mutableMapOf<AnalysisKey, Job>()
+    private val failures = ConcurrentHashMap.newKeySet<AnalysisKey>()
 
     init {
         scope.launch {
@@ -65,18 +70,18 @@ class AudioAnalysisScheduler(
                 signal.receive()
                 while (isActive) {
                     val next = synchronized(lock) {
-                        val queued = queue.firstOrNull { AnalysisKey.from(it)?.let { k -> k !in attempted } == true }
+                        val queued = queue.firstOrNull { AnalysisKey.from(it)?.let { k -> cache.selectedKey(k) !in attempted } == true }
                         var libraryCandidate: MediaItem? = null
                         if (queued == null && idle) {
                             while (libraryIndex < library.size && libraryCandidate == null) {
                                 val item = library[libraryIndex++]
-                                if (AnalysisKey.from(item)?.let { it !in attempted } == true)
+                                if (AnalysisKey.from(item)?.let { cache.selectedKey(it) !in attempted } == true)
                                     libraryCandidate = item
                             }
                         }
                         val candidate = queued ?: libraryCandidate
                         candidate?.let {
-                            val key = checkNotNull(AnalysisKey.from(it))
+                            val key = cache.selectedKey(checkNotNull(AnalysisKey.from(it)))
                             attempted.add(key)
                             currentIsLibrary = queued == null
                             currentKey = key
@@ -89,7 +94,10 @@ class AudioAnalysisScheduler(
                             if (cached == null || (analyze == null && cached.edgeAnalysis == null)) {
                                 val result = if (analyze != null) analyze.invoke(next.first) else {
                                     val uri = checkNotNull(next.first.localConfiguration).uri
-                                    val base = cached ?: decoder.decode(uri).let {
+                                    val base = cached ?: if (next.second.analyzer == "essentia") {
+                                        check(BuildConfig.HAS_ESSENTIA) { "This build does not include Essentia" }
+                                        EssentiaTrackAnalyzer.analyze(decoder.decode(uri, sampleRate = 44_100))
+                                    } else decoder.decode(uri).let {
                                         TrackDspAnalyzer.analyze(it.samples, it.startMs)
                                     }
                                     val edges = try {
@@ -118,8 +126,10 @@ class AudioAnalysisScheduler(
                                     }
                                     base.copy(edgeAnalysis = edges)
                                 }
+                                currentCoroutineContext().ensureActive()
                                 cache.store(next.second, result)
                             }
+                            failures.remove(next.second)
                         } catch (e: CancellationException) {
                             synchronized(lock) {
                                 attempted.remove(next.second)
@@ -127,14 +137,15 @@ class AudioAnalysisScheduler(
                             }
                             throw e
                         } catch (e: Exception) {
+                            failures.add(next.second)
                             Log.w("AudioAnalysis", "Analysis failed for ${next.second.mediaId}", e)
                         }
                     }
                     synchronized(lock) {
                         currentJob = job
-                        if ((currentIsLibrary && !idle) ||
+                        if (next.second.analyzer != cache.selectedAnalyzer || (currentIsLibrary && !idle) ||
                             (currentIsLibrary && queue.any {
-                                AnalysisKey.from(it)?.let { key -> key !in attempted } == true
+                                AnalysisKey.from(it)?.let { key -> cache.selectedKey(key) !in attempted } == true
                             })
                         ) job.cancel()
                     }
@@ -152,29 +163,46 @@ class AudioAnalysisScheduler(
     }
 
     fun loadCachedForDisplay(key: AnalysisKey): Job? {
-        if (cache.peek(key) != null) return null
+        val selected = cache.selectedKey(key)
+        if (cache.peek(selected) != null) return null
         return synchronized(lock) {
-            displayLoads[key] ?: scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            displayLoads[selected] ?: scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
                 try {
-                    cache.load(key)
+                    cache.load(selected)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    synchronized(lock) { displayLoads.remove(key) }
                     Log.w("AudioAnalysis", "Unable to load cached analysis for ${key.mediaId}", e)
+                } finally {
+                    synchronized(lock) { displayLoads.remove(selected) }
                 }
             }.also {
-                displayLoads[key] = it
+                displayLoads[selected] = it
                 it.start()
             }
         }
     }
 
+    fun setAnalyzer(analyzer: String) {
+        synchronized(lock) {
+            if (cache.selectedAnalyzer == analyzer) return
+            cache.selectedAnalyzer = analyzer
+            attempted.clear()
+            failures.clear()
+            libraryIndex = 0
+            currentJob?.cancel()
+        }
+
+        signal.trySend(Unit)
+    }
+
+    fun analysisFailed(key: AnalysisKey): Boolean = cache.selectedKey(key) in failures
+
     fun updateQueue(items: List<MediaItem>) {
         synchronized(lock) {
             if (queue == items) return
             queue = items.toList()
-            val first = queue.firstNotNullOfOrNull { AnalysisKey.from(it) }
+            val first = queue.firstNotNullOfOrNull { AnalysisKey.from(it)?.let(cache::selectedKey) }
             if (currentIsLibrary || (first != null && currentKey != first && first !in attempted))
                 currentJob?.cancel()
         }

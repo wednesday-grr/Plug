@@ -6,11 +6,15 @@ on:
     paths:
       - ".github/workflows/essentia-android.yml"
       - ".github/essentia/**"
+      - "app/src/main/cpp/**"
+      - "app/build.gradle.kts"
   push:
     branches: [ "beta" ]
     paths:
       - ".github/workflows/essentia-android.yml"
       - ".github/essentia/**"
+      - "app/src/main/cpp/**"
+      - "app/build.gradle.kts"
 
 permissions:
   contents: read
@@ -78,3 +82,40 @@ jobs:
           path: essentia-artifacts/${{ matrix.abi }}/
           if-no-files-found: error
           retention-days: 30
+
+  app:
+    name: Build app with Essentia
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+          cache: gradle
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: essentia-android-*
+          path: downloaded-essentia
+      - name: Install native artifacts
+        run: |
+          mkdir -p app/essentia-artifacts
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -f "downloaded-essentia/essentia-android-$abi/lib/libessentia.a"
+            mv "downloaded-essentia/essentia-android-$abi" "app/essentia-artifacts/$abi"
+          done
+      - name: Set up Android build
+        run: |
+          echo releaseType=CI > package.properties
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug -PuseEssentia=true --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gramophone-essentia-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

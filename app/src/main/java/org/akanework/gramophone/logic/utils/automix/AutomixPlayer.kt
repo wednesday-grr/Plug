@@ -670,7 +670,7 @@ class AutomixPlayer private constructor(
 
     private fun audioMetadata(player: ExoPlayer): ResolvedTrackAudioMetadata {
         val key = player.currentMediaItem?.let(AnalysisKey::from)
-        val cached = key?.let { decks.analysisCache?.peek(it) }
+        val cached = key?.let { decks.analysisCache?.peekSelected(it) }
         val metadata = TrackAudioMetadataResolver.resolvePlayer(player, cached)
         val edges = cached?.edgeAnalysis ?: return metadata
         val edgeGrid = when {
@@ -756,7 +756,7 @@ class AutomixPlayer private constructor(
         preparedItem = item
         preparedQueue = queueSnapshot()
         standbyProcessor.applySettings(activeProcessor.snapshotSettings())
-        val edges = AnalysisKey.from(item)?.let { decks.analysisCache?.peek(it)?.edgeAnalysis }
+        val edges = AnalysisKey.from(item)?.let { decks.analysisCache?.peekSelected(it)?.edgeAnalysis }
         val startPosition = TrackEdgeAnalyzer.startPosition(edges, maxSkipMs)
         standby.setMediaItems(items, index, startPosition)
         val activeOrder = active.shuffleOrder
@@ -857,7 +857,7 @@ class AutomixPlayer private constructor(
         ) return
         val remainingToEnd = active.duration - active.currentPosition
         val edges = active.currentMediaItem?.let(AnalysisKey::from)
-            ?.let { decks.analysisCache?.peek(it)?.edgeAnalysis }
+            ?.let { decks.analysisCache?.peekSelected(it)?.edgeAnalysis }
         val candidateEnd = TrackEdgeAnalyzer.endPosition(edges, active.duration, maxSkipMs)
         val plannedEnd = if (candidateEnd - active.currentPosition > END_MARGIN_MS) {
             candidateEnd

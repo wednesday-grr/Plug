@@ -1137,11 +1137,19 @@ class FullBottomSheet
                     if (data.containsKey("bpm")) data.getFloat("bpm") else null,
                     data.getString("key"), data.getFloat("speed", 1f)
                 )
+                val analyzer = context.getString(
+                    if (data.getString("analyzer") == "essentia") R.string.automix_analyzer_essentia
+                    else R.string.automix_analyzer_existing
+                )
+                currentDjText = context.getString(R.string.dj_metrics_analyzer, currentDjText, analyzer)
+                if (data.getBoolean("analysis_failed")) {
+                    currentDjText = context.getString(R.string.dj_analysis_failed, currentDjText)
+                }
                 nextDjAvailable = data.getBoolean("next_available")
                 nextDjText = if (nextDjAvailable) formatDjMetrics(
                     if (data.containsKey("next_bpm")) data.getFloat("next_bpm") else null,
                     data.getString("next_key"), data.getFloat("next_speed", 1f)
-                ) else ""
+                ).let { context.getString(R.string.dj_metrics_analyzer, it, analyzer) } else ""
                 val primaryEffect = data.getString("transition_effect")
                 val effectIds = data.getStringArrayList("transition_effects").orEmpty()
                 val effect = (listOfNotNull(primaryEffect) + effectIds).distinct()

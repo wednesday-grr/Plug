@@ -60,16 +60,35 @@ middle window for tempo/key and additional edge windows for transition points.
 Cached analyses remain in the existing SQLite database. Confidence describes
 the existing estimator and is not interchangeable with another analyzer's.
 
-This repository contains no Python AutoMix renderer, Librosa/CUE-DETR analysis,
-or Essentia integration. Essentia has an Android-capable C++ library, but adding
-it to playback analysis requires a separately verified NDK build and JNI
-adapter, ABI packaging, dependency and AGPL licensing review, cache provenance,
-and device tests. An external Python tool would not provide on-device analysis.
-The official [Essentia Android build instructions](https://essentia.upf.edu/installing.html#building-essentia-on-android)
-specify Linux or macOS cross-compilation; the current Windows environment has no
-installed WSL distribution. RhythmExtractor2013 requires 44.1 kHz input, whereas
-the current decoder produces 11,025 Hz analysis PCM, so an adapter must resample
-or decode separately, retain timestamp offsets, and distinguish analyzer results.
+This repository contains no Python AutoMix renderer or Librosa/CUE-DETR analysis.
+Audio settings provide an experimental **BPM analysis engine** choice. Existing
+is the default; Essentia requires the opt-in build below. Changing the setting
+does not rebuild the player or reset its queue. Cached results are keyed by
+analyzer; existing version 3 cache rows migrate as `existing`. An uncached track
+is analyzed when it is queued or when idle library analysis reaches it.
+Switching back reuses that engine's cached result. Files changed on disk are
+reanalyzed according to their modification identity.
+
+Essentia's RhythmExtractor2013 multifeature receives up to 60 seconds from the
+middle of a track, decoded to mono and resampled to 44,100 Hz with a
+windowed-sinc low-pass filter. The limit bounds memory and processing cost but
+does not capture all tempo changes, long intros or outros. At least five seconds
+and a known track duration are required; silent audio, discontinuous timestamps
+and invalid results are reported as failures. No
+automatic analyzer fallback occurs. Failures are logged and shown in quality
+info for the current track. Audio tags still take precedence over analyzed BPM
+and key; the quality-info label identifies the *setting*, not necessarily the
+source of a tagged BPM.
+
+Essentia currently supplies the middle-window BPM only to AutoMix. Its raw
+confidence is not comparable to the existing analyzer's confidence, so it is
+not converted into a trusted beat-grid confidence. Key and vocal energy are
+not supplied by this backend. The existing edge/silence analyzer still runs on
+edge windows for transition points and may provide its own independently
+validated edge grids. Native computation itself is not interruptible; on
+cancellation the result is discarded after the native call returns. Full-track
+tempo variability, analyzer comparisons and on-device performance measurements
+remain unverified.
 
 The **Build Essentia for Android** GitHub Actions workflow can be started via
 Actions > Build Essentia for Android > Run workflow after it is pushed. It
@@ -78,11 +97,41 @@ x86_64 using NDK 27.2 and API 23. Each job publishes an artifact containing the
 static library, headers, dependency/license information and build metadata.
 The lightweight build uses KissFFT and excludes FFmpeg and libsamplerate, so
 audio decoding and 44.1 kHz resampling must be supplied separately. The workflow
-checks object architectures, algorithm registration and linking; it does not
-run the algorithm on an Android device. The result is not yet a JNI library and
-is not packaged in the app. Review Essentia's AGPL and other dependency licenses
-before distribution.
+checks object architectures, algorithm registration and linking, then downloads
+all four artifacts and builds an opt-in debug APK containing the JNI library.
+The workflow does not run the algorithm on an Android device.
 
-No Essentia option, automatic fallback, comparison benchmark, or accuracy claim
-is provided until an actual backend and representative ground-truth dataset
-are available. The existing analyzer remains unchanged.
+### Local Essentia build
+
+The default app build requires no Essentia files and keeps the existing analyzer.
+To enable Essentia, download the four `essentia-android-<ABI>`
+artifacts from the same workflow run and extract each archive into
+`app/essentia-artifacts/<ABI>/`, such that `lib/libessentia.a`,
+`include/`, `licenses/`, and `build-info.txt` are directly inside the ABI
+directory. This directory is ignored by Git; do not commit the binaries. The
+build checks the pinned commit, ABI, NDK, API and Eigen metadata. Use NDK
+27.2.12479018 and CMake 3.22.1. To enable it for Android Studio's Run/Debug
+configurations, add `useEssentia=true` to the root `local.properties` file and
+sync Gradle. This file is local and ignored by Git. Run or reinstall the
+resulting debug app; an already installed APK does not gain the native library.
+Alternatively, enable it for a single command:
+
+```shell
+./gradlew :app:assembleDebug -PuseEssentia=true
+```
+
+On Windows use `gradlew.bat` instead. The command-line Gradle property takes
+precedence over `local.properties`: use `-PuseEssentia=false` to explicitly
+build without Essentia. The choice controls packaging for all build types,
+including release. Native dependency license files are
+packaged in the opt-in APK assets. Essentia is AGPL-licensed; packaging notices
+alone does not establish compliance. Review Essentia's AGPL, its dependencies'
+licenses, and corresponding-source obligations before distributing the APK.
+The pinned source and build scripts are identified in the workflow.
+
+No automatic fallback, comparison benchmark or accuracy claim is provided.
+The existing analyzer remains available and is the safer choice for its
+established key and beat-grid behavior; Essentia is useful for controlled
+experimentation with an alternative rhythm estimator, not guaranteed better
+accuracy. On builds without the native library, choosing Essentia reports a
+failure instead of silently switching engines.

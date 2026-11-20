@@ -11,6 +11,11 @@ val localBuildProperties = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 val geniusClientKey = localBuildProperties.getProperty("GENIUS_CLIENT_KEY", "")
+val useEssentiaSetting = providers.gradleProperty("useEssentia").orNull
+    ?: localBuildProperties.getProperty("useEssentia")
+    ?: "false"
+val useEssentia = useEssentiaSetting.toBooleanStrictOrNull()
+    ?: error("useEssentia must be true or false")
 
 plugins {
     id("com.android.application")
@@ -104,9 +109,28 @@ android {
         lintConfig = file("lint.xml")
     }
 
+    if (useEssentia) {
+        sourceSets.getByName("main").assets.srcDir(file("essentia-artifacts/arm64-v8a/licenses"))
+        externalNativeBuild {
+            cmake {
+                path("src/main/cpp/CMakeLists.txt")
+                version = "3.22.1"
+            }
+        }
+        ndkVersion = "27.2.12479018"
+    }
+
     defaultConfig {
         applicationId = appIdOverride ?: "org.plug.player"
         minSdk = 23
+        buildConfigField("boolean", "HAS_ESSENTIA", useEssentia.toString())
+        if (useEssentia) {
+            externalNativeBuild {
+                cmake {
+                    arguments("-DESSENTIA_ROOT=${file("essentia-artifacts").absolutePath.replace("\\", "/")}")
+                }
+            }
+        }
         targetSdk = 37
         versionCode = 24
         versionName = "1.1.2"
@@ -115,6 +139,7 @@ android {
             // will apply unconditionally
             versionNameSuffix = vnos ?: myVersionName
         }
+
         buildConfigField(
             "String",
             "MY_VERSION_NAME",

@@ -46,6 +46,10 @@
     <string name="music_store_download_scan_needed">Download complete. Allow music access and scan downloads in Plug.</string>
     <string name="music_store_download_scan_partial">Download complete, but some files could not be scanned.</string>
     <string name="dj_metrics">%1$s BPM / %2$s / %3$sx</string>
+    <string name="dj_metrics_analyzer">%1$s · Analyzer setting: %2$s</string>
+    <string name="dj_analysis_failed">%1$s · analysis failed</string>
+    <string name="automix_analyzer_existing">Existing analyzer</string>
+    <string name="automix_analyzer_essentia">Essentia</string>
     <string name="dj_crossfade">Crossfade</string>
     <string name="dj_bass_swap">Bass-Swap</string>
     <string name="dj_filter_sweep">Filter Sweep</string>
@@ -1228,6 +1232,17 @@
     <string name="settings_replaygain">ReplayGain</string>
     <!-- Automix controls in audio settings -->
     <string name="settings_automix_category">Automix</string>
+    <string name="settings_automix_analyzer">BPM analysis engine</string>
+    <string name="settings_automix_analyzer_summary">Existing preserves established key and beat-grid analysis. Essentia provides alternative rhythm analysis and requires an Essentia-enabled build; no automatic fallback is performed.</string>
+    <string name="settings_automix_analyzer_unavailable">This build does not include Essentia. Select Existing analyzer or install an Essentia-enabled build. No automatic fallback is performed.</string>
+    <string-array name="automix_analyzer_entries">
+        <item>@string/automix_analyzer_existing</item>
+        <item>@string/automix_analyzer_essentia</item>
+    </string-array>
+    <string-array name="automix_analyzer_values" translatable="false">
+        <item>existing</item>
+        <item>essentia</item>
+    </string-array>
     <string name="settings_automix_enabled">Enable Automix</string>
     <string name="settings_automix_description">Crossfade between tracks. Audio offload is disabled while Automix is enabled.</string>
     <string name="settings_automix_beatmatch">DJ beatmatching / tempo sync</string>

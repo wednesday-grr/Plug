@@ -24,7 +24,16 @@ import androidx.media3.common.MediaItem
 import uk.akane.libphonograph.items.modifiedDate
 import java.util.concurrent.ConcurrentHashMap
 
-data class AnalysisKey(val mediaId: String, val modified: Long, val uri: String) {
+data class AnalysisKey(
+    val mediaId: String,
+    val modified: Long,
+    val uri: String,
+    val analyzer: String = "existing",
+) {
+    init {
+        require(analyzer in setOf("existing", "essentia")) { "Unknown analyzer: $analyzer" }
+    }
+
     companion object {
         fun from(item: MediaItem): AnalysisKey? {
             val uri = item.localConfiguration?.uri ?: return null
@@ -35,8 +44,18 @@ data class AnalysisKey(val mediaId: String, val modified: Long, val uri: String)
     }
 }
 
-class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 3) {
+class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 4) {
     private val memory = ConcurrentHashMap<AnalysisKey, TrackAnalysis>()
+    @Volatile
+    var selectedAnalyzer: String = "existing"
+        set(value) {
+            require(value in setOf("existing", "essentia"))
+            field = value
+        }
+
+    fun selectedKey(key: AnalysisKey): AnalysisKey = key.copy(analyzer = selectedAnalyzer)
+    fun peekSelected(key: AnalysisKey): TrackAnalysis? = peek(selectedKey(key))
+    fun loadSelected(key: AnalysisKey): TrackAnalysis? = load(selectedKey(key))
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE analysis (
@@ -47,7 +66,8 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             intro_point INTEGER, outro_skip INTEGER, start_period REAL, start_phase REAL,
             start_confidence REAL, end_period REAL, end_phase REAL, end_confidence REAL,
             start_window_end INTEGER, end_window_start INTEGER,
-            PRIMARY KEY(media_id, modified, uri))""")
+            analyzer TEXT NOT NULL,
+            PRIMARY KEY(media_id, modified, uri, analyzer))""")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -64,11 +84,29 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             db.execSQL("ALTER TABLE analysis ADD COLUMN start_window_end INTEGER")
             db.execSQL("ALTER TABLE analysis ADD COLUMN end_window_start INTEGER")
         }
+        if (oldVersion < 4 && newVersion >= 4) {
+            db.execSQL("ALTER TABLE analysis RENAME TO analysis_v3")
+            onCreate(db)
+            db.execSQL("""INSERT INTO analysis (
+                media_id, modified, uri, bpm, camelot, beat_offset, confidence,
+                window_start, window_end, vocal_energy, edge_duration, leading_silence,
+                trailing_silence, intro_point, outro_skip, start_period, start_phase,
+                start_confidence, end_period, end_phase, end_confidence, start_window_end,
+                end_window_start, analyzer
+            ) SELECT
+                media_id, modified, uri, bpm, camelot, beat_offset, confidence,
+                window_start, window_end, vocal_energy, edge_duration, leading_silence,
+                trailing_silence, intro_point, outro_skip, start_period, start_phase,
+                start_confidence, end_period, end_phase, end_confidence, start_window_end,
+                end_window_start, 'existing' FROM analysis_v3""")
+            db.execSQL("DROP TABLE analysis_v3")
+        }
     }
 
     fun peek(key: AnalysisKey): TrackAnalysis? = memory[key]
 
     /** Call on a background dispatcher. */
+    @Synchronized
     fun load(key: AnalysisKey): TrackAnalysis? {
         memory[key]?.let { return it }
         readableDatabase.query(
@@ -78,7 +116,8 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                 "intro_point", "outro_skip", "start_period", "start_phase", "start_confidence",
                 "end_period", "end_phase", "end_confidence", "start_window_end", "end_window_start"
             ),
-            "media_id=? AND modified=? AND uri=?", arrayOf(key.mediaId, key.modified.toString(), key.uri),
+            "media_id=? AND modified=? AND uri=? AND analyzer=?",
+            arrayOf(key.mediaId, key.modified.toString(), key.uri, key.analyzer),
             null, null, null
         ).use { cursor ->
             if (!cursor.moveToFirst()) return null
@@ -106,9 +145,11 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
     }
 
     /** Call on a background dispatcher. */
+    @Synchronized
     fun store(key: AnalysisKey, result: TrackAnalysis) {
         val values = ContentValues().apply {
             put("media_id", key.mediaId); put("modified", key.modified); put("uri", key.uri)
+            put("analyzer", key.analyzer)
             put("bpm", result.bpm); put("camelot", result.camelotKey)
             put("beat_offset", result.beatOffsetMs); put("confidence", result.confidence)
             put("window_start", result.windowStartMs); put("window_end", result.windowEndMs)
@@ -140,7 +181,7 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
         } finally {
             db.endTransaction()
         }
-        memory.keys.removeAll { it.mediaId == key.mediaId && it.uri == key.uri && it != key }
+        memory.keys.removeAll { it.mediaId == key.mediaId && it.uri == key.uri && it.modified != key.modified }
         memory[key] = result
     }
 }

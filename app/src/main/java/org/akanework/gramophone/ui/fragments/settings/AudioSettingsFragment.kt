@@ -20,6 +20,7 @@ package org.akanework.gramophone.ui.fragments.settings
 import android.os.Bundle
 import androidx.preference.Preference
 import org.akanework.gramophone.R
+import org.akanework.gramophone.BuildConfig
 import org.akanework.gramophone.logic.utils.PostAmpAudioOutputProvider
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingsActivity
@@ -33,6 +34,10 @@ class AudioSettingsFragment : BasePreferenceFragment() {
         setPreferencesFromResource(R.xml.settings_audio, rootKey)
         findPreference<Preference>("rg_boost_gain_category")!!.isVisible =
             PostAmpAudioOutputProvider.isVolumeAvailable || PostAmpAudioOutputProvider.isDpeAvailable
+        if (!BuildConfig.HAS_ESSENTIA) {
+            findPreference<Preference>("automix_analyzer")!!.summary =
+                getString(R.string.settings_automix_analyzer_unavailable)
+        }
     }
 
     override fun onPreferenceTreeClick(preference: Preference): Boolean {

@@ -43,6 +43,16 @@
             app:iconSpaceReserved="true" />
 
         <ListPreference
+            android:defaultValue="existing"
+            android:entries="@array/automix_analyzer_entries"
+            android:entryValues="@array/automix_analyzer_values"
+            android:key="automix_analyzer"
+            android:layout="@layout/preference_basic"
+            android:title="@string/settings_automix_analyzer"
+            android:summary="@string/settings_automix_analyzer_summary"
+            app:iconSpaceReserved="true" />
+
+        <ListPreference
             android:defaultValue="auto"
             android:dependency="automix_enabled"
             android:entries="@array/automix_transition_styles"

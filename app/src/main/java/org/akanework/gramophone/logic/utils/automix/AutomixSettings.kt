@@ -33,6 +33,7 @@ data class AutomixSettings(
     val maxSkipSeconds: Int = 15,
     val additionalEffects: Set<String> = emptySet(),
     val effectIntensityPercent: Int = 100,
+    val analyzer: String = "existing",
 )
 
 class AutomixSettingsStore(private val preferences: SharedPreferences) {
@@ -46,6 +47,7 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
         private const val TRANSITION_STYLE = "automix_transition_style"
         private const val ADDITIONAL_EFFECTS = "automix_additional_effects"
         private const val EFFECT_INTENSITY = "automix_effect_intensity"
+        private const val ANALYZER = "automix_analyzer"
         private val TRANSITION_STYLES = setOf(
             "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out",
             "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise"
@@ -58,7 +60,7 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
     fun onPreferenceChanged(key: String?) {
         if (key == null || key == ENABLED || key == BEATMATCH_ENABLED || key == DURATION ||
             key == TRANSITION_STYLE || key == AUTOMATIC_DURATION || key == MAX_SKIP ||
-            key == ADDITIONAL_EFFECTS || key == EFFECT_INTENSITY
+            key == ADDITIONAL_EFFECTS || key == EFFECT_INTENSITY || key == ANALYZER
         ) {
             mutableSettings.value = readSettings()
         }
@@ -84,6 +86,8 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
         val requestedEffects = preferences.getStringSet(ADDITIONAL_EFFECTS, emptySet())?.toSet() ?: emptySet()
         val unknownEffects = requestedEffects - TransitionEffectPlan.selectableIds
         if (unknownEffects.isNotEmpty()) Log.w(TAG, "Unknown additional effects: $unknownEffects")
+        val analyzer = preferences.getString(ANALYZER, "existing") ?: "existing"
+        if (analyzer !in setOf("existing", "essentia")) Log.w(TAG, "Unknown analyzer $analyzer; using existing")
         return AutomixSettings(
             enabled = preferences.getBooleanStrict(ENABLED, false),
             beatmatchEnabled = preferences.getBooleanStrict(BEATMATCH_ENABLED, true),
@@ -93,6 +97,7 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
             maxSkipSeconds = maxSkip.coerceIn(0, 30),
             additionalEffects = requestedEffects.intersect(TransitionEffectPlan.selectableIds),
             effectIntensityPercent = effectIntensity.coerceIn(0, 100),
+            analyzer = analyzer.takeIf { it in setOf("existing", "essentia") } ?: "existing",
         )
     }
 }

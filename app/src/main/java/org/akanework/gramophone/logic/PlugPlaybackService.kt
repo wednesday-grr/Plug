@@ -438,7 +438,10 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
     override fun onCreate() {
         Log.i(TAG, "+onCreate()")
         super.onCreate()
+        prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        automixSettings = AutomixSettingsStore(prefs)
         audioAnalysis = AudioAnalysisScheduler(this, TrackAnalysisCache(this))
+        audioAnalysis.setAnalyzer(automixSettings.settings.value.analyzer)
         audioAnalysis.setIdle(true)
         scope.launch {
             plugApplication.reader.songListFlow.collect { audioAnalysis.updateLibrary(it) }
@@ -450,8 +453,6 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         handler.post(automixLyricsTick)
         mainExecutor = ContextCompat.getMainExecutor(this)
         nm = NotificationManagerCompat.from(this)
-        prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
-        automixSettings = AutomixSettingsStore(prefs)
         qb = QueueBoard(this)
         setListener(this)
         setMediaNotificationProvider(
@@ -1013,6 +1014,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String?) {
         automixSettings.onPreferenceChanged(key)
+        if (key == null || key == "automix_analyzer") {
+            audioAnalysis.setAnalyzer(automixSettings.settings.value.analyzer)
+        }
         if (key == "automix_enabled") {
             rebuildPlayerForAudioMode(automixSettings.settings.value.enabled)
         } else if (key == "automix_beatmatch_enabled" || key == "automix_duration_sec" ||
@@ -1413,6 +1417,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 val index = player.currentMediaItemIndex
                 val engine = wrapper.playbackEngine as? AutomixPlayer
                 val nextItem = engine?.upcomingMediaItem
+                val selectedAnalyzer = audioAnalysis.cache.selectedAnalyzer
                 val key = AnalysisKey.from(item)
                 key?.let { audioAnalysis.loadCachedForDisplay(it)?.join() }
                 val nextKey = nextItem?.let(AnalysisKey::from)
@@ -1420,17 +1425,17 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 if (endedWorkaroundPlayer !== wrapper || wrapper.exoPlayer !== player ||
                     player.currentMediaItemIndex != index || player.currentMediaItem != item ||
                     (wrapper.playbackEngine as? AutomixPlayer) !== engine ||
-                    engine?.upcomingMediaItem != nextItem
+                    engine?.upcomingMediaItem != nextItem || audioAnalysis.cache.selectedAnalyzer != selectedAnalyzer
                 ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
                 val metadata = TrackAudioMetadataResolver.resolvePlayer(
-                    player, key?.let(audioAnalysis.cache::peek)
+                    player, key?.let(audioAnalysis.cache::peekSelected)
                 )
                 val standby = engine?.upcomingStandbyPlayer
                 val nextMetadata = if (nextItem != null) {
                     standby?.let {
-                        TrackAudioMetadataResolver.resolvePlayer(it, nextKey?.let(audioAnalysis.cache::peek))
+                        TrackAudioMetadataResolver.resolvePlayer(it, nextKey?.let(audioAnalysis.cache::peekSelected))
                     } ?: TrackAudioMetadataResolver.resolve(
-                        emptyList(), nextKey?.let(audioAnalysis.cache::peek), 0
+                        emptyList(), nextKey?.let(audioAnalysis.cache::peekSelected), 0
                     )
                 } else null
                 val now = SystemClock.elapsedRealtime()
@@ -1438,6 +1443,8 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
                     res.extras.putString("media_id", item.mediaId)
                     res.extras.putInt("index", index)
+                    res.extras.putString("analyzer", selectedAnalyzer)
+                    res.extras.putBoolean("analysis_failed", key?.let(audioAnalysis::analysisFailed) == true)
                     metadata.bpm?.let { res.extras.putFloat("bpm", it) }
                     res.extras.putString("key", metadata.camelotKey)
                     res.extras.putFloat("speed", player.playbackParameters.speed)
@@ -1489,10 +1496,11 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 val window = Timeline.Window()
                 val ids = (0 until timeline.windowCount).map { timeline.getWindow(it, window).uid }
                 val items = (0 until engine.mediaItemCount).map(engine::getMediaItemAt)
+                val selectedAnalyzer = audioAnalysis.cache.selectedAnalyzer
                 val metadata = items.mapIndexed { itemIndex, item ->
                     if (itemIndex < index) return@mapIndexed SmartQueueSorter.Metadata(null, null)
                     val cached = withContext(Dispatchers.IO) {
-                        AnalysisKey.from(item)?.let(audioAnalysis.cache::load)
+                        AnalysisKey.from(item)?.copy(analyzer = selectedAnalyzer)?.let(audioAnalysis.cache::load)
                     }
                     val uri = item.localConfiguration?.uri
                     val tags = if (uri?.scheme in listOf("content", "file")) {
@@ -1524,6 +1532,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 val now = engine.currentTimeline
                 if (endedWorkaroundPlayer !== wrapper || wrapper.playbackEngine !== engine ||
                     engine.currentMediaItemIndex != index || engine.isCrossfading ||
+                    audioAnalysis.cache.selectedAnalyzer != selectedAnalyzer ||
                     !automixSettings.settings.value.enabled ||
                     engine.shuffleModeEnabled != shuffle || engine.repeatMode != repeat ||
                     (shuffle && shuffleOrder() != shuffledIndices) ||

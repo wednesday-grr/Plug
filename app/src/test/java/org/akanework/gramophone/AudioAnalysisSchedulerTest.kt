@@ -23,6 +23,7 @@ import androidx.media3.common.MediaMetadata
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import org.akanework.gramophone.logic.utils.automix.AudioAnalysisScheduler
 import org.akanework.gramophone.logic.utils.automix.AnalysisKey
@@ -46,6 +47,58 @@ class AudioAnalysisSchedulerTest {
         .setMediaMetadata(MediaMetadata.Builder().setExtras(Bundle().apply {
             putLong(EXTRA_MODIFIED_DATE, 12345)
         }).build()).build()
+
+    @Test
+    fun failedAnalysisIsReportedWithoutSwitchingEngine() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val track = item("failure-engine-test")
+        val key = checkNotNull(AnalysisKey.from(track))
+        val scheduler = AudioAnalysisScheduler(context, TrackAnalysisCache(context)) {
+            error("simulated failure")
+        }
+        try {
+            scheduler.setAnalyzer("essentia")
+            scheduler.updateQueue(listOf(track))
+            withTimeout(10_000) {
+                while (!scheduler.analysisFailed(key)) delay(10)
+            }
+            assertEquals("essentia", scheduler.cache.selectedAnalyzer)
+            assertNull(scheduler.cache.peekSelected(key))
+        } finally {
+            scheduler.close()
+        }
+    }
+
+    @Test
+    fun switchingAnalyzerCancelsWorkAndPreservesSeparateCacheEntries() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val track = item("switch-engine-test")
+        val key = checkNotNull(AnalysisKey.from(track))
+        val started = Channel<Int>(Channel.UNLIMITED)
+        val block = CompletableDeferred<Unit>()
+        var calls = 0
+        val cache = TrackAnalysisCache(context)
+        val scheduler = AudioAnalysisScheduler(context, cache) {
+            calls++
+            started.send(calls)
+            if (calls == 1) block.await()
+            TrackAnalysis(130f, null, null, 0f, 0, 1000)
+        }
+        try {
+            scheduler.updateQueue(listOf(track))
+            assertEquals(1, withTimeout(10_000) { started.receive() })
+            scheduler.setAnalyzer("essentia")
+            assertEquals(2, withTimeout(10_000) { started.receive() })
+            withTimeout(10_000) {
+                while (cache.peek(key.copy(analyzer = "essentia")) == null) delay(10)
+            }
+            assertNull(cache.peek(key))
+            assertEquals(130f, cache.peekSelected(key)?.bpm)
+        } finally {
+            scheduler.close()
+            started.close()
+        }
+    }
 
     @Test
     fun displayLoadsPersistedAnalysisWithoutWaitingForLibraryWork() = runBlocking {

@@ -33,6 +33,17 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class, sdk = [25])
 class AutomixSettingsTest {
     @Test
+    fun persistsAnalyzerSelectionWithExistingAsDefault() {
+        val prefs = preferences()
+        val store = AutomixSettingsStore(prefs)
+        assertEquals("existing", store.settings.value.analyzer)
+        prefs.edit().putString("automix_analyzer", "essentia").commit()
+        store.onPreferenceChanged("automix_analyzer")
+        assertEquals("essentia", store.settings.value.analyzer)
+        assertEquals("essentia", AutomixSettingsStore(prefs).settings.value.analyzer)
+    }
+
+    @Test
     fun readsDefaultsAndPersistedValues() {
         val prefs = preferences()
         assertEquals(AutomixSettings(false, true, 5), AutomixSettingsStore(prefs).settings.value)
