@@ -522,13 +522,15 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        if (key == "lyric_center" || key == "lyric_no_animation" || key == "lyric_apple_music_effects") {
+        if (key == "lyric_center" || key == "lyric_no_animation" ||
+            key == "lyric_apple_music_effects" || key == "lyric_word_expansion_duration"
+        ) {
             adapter?.onPrefsChanged()
             incomingAdapter?.onPrefsChanged()
         }
         if (key == "lyric_center" || key == "lyric_no_animation" ||
             key == "translation_auto_word" || key == "lyric_text_size" ||
-            key == "lyric_apple_music_effects"
+            key == "lyric_apple_music_effects" || key == "lyric_word_expansion_duration"
         )
         {
             newView?.onPrefsChanged(key)

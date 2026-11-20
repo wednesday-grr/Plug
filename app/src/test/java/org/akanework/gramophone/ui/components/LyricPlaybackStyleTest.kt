@@ -49,17 +49,16 @@ class LyricPlaybackStyleTest {
     }
 
     @Test
-    fun longWordsArePreparedAndGrowAtTheirOwnStart() {
+    fun wordsInLongLinesArePreparedAndGrowAtTheirOwnStart() {
         val words = listOf(
             SemanticLyrics.Word(0uL..1000uL, 0..2, false),
             SemanticLyrics.Word(1000uL..4000uL, 4..7, false),
             SemanticLyrics.Word(4000uL..5001uL, 9..12, false),
             SemanticLyrics.Word(5001uL, null, 14..16, false)
         )
-        val prepared = prepareLongLyricWords(words)
-        assertNull(prepared[0])
-        assertNull(prepared[3])
-        val word = prepared[1]!!
+        val prepared = prepareLongLyricWords(words, "abc defg hijk lmn", 0uL..5001uL)
+        assertEquals(4, prepared.size)
+        val word = prepared[1]
         assertEquals(1f, activeWordScale(word, 999uL, true), 0.001f)
         assertEquals(1f, activeWordScale(word, 1000uL, true), 0.001f)
         assertEquals(1.06f, activeWordScale(word, 1100uL, true), 0.001f)
@@ -70,10 +69,12 @@ class LyricPlaybackStyleTest {
         assertEquals(1.06f, activeWordScale(prepared[2], 4100uL, true), 0.001f)
         assertEquals(1.12f, activeWordScale(word, 1000uL, false), 0.001f)
         assertEquals(1f, activeWordScale(null, 2200uL, true), 0.001f)
+        assertEquals(1.06f, activeWordScale(word, 1200uL, true, 400), 0.001f)
+        assertTrue(prepareLongLyricWords(words, "abc defg hijk lmn", 0uL..1000uL).isEmpty())
     }
 
     @Test
-    fun newRendererPreparesOnlyLongWordGeometryPerWord() {
+    fun newRendererPreparesWordGeometryForLongLines() {
         val context = RuntimeEnvironment.getApplication()
         val timed = line("one two three", 1000uL, 5000uL, null).copy(words = mutableListOf(
             SemanticLyrics.Word(1000uL..2500uL, 0..2, false),
@@ -84,10 +85,43 @@ class LyricPlaybackStyleTest {
             .buildSpForMeasure(SemanticLyrics.SyncedLyrics(listOf(timed)), 800).second.single()
         assertEquals(3, item.longWords.size)
         assertEquals(0..2, item.longWords[0]?.word?.charRange)
-        assertNull(item.longWords[1])
+        assertEquals(4..6, item.longWords[1]?.word?.charRange)
         assertEquals(8..12, item.longWords[2]?.word?.charRange)
-        assertTrue(item.longWords[0]!!.bounds.width() > 0f)
-        assertTrue(item.longWords[2]!!.bounds.width() > 0f)
+        assertEquals(3, item.longWords[0]!!.characters.size)
+        assertEquals(3, item.longWords[1]!!.characters.size)
+        assertTrue(item.longWords[0]!!.characters[0].bounds.width() > 0f)
+        assertTrue(item.longWords[1]!!.characters[0].bounds.width() > 0f)
+        assertTrue(item.longWords[2]!!.characters[0].bounds.width() > 0f)
+    }
+
+    @Test
+    fun lineWithoutWordTimingsSplitsItsDurationAcrossWords() {
+        val words = prepareLongLyricWords(null, "one two three", 1000uL..4000uL)
+        val thaiWords = prepareLongLyricWords(null, "ฉันรักเพลง", 1000uL..4000uL)
+
+        assertEquals(3, words.size)
+        assertTrue(thaiWords.size > 1)
+        assertEquals(1000uL, words[0].begin)
+        assertEquals(1999uL, words[0].end)
+        assertEquals(2000uL, words[1].begin)
+        assertEquals(2999uL, words[1].end)
+        assertEquals(3000uL, words[2].begin)
+        assertEquals(4000uL, words[2].end)
+        assertEquals(1f, activeWordScale(words[1], 1999uL, true), 0.001f)
+        assertTrue(activeWordScale(words[1], 2100uL, true) > 1f)
+    }
+
+    @Test
+    fun longWordExpandsOneCharacterAtATime() {
+        val word = LongLyricWord(1000uL, 1799uL, 0..7)
+        val characters = prepareLongLyricCharacters(word, "Tomorrow")
+
+        assertEquals(8, characters.size)
+        assertEquals(0..0, characters[0].charRange)
+        assertEquals(700uL, characters[7].timing.begin - word.begin)
+        assertTrue(activeWordScale(characters[0].timing, 1050uL, true) > 1f)
+        assertEquals(1f, activeWordScale(characters[1].timing, 1050uL, true), 0.001f)
+        assertTrue(activeWordScale(characters[1].timing, 1150uL, true) > 1f)
     }
 
     @Test
@@ -348,6 +382,42 @@ class LyricPlaybackStyleTest {
         assertTrue(lyricBackgroundVisible(secondBg, lines, 3500uL))
         assertFalse(lyricBackgroundVisible(secondBg, lines, 3501uL))
         assertTrue(lyricBackgroundVisible(firstBg, lines, 1500uL))
+    }
+
+    @Test
+    fun backgroundLinesWithoutPrimaryGroupOnlyWhenTheirTimesOverlap() {
+        val first = line("first backing", 1000uL, 2200uL, SpeakerEntity.VoiceBackground)
+        val overlapping = line("overlapping backing", 2000uL, 4000uL, SpeakerEntity.Voice2Background)
+        val separate = line("separate backing", 5000uL, 6000uL, SpeakerEntity.VoiceBackground)
+        val lines = listOf(first, overlapping, separate)
+
+        assertFalse(lyricBackgroundVisible(first, lines, 999uL))
+        assertTrue(lyricBackgroundVisible(first, lines, 1000uL))
+        assertTrue(lyricBackgroundVisible(overlapping, lines, 1000uL))
+        assertTrue(lyricBackgroundVisible(first, lines, 3999uL))
+        assertTrue(lyricBackgroundVisible(overlapping, lines, 3999uL))
+        assertFalse(lyricBackgroundVisible(first, lines, 4001uL))
+        assertFalse(lyricBackgroundVisible(separate, lines, 4000uL))
+        assertTrue(lyricBackgroundVisible(separate, lines, 5000uL))
+    }
+
+    @Test
+    fun backgroundGroupIdGroupsDuetLinesWithoutPrimaryLyrics() {
+        val first = line("first backing", 1000uL, 2200uL, SpeakerEntity.VoiceBackground)
+            .copy(backgroundGroupId = 7, backgroundGroupStart = 800uL)
+        val second = line("second backing", 3000uL, 4000uL, SpeakerEntity.Voice2Background)
+            .copy(backgroundGroupId = 7, backgroundGroupStart = 800uL)
+        val separate = line("separate backing", 1500uL, 3500uL, SpeakerEntity.VoiceBackground)
+            .copy(backgroundGroupId = 8, backgroundGroupStart = 1500uL)
+        val lines = listOf(first, second, separate)
+
+        assertTrue(lyricBackgroundVisible(first, lines, 800uL))
+        assertTrue(lyricBackgroundVisible(second, lines, 800uL))
+        assertFalse(lyricBackgroundVisible(separate, lines, 800uL))
+        assertTrue(lyricBackgroundVisible(first, lines, 3999uL))
+        assertTrue(lyricBackgroundVisible(second, lines, 3999uL))
+        assertFalse(lyricBackgroundVisible(second, lines, 4001uL))
+        assertTrue(lyricBackgroundVisible(separate, lines, 1500uL))
     }
 
     @Test

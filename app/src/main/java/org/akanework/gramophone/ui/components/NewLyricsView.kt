@@ -84,6 +84,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     private val delayedInInterpolator = PathInterpolator(0.96f, 0.43f, 0.72f, 1f)
     private val delayedOutInterpolator = PathInterpolator(0.17f, 0f, -0.15f, 1f)
     private val prefs = PreferenceManager.getDefaultSharedPreferences(context.applicationContext)
+    private var wordExpansionDurationMs =
+        prefs.getIntStrict("lyric_word_expansion_duration", DEFAULT_WORD_EXPANSION_DURATION_MS)
     private lateinit var typeface: Typeface
     private val grdWidth = context.resources.getDimension(R.dimen.lyric_gradient_size)
     private val defaultTextSize = context.resources.getDimension(R.dimen.lyric_text_size)
@@ -301,6 +303,13 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     fun onPrefsChanged(key: String) {
         if (key == "lyric_no_animation") {
             loadLyricAnimTime()
+            return
+        }
+        if (key == "lyric_word_expansion_duration") {
+            wordExpansionDurationMs = prefs.getIntStrict(
+                key, DEFAULT_WORD_EXPANSION_DURATION_MS
+            )
+            invalidateDeeply()
             return
         }
         if (key == "lyric_text_size")
@@ -762,23 +771,38 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                 val backgroundSave = if (it.speaker?.isBackground == true) {
                     canvas.saveLayerAlpha(0f, 0f, width, it.layout.height.toFloat(), (192 * rowFraction).roundToInt())
                 } else null
-                val activeWord = wordIdx?.let { index -> it.longWords.getOrNull(index) }
-                val wordScale = activeWordScale(activeWord?.word, posForRender, lyricAnimTime > 0f)
+                val activeWord = it.longWords.lastOrNull { word ->
+                    word != null && posForRender in word.word.begin..word.word.end
+                }
                 if (activeWord != null && isPlaying &&
                     posForRender >= activeWord.word.begin && posForRender <= activeWord.word.end
                 ) animating = true
-                if (wordScale > 1f && activeWord != null) {
+                val activeCharacters = activeWord?.characters.orEmpty().mapNotNull { character ->
+                    val scale = activeWordScale(
+                        character.character.timing, posForRender, lyricAnimTime > 0f,
+                        wordExpansionDurationMs
+                    )
+                    if (scale > 1f) character to scale else null
+                }
+                if (activeCharacters.isNotEmpty()) {
                     node?.discardDisplayList()
                     canvas.save()
-                    @Suppress("DEPRECATION")
-                    canvas.clipPath(activeWord.path, Region.Op.DIFFERENCE)
+                    activeCharacters.forEach { (character, _) ->
+                        @Suppress("DEPRECATION")
+                        canvas.clipPath(character.path, Region.Op.DIFFERENCE)
+                    }
                     it.layout.draw(canvas)
                     canvas.restore()
-                    canvas.save()
-                    canvas.scale(wordScale, wordScale, activeWord.bounds.centerX(), activeWord.bounds.centerY())
-                    canvas.clipPath(activeWord.path)
-                    it.layout.draw(canvas)
-                    canvas.restore()
+                    activeCharacters.forEach { (character, scale) ->
+                        canvas.save()
+                        canvas.scale(
+                            scale, scale,
+                            character.bounds.centerX(), character.bounds.centerY()
+                        )
+                        canvas.clipPath(character.path)
+                        it.layout.draw(canvas)
+                        canvas.restore()
+                    }
                 } else if (hasRenderNodes()) {
                     if (!hasValidCachedNode) {
                         node!!.setPosition(0, 0, width.toInt(),
@@ -999,15 +1023,22 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                         }
                     }.flatten()
                 }, speaker, syncedLine,
-                longWords = prepareLongLyricWords(words).map { word ->
-                    if (word == null || word.charRange.first < 0 ||
-                        word.charRange.last < word.charRange.first || word.charRange.last >= sb.length
+                longWords = prepareLongLyricWords(
+                    syncedLine?.words, sb.toString(), syncedLine?.timeRange ?: (0uL..0uL)
+                ).map { word ->
+                    if (word.charRange.first < 0 || word.charRange.last < word.charRange.first ||
+                        word.charRange.last >= sb.length
                     ) null else {
-                        val path = Path()
-                        layout.getSelectionPath(word.charRange.first, word.charRange.last + 1, path)
-                        val bounds = RectF()
-                        path.computeBounds(bounds, true)
-                        PreparedWordDrawing(word, path, bounds)
+                        val characters = prepareLongLyricCharacters(word, sb.toString()).map { character ->
+                            val characterPath = Path()
+                            layout.getSelectionPath(
+                                character.charRange.first, character.charRange.last + 1, characterPath
+                            )
+                            val characterBounds = RectF()
+                            characterPath.computeBounds(characterBounds, true)
+                            PreparedCharacterDrawing(character, characterPath, characterBounds)
+                        }
+                        PreparedWordDrawing(word, characters)
                     }
                 }
             )
@@ -1245,7 +1276,12 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         return false // handled by parent
     }
 
-    internal data class PreparedWordDrawing(val word: LongLyricWord, val path: Path, val bounds: RectF)
+    internal data class PreparedCharacterDrawing(
+        val character: LongLyricCharacter, val path: Path, val bounds: RectF
+    )
+    internal data class PreparedWordDrawing(
+        val word: LongLyricWord, val characters: List<PreparedCharacterDrawing>
+    )
 
     data class SbItem internal constructor(
         val layout: StaticLayout, val text: SpannableStringBuilder,

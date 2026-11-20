@@ -125,6 +125,15 @@
         android:widgetLayout="@layout/preference_switch_widget"
         app:iconSpaceReserved="false" />
 
+    <SeekBarPreference
+        android:defaultValue="200"
+        android:key="lyric_word_expansion_duration"
+        android:max="1000"
+        android:title="@string/settings_lyric_word_expansion_duration"
+        app:min="50"
+        app:showSeekBarValue="true"
+        app:iconSpaceReserved="false" />
+
     <SwitchPreferenceCompat
         android:defaultValue="false"
         android:key="translation_auto_word"

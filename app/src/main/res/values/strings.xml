@@ -776,6 +776,7 @@
     <string name="settings_lyrics_no_animation">Disable animations</string>
     <!-- Settings toggle in lyrics UI to disable animations in lyrics. Subtext -->
     <string name="settings_lyrics_no_animation_summary">Disable all line transition lyric animations</string>
+    <string name="settings_lyric_word_expansion_duration">Character expansion duration (ms)</string>
     <!-- Shown next to song's bit rate (like "128 kbps") in detail UI -->
     <string name="dialog_bitrate">Bitrate</string>
     <!-- Showing the song's bit rate (like "128 kbps") in detail UI -->

@@ -31,6 +31,7 @@ import com.google.android.material.card.MaterialCardView
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.getBooleanStrict
+import org.akanework.gramophone.logic.getIntStrict
 import org.akanework.gramophone.logic.ui.CustomSmoothScroller
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.logic.utils.SemanticLyrics
@@ -201,20 +202,23 @@ class LegacyLyricsAdapter(
     private fun updateWordEffect(holder: ViewHolder, lyric: Lyric, position: ULong) {
         holder.wordFrame?.let { holder.lyricTextView.removeCallbacks(it) }
         holder.wordFrame = null
-        val wordIndex = lyric.line?.words?.indexOfLast {
-            it.begin <= position && position <= (it.endInclusive ?: it.begin)
-        } ?: -1
-        val word = lyric.longWords.getOrNull(wordIndex)
-        val scale = activeWordScale(word, position, !forceNoAnimation)
-        holder.lyricTextView.text = if (word != null && scale > 1f && word.charRange.first >= 0 &&
-            word.charRange.last >= word.charRange.first && word.charRange.last < lyric.content.length
+        val character = lyric.longCharacters.lastOrNull {
+            position in it.timing.begin..it.timing.end
+        }
+        val scale = activeWordScale(
+            character?.timing, position, !forceNoAnimation,
+            prefs.getIntStrict("lyric_word_expansion_duration", DEFAULT_WORD_EXPANSION_DURATION_MS)
+        )
+        holder.lyricTextView.text = if (character != null && scale > 1f &&
+            character.charRange.first >= 0 && character.charRange.last >= character.charRange.first &&
+            character.charRange.last < lyric.content.length
         ) {
             SpannableString(lyric.content).apply {
-                setSpan(RelativeSizeSpan(scale), word.charRange.first, word.charRange.last + 1,
+                setSpan(RelativeSizeSpan(scale), character.charRange.first, character.charRange.last + 1,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         } else lyric.content
-        if (word != null && !forceNoAnimation && callback?.isPlaying() == true &&
+        if (character != null && !forceNoAnimation && callback?.isPlaying() == true &&
             holder.lyricTextView.isAttachedToWindow
         ) {
             val boundPosition = holder.boundPosition
@@ -470,16 +474,18 @@ class LegacyLyricsAdapter(
         lastPlaybackUpdate = now
         val newStyles = lyricList.mapIndexedNotNull { index, lyric ->
             val line = lyric.line ?: return@mapIndexedNotNull null
-            val wordIndex = line.words?.indexOfLast {
-                it.begin <= playbackPosition && playbackPosition <= (it.endInclusive ?: it.begin)
-            } ?: -1
-            val word = lyric.longWords.getOrNull(wordIndex)
-            val scale = activeWordScale(word, playbackPosition, !forceNoAnimation)
-            if (lyric.isBackground || word != null)
+            val character = lyric.longCharacters.lastOrNull {
+                playbackPosition in it.timing.begin..it.timing.end
+            }
+            val scale = activeWordScale(
+                character?.timing, playbackPosition, !forceNoAnimation,
+                prefs.getIntStrict("lyric_word_expansion_duration", DEFAULT_WORD_EXPANSION_DURATION_MS)
+            )
+            if (lyric.isBackground || character != null)
                 index to PlaybackStyle(
                     backgroundGroups.visible(line, playbackPosition),
                     lyric.isBackground && playbackPosition in line.timeRange,
-                    word?.charRange?.first ?: -1, (scale * 100).toInt()
+                    character?.charRange?.first ?: -1, (scale * 100).toInt()
                 )
             else null
         }.toMap()
@@ -555,7 +561,11 @@ class LegacyLyricsAdapter(
         var speaker: SpeakerEntity? = null,
         var isBackground: Boolean = speaker?.isBackground == true,
         val line: SemanticLyrics.LyricLine? = null,
-        val longWords: List<LongLyricWord?> = prepareLongLyricWords(line?.words)
+        val longCharacters: List<LongLyricCharacter> = line?.let {
+            prepareLongLyricWords(it.words, it.text, it.timeRange).flatMap { word ->
+                prepareLongLyricCharacters(word, it.text)
+            }
+        }.orEmpty()
     )
 
     private fun buildAttributionLyric(attribution: SpicyLyricsAttribution?): Lyric? {
