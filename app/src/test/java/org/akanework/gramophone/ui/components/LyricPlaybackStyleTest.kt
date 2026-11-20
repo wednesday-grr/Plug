@@ -18,11 +18,13 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.R as MaterialR
 import org.akanework.gramophone.logic.utils.SemanticLyrics
 import org.akanework.gramophone.logic.utils.SpeakerEntity
+import org.akanework.gramophone.logic.utils.LyricsResponseCache
 import org.akanework.gramophone.logic.ui.MyRecyclerView
 import org.akanework.gramophone.ui.MainActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,6 +48,32 @@ class LyricPlaybackStyleTest {
         assertEquals(Color.rgb(0x12, 0x3a, 0xbc), customLyricColor(prefs, true))
         prefs.edit().putString("lyric_custom_active_color", "bad").commit()
         assertNull(customLyricColor(prefs, true))
+    }
+
+    @Test
+    fun lyricSpringRespondsToSettingsAndCompletesAtDuration() {
+        val default = LyricSpringSpec()
+        val stiff = default.copy(stiffness = 300f)
+        assertEquals(0f, lyricSpringProgress(0f, default), 0.001f)
+        assertEquals(1f, lyricSpringProgress(1f, default), 0.001f)
+        assertNotEquals(
+            lyricSpringProgress(0.5f, default),
+            lyricSpringProgress(0.5f, stiff),
+            0.001f
+        )
+    }
+
+    @Test
+    fun lyricCacheExpiresEntriesAfterThirtyDaysAndCanBeCleared() {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(RuntimeEnvironment.getApplication())
+        prefs.edit().clear().commit()
+        val cache = LyricsResponseCache(prefs)
+        cache.put("lrclib:test", "lyrics", 1_000L)
+        assertEquals("lyrics", cache.get("lrclib:test", 1_000L + 29L * 24 * 60 * 60 * 1000))
+        assertNull(cache.get("lrclib:test", 1_000L + 30L * 24 * 60 * 60 * 1000))
+        cache.put("spicy:test", "lyrics", 1_000L)
+        cache.clear()
+        assertTrue(prefs.all.isEmpty())
     }
 
     @Test

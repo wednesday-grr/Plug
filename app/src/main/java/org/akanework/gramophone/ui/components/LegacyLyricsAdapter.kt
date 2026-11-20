@@ -4,6 +4,9 @@ import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.SystemClock
@@ -17,6 +20,7 @@ import android.view.View.VISIBLE
 import android.view.ViewGroup
 import android.view.animation.PathInterpolator
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.RelativeSizeSpan
@@ -141,9 +145,33 @@ class LegacyLyricsAdapter(
             this.typeface = ResourcesCompat.getFont(context, R.font.dongle_bold)
                 ?: TypefaceCompat.create(context, null, 700, false)
             movementMethod = if (lyric.isAttributionFooter) LinkMovementMethod.getInstance() else null
-            isClickable = lyric.isAttributionFooter
-            isFocusable = lyric.isAttributionFooter
-            isLongClickable = false
+            isClickable = lyric.isAttributionFooter || lyric.line != null
+            isFocusable = lyric.isAttributionFooter || lyric.line != null
+            isLongClickable = lyric.line != null
+            setOnClickListener {
+                lyric.line?.let { callback?.seekTo(it.start.coerceAtMost(Long.MAX_VALUE.toULong()).toLong()) }
+            }
+            setOnLongClickListener {
+                val textToCopy = lyric.line?.text?.takeIf(String::isNotBlank) ?: return@setOnLongClickListener false
+                AlertDialog.Builder(context)
+                    .setItems(arrayOf(
+                        context.getString(R.string.lyrics_copy),
+                        context.getString(R.string.lyrics_share)
+                    )) { _, which ->
+                        if (which == 0) {
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                .setPrimaryClip(ClipData.newPlainText("Lyrics", textToCopy))
+                        } else {
+                            context.startActivity(Intent.createChooser(
+                                Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, textToCopy)
+                                }, null
+                            ))
+                        }
+                    }.show()
+                true
+            }
 
             setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
             setPadding(
@@ -205,9 +233,16 @@ class LegacyLyricsAdapter(
         val character = lyric.longCharacters.lastOrNull {
             position in it.timing.begin..it.timing.end
         }
+        val speaker = lyric.speaker
         val scale = activeWordScale(
             character?.timing, position, !forceNoAnimation,
-            prefs.getIntStrict("lyric_word_expansion_duration", DEFAULT_WORD_EXPANSION_DURATION_MS)
+            prefs.getIntStrict("lyric_word_expansion_duration", DEFAULT_WORD_EXPANSION_DURATION_MS),
+            lyricSpringSpec(
+                prefs,
+                if (speaker?.isBackground == true) "background"
+                else if (speaker?.isVoice2 == true || speaker?.isGroup == true) "duet"
+                else "primary"
+            )
         )
         holder.lyricTextView.text = if (character != null && scale > 1f &&
             character.charRange.first >= 0 && character.charRange.last >= character.charRange.first &&
@@ -477,9 +512,16 @@ class LegacyLyricsAdapter(
             val character = lyric.longCharacters.lastOrNull {
                 playbackPosition in it.timing.begin..it.timing.end
             }
+            val speaker = lyric.speaker
             val scale = activeWordScale(
                 character?.timing, playbackPosition, !forceNoAnimation,
-                prefs.getIntStrict("lyric_word_expansion_duration", DEFAULT_WORD_EXPANSION_DURATION_MS)
+                prefs.getIntStrict("lyric_word_expansion_duration", DEFAULT_WORD_EXPANSION_DURATION_MS),
+                lyricSpringSpec(
+                    prefs,
+                    if (speaker?.isBackground == true) "background"
+                    else if (speaker?.isVoice2 == true || speaker?.isGroup == true) "duet"
+                    else "primary"
+                )
             )
             if (lyric.isBackground || character != null)
                 index to PlaybackStyle(

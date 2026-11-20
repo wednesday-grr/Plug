@@ -777,6 +777,27 @@
     <!-- Settings toggle in lyrics UI to disable animations in lyrics. Subtext -->
     <string name="settings_lyrics_no_animation_summary">Disable all line transition lyric animations</string>
     <string name="settings_lyric_word_expansion_duration">Character expansion duration (ms)</string>
+    <string name="settings_lyric_spring_primary">Main lyric motion</string>
+    <string name="settings_lyric_spring_duet">Duet lyric motion</string>
+    <string name="settings_lyric_spring_background">Background lyric motion</string>
+    <string name="settings_lyric_spring_scroll">Automatic scroll motion</string>
+    <string name="settings_lyric_spring_duration">Duration (ms)</string>
+    <string name="settings_lyric_spring_stiffness">Stiffness</string>
+    <string name="settings_lyric_spring_damping">Damping</string>
+    <string name="settings_lyric_spring_mass">Mass (×10)</string>
+    <string name="settings_lrclib_enabled">Search LRCLIB automatically</string>
+    <string name="settings_lrclib_enabled_summary">Use LRCLIB when lyrics are not found in the music file or Spicy Lyrics.</string>
+    <string name="settings_lyric_cache_clear">Clear lyrics cache</string>
+    <string name="settings_lyric_cache_clear_summary">Remove cached online lyrics now.</string>
+    <string name="settings_lyric_cache_cleared">Lyrics cache cleared</string>
+    <string name="lyrics_source">Source</string>
+    <string name="lyrics_search">Search</string>
+    <string name="lyrics_source_local">Local files</string>
+    <string name="lyrics_search_genius">Search Genius</string>
+    <string name="lyrics_search_results">Genius results</string>
+    <string name="lyrics_copy">Copy</string>
+    <string name="lyrics_share">Share</string>
+    <string name="play_pause">Play or pause</string>
     <!-- Shown next to song's bit rate (like "128 kbps") in detail UI -->
     <string name="dialog_bitrate">Bitrate</string>
     <!-- Showing the song's bit rate (like "128 kbps") in detail UI -->

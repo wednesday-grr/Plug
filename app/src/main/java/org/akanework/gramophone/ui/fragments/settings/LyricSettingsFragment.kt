@@ -20,7 +20,10 @@ package org.akanework.gramophone.ui.fragments.settings
 import android.os.Bundle
 import android.widget.Toast
 import androidx.preference.EditTextPreference
+import androidx.preference.Preference
 import org.akanework.gramophone.R
+import org.akanework.gramophone.logic.PlugPlaybackService
+import org.akanework.gramophone.logic.utils.LyricsResponseCache
 import org.akanework.gramophone.ui.fragments.BasePreferenceFragment
 import org.akanework.gramophone.ui.fragments.BaseSettingsActivity
 
@@ -37,6 +40,15 @@ class LyricSettingsFragment : BasePreferenceFragment() {
                 if (!valid)
                     Toast.makeText(requireContext(), R.string.settings_lyric_invalid_color, Toast.LENGTH_SHORT).show()
                 valid
+            }
+            findPreference<Preference>("lyric_cache_clear")!!.setOnPreferenceClickListener {
+                LyricsResponseCache(
+                    requireContext().getSharedPreferences(
+                        PlugPlaybackService.LYRICS_CACHE_PREFERENCES, android.content.Context.MODE_PRIVATE
+                    )
+                ).clear()
+                Toast.makeText(requireContext(), R.string.settings_lyric_cache_cleared, Toast.LENGTH_SHORT).show()
+                true
             }
         }
     }

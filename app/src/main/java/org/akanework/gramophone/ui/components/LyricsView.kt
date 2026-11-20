@@ -18,6 +18,7 @@
 package org.akanework.gramophone.ui.components
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.animation.ValueAnimator
 import android.graphics.Color
@@ -34,7 +35,11 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.View
+import android.view.Gravity
+import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.Toast
 import android.view.ViewGroup
 import android.view.ContextThemeWrapper
 import android.widget.ImageView
@@ -46,6 +51,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.media3.common.Player
+import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.preference.PreferenceManager
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.color.DynamicColorsOptions
@@ -58,11 +65,24 @@ import kotlinx.coroutines.withContext
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.getBooleanStrict
+import org.akanework.gramophone.logic.getFile
+import org.akanework.gramophone.logic.PlugPlaybackService
+import org.akanework.gramophone.logic.getFirstSelectedTrackFormatByType
 import org.akanework.gramophone.logic.ui.MyRecyclerView
+import org.akanework.gramophone.logic.utils.GeniusClient
+import org.akanework.gramophone.logic.utils.LrcUtils
+import org.akanework.gramophone.logic.utils.LrcUtils.LrcParserOptions
+import org.akanework.gramophone.logic.utils.LrclibClient
+import org.akanework.gramophone.logic.utils.LyricsResponseCache
+import org.akanework.gramophone.logic.utils.SpicyLyricsClient
+import org.akanework.gramophone.BuildConfig
 import org.akanework.gramophone.logic.utils.SemanticLyrics
 import org.akanework.gramophone.logic.utils.SpicyLyricsAttribution
 import org.akanework.gramophone.ui.MainActivity
 import androidx.core.view.isVisible
+import androidx.appcompat.widget.PopupMenu
+import androidx.appcompat.app.AlertDialog
+import com.google.android.material.button.MaterialButton
 import coil3.asDrawable
 import coil3.dispose
 import coil3.imageLoader
@@ -136,6 +156,12 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     private val albumArtBackgrounds = mutableListOf<ImageView>()
     private var backgroundScrim: View? = null
     private var backgroundRequest: Disposable? = null
+    private var lyricsToolbar: LinearLayout? = null
+    private val hideLyricsToolbar = Runnable {
+        lyricsToolbar?.animate()?.alpha(0f)?.setDuration(180)?.withEndAction {
+            lyricsToolbar?.visibility = GONE
+        }?.start()
+    }
     private var requestedArtworkUri: Uri? = null
     private var lyricSurfaceColor = (background as? ColorDrawable)?.color ?: Color.BLACK
     private var appliedTextColors: Triple<Int, Int, Int>? = null
@@ -236,6 +262,11 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
                 return if (incomingId != null) outgoingSpeed else activePlayer?.playbackParameters?.speed ?: 1f
             }
 
+            override fun seekTo(positionMs: Long) {
+                activePlayer?.seekTo(positionMs)
+                updateLyricPositionFromPlaybackPos()
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 updateLyricPositionFromPlaybackPos()
             }
@@ -284,8 +315,185 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             adapter!!.callback = cb
             adapter!!.updateLyrics(lyrics, lyricsAttribution)
         }
+        createLyricsToolbar()
         applyTextColors()
         updateAlbumArtBackground()
+    }
+
+    private fun createLyricsToolbar() {
+        val toolbar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0x66000000)
+        }
+        fun button(label: String, onClick: () -> Unit) =
+            MaterialButton(context).apply {
+                text = label
+                minWidth = 0
+                setOnClickListener { onClick() }
+            }
+        val sourceButton = button(context.getString(R.string.lyrics_source)) {}
+        sourceButton.setOnClickListener { showLyricsSourceMenu(sourceButton) }
+        toolbar.addView(sourceButton)
+        toolbar.addView(button(context.getString(R.string.lyrics_search)) { showGeniusSearch() })
+        toolbar.addView(button("‹") {
+            (context as? MainActivity)?.getPlayer()?.seekToPrevious()
+        }.apply { contentDescription = context.getString(R.string.skip_previous) })
+        lateinit var playButton: MaterialButton
+        playButton = button(if ((context as? MainActivity)?.getPlayer()?.isPlaying == true) "Ⅱ" else "▶") {
+            (context as? MainActivity)?.getPlayer()?.let {
+                if (it.isPlaying) {
+                    it.pause()
+                    playButton.text = "▶"
+                } else {
+                    it.play()
+                    playButton.text = "Ⅱ"
+                }
+            }
+        }.apply { contentDescription = context.getString(R.string.play_pause) }
+        toolbar.addView(playButton)
+        toolbar.addView(button("›") {
+            (context as? MainActivity)?.getPlayer()?.seekToNext()
+        }.apply { contentDescription = context.getString(R.string.skip_next) })
+        val params = LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.END)
+        params.topMargin = 8f.dpToPx(context).toInt()
+        params.marginEnd = 8f.dpToPx(context).toInt()
+        addView(toolbar, params)
+        lyricsToolbar = toolbar
+        showLyricsToolbar()
+        newView?.setOnScrollChangeListener { _, _, _, _, _ ->
+            if (newView?.isUserInteractingWithScrollView == true) showLyricsToolbar()
+        }
+        recyclerView?.addOnScrollListener(object : androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: androidx.recyclerview.widget.RecyclerView, dx: Int, dy: Int) {
+                if (dy != 0 && recyclerView.scrollState ==
+                    androidx.recyclerview.widget.RecyclerView.SCROLL_STATE_DRAGGING
+                ) showLyricsToolbar()
+            }
+        })
+    }
+
+    private fun showLyricsToolbar() {
+        val toolbar = lyricsToolbar ?: return
+        toolbar.removeCallbacks(hideLyricsToolbar)
+        toolbar.visibility = VISIBLE
+        toolbar.animate().alpha(1f).setDuration(120).start()
+        toolbar.postDelayed(hideLyricsToolbar, 2500L)
+    }
+
+    private fun showLyricsSourceMenu(anchor: View) {
+        PopupMenu(context, anchor).apply {
+            menu.add(context.getString(R.string.lyrics_source_local)).setOnMenuItemClickListener { loadLyricsFromSource("local"); true }
+            menu.add(context.getString(R.string.settings_spicy_lyrics_title)).setOnMenuItemClickListener { loadLyricsFromSource("spicy"); true }
+            menu.add("LRCLIB").setOnMenuItemClickListener { loadLyricsFromSource("lrclib"); true }
+            menu.add("Genius page").setOnMenuItemClickListener { showGeniusSearch(); true }
+        }.show()
+    }
+
+    private fun loadLyricsFromSource(source: String) {
+        val activity = context as? MainActivity ?: return
+        val player = activity.getPlayer() ?: return
+        val item = player.currentMediaItem ?: return
+        val mediaId = item.mediaId
+        val title = item.mediaMetadata.title?.toString().orEmpty()
+        val artist = item.mediaMetadata.artist?.toString().orEmpty()
+        val duration = player.duration.takeIf { it > 0 }
+        val audioFormat = player.currentTracks.getFirstSelectedTrackFormatByType(C.TRACK_TYPE_AUDIO)
+        val cache = LyricsResponseCache(
+            context.getSharedPreferences(PlugPlaybackService.LYRICS_CACHE_PREFERENCES, Context.MODE_PRIVATE)
+        )
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val parserOptions = LrcParserOptions(
+                    trim = prefs.getBoolean("trim_lyrics", true),
+                    multiLine = true,
+                    errorText = context.getString(R.string.failed_to_parse_lyric)
+                )
+                val key = "$source:media:$mediaId"
+                val result: SemanticLyrics? = when (source) {
+                    "local" -> LrcUtils.loadAndParseLyricsFile(
+                        context, item.getFile(), null, parserOptions
+                    ) ?: audioFormat?.let { format ->
+                            format.metadata?.let { metadata ->
+                                LrcUtils.extractAndParseLyrics(
+                                    format.sampleRate.takeIf { it != Format.NO_VALUE } ?: 0,
+                                    format.sampleMimeType, metadata, parserOptions
+                                ).firstOrNull()
+                            }
+                        }
+                    "spicy" -> {
+                        val apiKey = prefs.getString("spicy_lyrics_api_key", null)?.trim()
+                        if (apiKey.isNullOrBlank()) null else {
+                            val client = SpicyLyricsClient(apiKey)
+                            val json = cache.get(key) ?: client.lookup(null, title, artist, duration)
+                            json?.let(client::parse)?.also { cache.put(key, json) }?.lyrics
+                        }
+                    }
+                    else -> {
+                        val raw = cache.get(key) ?: LrclibClient().lookup(title, artist, duration)
+                        raw?.let { LrcUtils.parseLyrics(it, null, parserOptions, null) }
+                            ?.also { cache.put(key, raw) }
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    if (activity.getPlayer()?.currentMediaItem?.mediaId != mediaId) return@withContext
+                    if (result != null)
+                        updateLyrics(result, null)
+                    else
+                        Toast.makeText(context, R.string.no_lyric_found, Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: java.io.IOException) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, e.message ?: "Lyrics lookup failed", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: org.json.JSONException) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, e.message ?: "Lyrics could not be parsed", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: IllegalStateException) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, e.message ?: "Lyrics lookup failed", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun showGeniusSearch() {
+        val input = EditText(context).apply {
+            val item = (context as? MainActivity)?.getPlayer()?.currentMediaItem
+            setText(listOfNotNull(
+                item?.mediaMetadata?.title?.toString(),
+                item?.mediaMetadata?.artist?.toString()
+            ).joinToString(" "))
+        }
+        AlertDialog.Builder(context).setTitle(R.string.lyrics_search_genius).setView(input)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton("Search") { _, _ ->
+                val query = input.text.toString().trim()
+                if (query.isNotEmpty()) CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val results = GeniusClient(BuildConfig.GENIUS_CLIENT_KEY).search(query)
+                        withContext(Dispatchers.Main) {
+                            if (results.isEmpty()) {
+                                Toast.makeText(context, R.string.no_lyric_found, Toast.LENGTH_SHORT).show()
+                            } else AlertDialog.Builder(context)
+                                .setTitle(R.string.lyrics_search_results)
+                                .setItems(results.map { "${it.title} — ${it.artist}" }.toTypedArray()) { _, index ->
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(results[index].url)))
+                                }.show()
+                        }
+                    } catch (e: java.io.IOException) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, e.message ?: "Genius search failed", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: IllegalStateException) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, e.message ?: "Genius search failed", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }.show()
     }
 
     private fun createBackgroundLayers() {
@@ -523,14 +731,16 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         if (key == "lyric_center" || key == "lyric_no_animation" ||
-            key == "lyric_apple_music_effects" || key == "lyric_word_expansion_duration"
+            key == "lyric_apple_music_effects" || key == "lyric_word_expansion_duration" ||
+            key?.startsWith("lyric_spring_") == true
         ) {
             adapter?.onPrefsChanged()
             incomingAdapter?.onPrefsChanged()
         }
         if (key == "lyric_center" || key == "lyric_no_animation" ||
             key == "translation_auto_word" || key == "lyric_text_size" ||
-            key == "lyric_apple_music_effects" || key == "lyric_word_expansion_duration"
+            key == "lyric_apple_music_effects" || key == "lyric_word_expansion_duration" ||
+            key?.startsWith("lyric_spring_") == true
         )
         {
             newView?.onPrefsChanged(key)
@@ -829,12 +1039,23 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             if (target == 0f) finishSplit(handoff)
             return
         }
-        val animator = ValueAnimator.ofFloat(splitAmount, target)
+        val startAmount = splitAmount
+        val animator = ValueAnimator.ofFloat(0f, 1f)
         splitAnimator = animator
-        animator.duration = 400
-        animator.interpolator = android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f)
+        val duet = listOfNotNull(lyrics, incomingLyrics).any { content ->
+            (content as? SemanticLyrics.SyncedLyrics)?.text?.any {
+                it.speaker?.isVoice2 == true || it.speaker?.isGroup == true
+            } == true
+        }
+        val spring = lyricSpringSpec(prefs, if (duet) "duet" else "primary")
+        val startTime = android.os.SystemClock.uptimeMillis()
+        animator.duration = spring.durationMs.toLong()
         animator.addUpdateListener {
-            splitAmount = it.animatedValue as Float
+            val elapsed = android.os.SystemClock.uptimeMillis() - startTime
+            val progress = lyricSpringProgress(
+                elapsed.toFloat() / spring.durationMs.coerceAtLeast(1), spring
+            )
+            splitAmount = startAmount + (target - startAmount) * progress
             layoutSplit(handoff)
         }
         animator.addListener(object : android.animation.AnimatorListenerAdapter() {

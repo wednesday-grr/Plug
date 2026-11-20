@@ -127,6 +127,55 @@ private fun overlaps(first: SemanticLyrics.LyricLine, second: SemanticLyrics.Lyr
 internal const val BACKGROUND_ROW_ANIMATION_MS = 400L
 
 internal const val DEFAULT_WORD_EXPANSION_DURATION_MS = 200
+internal const val DEFAULT_LYRIC_SPRING_DURATION_MS = 800
+
+internal data class LyricSpringSpec(
+    val durationMs: Int = DEFAULT_LYRIC_SPRING_DURATION_MS,
+    val stiffness: Float = 100f,
+    val damping: Float = 15f,
+    val mass: Float = 1f
+)
+
+internal fun lyricSpringSpec(prefs: SharedPreferences, prefix: String) = LyricSpringSpec(
+    durationMs = prefs.getInt(
+        "lyric_spring_${prefix}_duration",
+        if (prefix == "background") BACKGROUND_ROW_ANIMATION_MS.toInt()
+        else DEFAULT_LYRIC_SPRING_DURATION_MS
+    ),
+    stiffness = prefs.getInt("lyric_spring_${prefix}_stiffness", 100).toFloat(),
+    damping = prefs.getInt("lyric_spring_${prefix}_damping", 15).toFloat(),
+    mass = prefs.getInt("lyric_spring_${prefix}_mass", 10).coerceAtLeast(1) / 10f
+)
+
+internal fun lyricSpringProgress(progress: Float, spec: LyricSpringSpec): Float {
+    val t = progress.coerceIn(0f, 1f)
+    if (t <= 0f) return 0f
+    if (t >= 1f) return 1f
+    val durationSeconds = spec.durationMs.coerceAtLeast(1) / 1000f
+    val stiffness = spec.stiffness.coerceAtLeast(1f)
+    val mass = spec.mass.coerceAtLeast(0.1f)
+    val omega = kotlin.math.sqrt(stiffness / mass)
+    val zeta = spec.damping.coerceAtLeast(0f) / (2f * kotlin.math.sqrt(stiffness * mass))
+    val time = durationSeconds * t
+    val endTime = durationSeconds
+    fun displacement(timeSeconds: Float): Float {
+        return if (zeta < 1f) {
+            val damped = omega * kotlin.math.sqrt(1f - zeta * zeta)
+            val decay = kotlin.math.exp(-zeta * omega * timeSeconds)
+            1f - decay * (
+                kotlin.math.cos(damped * timeSeconds) +
+                    zeta / kotlin.math.sqrt(1f - zeta * zeta) *
+                    kotlin.math.sin(damped * timeSeconds)
+                )
+        } else {
+            val decay = kotlin.math.exp(-omega * timeSeconds)
+            1f - decay * (1f + omega * timeSeconds)
+        }
+    }
+    val end = displacement(endTime)
+    if (!end.isFinite() || kotlin.math.abs(end) < 0.0001f) return t
+    return (displacement(time) / end).coerceIn(0f, 1.15f)
+}
 
 internal data class LongLyricWord(val begin: ULong, val end: ULong, val charRange: IntRange)
 internal data class LongLyricCharacter(val timing: LongLyricWord, val charRange: IntRange)
@@ -246,7 +295,8 @@ internal fun activeWordScale(
     word: LongLyricWord?,
     position: ULong,
     animate: Boolean,
-    durationMs: Int = DEFAULT_WORD_EXPANSION_DURATION_MS
+    durationMs: Int = DEFAULT_WORD_EXPANSION_DURATION_MS,
+    spring: LyricSpringSpec = LyricSpringSpec(durationMs = durationMs)
 ): Float {
     word ?: return 1f
     if (position < word.begin || position > word.end) return 1f
@@ -254,6 +304,6 @@ internal fun activeWordScale(
     val duration = durationMs.coerceAtLeast(1).toULong()
     val elapsed = (position - word.begin).coerceAtMost(duration).toFloat() / duration.toFloat()
     val remaining = (word.end - position).coerceAtMost(duration).toFloat() / duration.toFloat()
-    val progress = minOf(elapsed, remaining)
+    val progress = minOf(lyricSpringProgress(elapsed, spring), lyricSpringProgress(remaining, spring))
     return 1f + 0.12f * progress * progress * (3f - 2f * progress)
 }

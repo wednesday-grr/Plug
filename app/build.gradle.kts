@@ -7,6 +7,10 @@ import java.util.Properties
 
 val aboutLibsVersion = "13.1.0" // keep in sync with plugin version
 val kotlinVersion = "2.3.0"
+val localBuildProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
+}
+val geniusClientKey = localBuildProperties.getProperty("GENIUS_CLIENT_KEY", "")
 
 plugins {
     id("com.android.application")
@@ -120,6 +124,11 @@ android {
             "String",
             "RELEASE_TYPE",
             "\"$releaseType\""
+        )
+        buildConfigField(
+            "String",
+            "GENIUS_CLIENT_KEY",
+            "\"${geniusClientKey.replace("\\", "\\\\").replace("\"", "\\\"")}\""
         )
         buildConfigField(
             "boolean",

@@ -134,6 +134,31 @@
         app:showSeekBarValue="true"
         app:iconSpaceReserved="false" />
 
+    <PreferenceCategory android:title="@string/settings_lyric_spring_primary">
+        <SeekBarPreference android:key="lyric_spring_primary_duration" android:title="@string/settings_lyric_spring_duration" android:defaultValue="800" android:max="2000" app:min="100" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_primary_stiffness" android:title="@string/settings_lyric_spring_stiffness" android:defaultValue="100" android:max="500" app:min="10" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_primary_damping" android:title="@string/settings_lyric_spring_damping" android:defaultValue="15" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_primary_mass" android:title="@string/settings_lyric_spring_mass" android:defaultValue="10" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+    <PreferenceCategory android:title="@string/settings_lyric_spring_duet">
+        <SeekBarPreference android:key="lyric_spring_duet_duration" android:title="@string/settings_lyric_spring_duration" android:defaultValue="800" android:max="2000" app:min="100" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_duet_stiffness" android:title="@string/settings_lyric_spring_stiffness" android:defaultValue="100" android:max="500" app:min="10" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_duet_damping" android:title="@string/settings_lyric_spring_damping" android:defaultValue="15" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_duet_mass" android:title="@string/settings_lyric_spring_mass" android:defaultValue="10" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+    <PreferenceCategory android:title="@string/settings_lyric_spring_background">
+        <SeekBarPreference android:key="lyric_spring_background_duration" android:title="@string/settings_lyric_spring_duration" android:defaultValue="400" android:max="2000" app:min="100" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_background_stiffness" android:title="@string/settings_lyric_spring_stiffness" android:defaultValue="100" android:max="500" app:min="10" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_background_damping" android:title="@string/settings_lyric_spring_damping" android:defaultValue="15" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_background_mass" android:title="@string/settings_lyric_spring_mass" android:defaultValue="10" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+    <PreferenceCategory android:title="@string/settings_lyric_spring_scroll">
+        <SeekBarPreference android:key="lyric_spring_scroll_duration" android:title="@string/settings_lyric_spring_duration" android:defaultValue="800" android:max="2000" app:min="100" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_scroll_stiffness" android:title="@string/settings_lyric_spring_stiffness" android:defaultValue="100" android:max="500" app:min="10" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_scroll_damping" android:title="@string/settings_lyric_spring_damping" android:defaultValue="15" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+        <SeekBarPreference android:key="lyric_spring_scroll_mass" android:title="@string/settings_lyric_spring_mass" android:defaultValue="10" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
     <SwitchPreferenceCompat
         android:defaultValue="false"
         android:key="translation_auto_word"
@@ -152,6 +177,13 @@
         android:widgetLayout="@layout/preference_switch_widget"
         app:iconSpaceReserved="false" />
 
+    <SwitchPreferenceCompat
+        android:defaultValue="true"
+        android:key="lrclib_enabled"
+        android:title="@string/settings_lrclib_enabled"
+        android:summary="@string/settings_lrclib_enabled_summary"
+        app:iconSpaceReserved="false" />
+
     <EditTextPreference
         android:dependency="spicy_lyrics_enabled"
         android:defaultValue="sl_pk_xbRfEl3A28te21Eq9Kd7B6hU14DrdKx79ISGiWCXpvk"
@@ -160,6 +192,12 @@
         android:inputType="textPassword"
         android:summary="@string/settings_spicy_lyrics_api_key_summary"
         android:title="@string/settings_spicy_lyrics_api_key_title"
+        app:iconSpaceReserved="false" />
+
+    <Preference
+        android:key="lyric_cache_clear"
+        android:title="@string/settings_lyric_cache_clear"
+        android:summary="@string/settings_lyric_cache_clear_summary"
         app:iconSpaceReserved="false" />
 
 </PreferenceScreen>

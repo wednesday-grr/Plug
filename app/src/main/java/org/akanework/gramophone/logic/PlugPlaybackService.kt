@@ -129,6 +129,8 @@ import org.akanework.gramophone.logic.utils.BtCodecInfo
 import org.akanework.gramophone.logic.utils.CircularShuffleOrder
 import org.akanework.gramophone.logic.utils.Flags
 import org.akanework.gramophone.logic.utils.LastPlayedManager
+import org.akanework.gramophone.logic.utils.LrclibClient
+import org.akanework.gramophone.logic.utils.LyricsResponseCache
 import org.akanework.gramophone.logic.utils.LrcUtils.LrcParserOptions
 import org.akanework.gramophone.logic.utils.LrcUtils.extractAndParseLyrics
 import org.akanework.gramophone.logic.utils.LrcUtils.loadAndParseLyricsFile
@@ -196,6 +198,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         const val SERVICE_GET_AUDIO_FORMAT = "get_audio_format"
         const val SERVICE_GET_DJ_METRICS = "get_dj_metrics"
         const val SERVICE_GET_LYRICS = "get_lyrics"
+        const val LYRICS_CACHE_PREFERENCES = "lyrics_response_cache"
         const val CLIENT_AUTOMIX_LYRICS = "automix_lyrics"
         const val SERVICE_TIMER_CHANGED = "changed_timer"
         const val SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY = "set_media_items_seamlessly"
@@ -232,8 +235,8 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         private set
     var lyricsAttribution: SpicyLyricsAttribution? = null
         private set
-    private val spicyLyricsCache by lazy {
-        getSharedPreferences("spicy_lyrics_cache", MODE_PRIVATE)
+    private val lyricsResponseCache by lazy {
+        LyricsResponseCache(getSharedPreferences(LYRICS_CACHE_PREFERENCES, MODE_PRIVATE))
     }
     val syncedLyrics
         get() = lyrics as? SemanticLyrics.SyncedLyrics
@@ -1907,6 +1910,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
     private fun loadTrackLyrics(
         mediaItem: MediaItem?, format: Format?, durationMs: Long?
     ): Pair<SemanticLyrics?, SpicyLyricsAttribution?> {
+        lyricsResponseCache.removeExpired()
         val mediaId = mediaItem?.mediaId
         val trackTitle = mediaItem?.mediaMetadata?.title?.toString()
         val trackArtist = mediaItem?.mediaMetadata?.artist?.toString()
@@ -1942,21 +1946,21 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
             !apiKey.isNullOrEmpty() && mediaId != null
         ) {
             val isrc = trackMetadata?.let(::extractIsrc)
-            val cacheKey = "media:$mediaId"
+            val cacheKey = "spicy:media:$mediaId"
             val client = SpicyLyricsClient(apiKey)
-            var responseJson = spicyLyricsCache.getString(cacheKey, null)
+            var responseJson = lyricsResponseCache.get(cacheKey)
             var result: SpicyLyricsResult? = null
             try {
                 result = responseJson?.let(client::parse)
                 if (result == null) {
                     if (responseJson != null) {
-                        spicyLyricsCache.edit().remove(cacheKey).apply()
+                        lyricsResponseCache.remove(cacheKey)
                     }
                     responseJson = client.lookup(isrc, trackTitle, trackArtist, durationMs)
                     if (responseJson != null) {
                         result = client.parse(responseJson)
                         if (result != null) {
-                            spicyLyricsCache.edit().putString(cacheKey, responseJson).apply()
+                            lyricsResponseCache.put(cacheKey, responseJson)
                         }
                     }
                 }
@@ -1967,6 +1971,34 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
             }
             lrc = result?.lyrics
             attribution = result?.attribution
+        }
+        if (lrc == null && prefs.getBoolean("lrclib_enabled", true) &&
+            !trackTitle.isNullOrBlank() && !trackArtist.isNullOrBlank() && mediaId != null
+        ) {
+            val cacheKey = "lrclib:media:$mediaId"
+            val parserOptions = options
+            val cached = lyricsResponseCache.get(cacheKey)
+            try {
+                var response = cached
+                lrc = response?.let {
+                    org.akanework.gramophone.logic.utils.LrcUtils.parseLyrics(
+                        it, format?.sampleMimeType, parserOptions, null
+                    )
+                }
+                if (lrc == null) {
+                    response = LrclibClient().lookup(trackTitle, trackArtist, durationMs)
+                    if (response != null) {
+                        lrc = org.akanework.gramophone.logic.utils.LrcUtils.parseLyrics(
+                            response, format?.sampleMimeType, parserOptions, null
+                        )
+                        if (lrc != null) lyricsResponseCache.put(cacheKey, response)
+                    }
+                }
+            } catch (e: java.io.IOException) {
+                Log.w(TAG, "LRCLIB lookup failed: ${e.message}")
+            } catch (e: org.json.JSONException) {
+                Log.w(TAG, "LRCLIB response could not be parsed: ${e.message}")
+            }
         }
         return lrc to attribution
     }
