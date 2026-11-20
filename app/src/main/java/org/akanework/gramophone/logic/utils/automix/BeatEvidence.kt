@@ -157,6 +157,42 @@ data class DetectedBeatGridEvidence(
     }
 }
 
+data class BeatGridCacheRecord(
+    val sourceIdentity: String,
+    val configurationVersion: String,
+    val result: BeatTrackingResult,
+    val window: AnalysisWindow,
+    val timeline: SourceTimeline,
+    val algorithmVersion: String = MusicalBeatTracker.ALGORITHM_VERSION,
+) {
+    init {
+        require(sourceIdentity.isNotBlank() && configurationVersion.isNotBlank() && algorithmVersion.isNotBlank())
+        require(timeline.identity == sourceIdentity)
+        result.grid?.let {
+            require(it.window == window && it.timeline == timeline)
+            require(it.algorithmVersion == algorithmVersion)
+            require(it.downbeatConfidence == null && it.events.all { event ->
+                event.downbeat == null && event.barIndex == null && event.downbeatConfidence == null
+            })
+        }
+    }
+
+    val state: BeatGridCacheState
+        get() = when {
+            result.grid == null -> BeatGridCacheState.UNAVAILABLE
+            result.grid.events.isEmpty() -> BeatGridCacheState.EMPTY
+            else -> BeatGridCacheState.DETECTED
+        }
+}
+
+enum class BeatGridCacheState { UNAVAILABLE, EMPTY, DETECTED, INVALIDATED }
+
+sealed interface BeatGridCacheRead {
+    data object Missing : BeatGridCacheRead
+    data object Invalidated : BeatGridCacheRead
+    data class Available(val record: BeatGridCacheRecord) : BeatGridCacheRead
+}
+
 data class EvidenceReference(val timelineIdentity: String?, val source: String, val algorithmVersion: String?)
 enum class AlignmentEligibility { ELIGIBLE, INELIGIBLE, NOT_EVALUATED }
 data class AlignmentEvidence(

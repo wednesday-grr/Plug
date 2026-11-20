@@ -43,9 +43,10 @@ data class BeatTrackingResult(
  * results are research evidence, not a validated beat detector or a playback synchronization input.
  */
 object MusicalBeatTracker {
-    const val ALGORITHM_VERSION = "spectral-onset-tracker-v1"
+    const val ALGORITHM_VERSION = "spectral-onset-tracker-v2"
     private const val MIN_ONSETS = 4
     private const val MIN_SEPARATION_US = 90_000L
+    private const val MAX_LOG_INTERVAL_ERROR = 0.36
 
     suspend fun onsetCandidates(
         flux: DoubleArray,
@@ -119,7 +120,7 @@ object MusicalBeatTracker {
                     if (delta > period * 2.25) break
                     val beats = if (delta > period * 1.5) 2 else 1
                     val error = abs(ln(delta / (period * beats)))
-                    if (error > 0.28) continue
+                    if (error > MAX_LOG_INTERVAL_ERROR) continue
                     val score = scores[j] + onsets[i].strength + 0.6 - error * 2.0 -
                         if (beats == 2) 0.6 else 0.0
                     if (score > scores[i]) {
@@ -141,7 +142,7 @@ object MusicalBeatTracker {
             val timing = selected.zipWithNext().map { (a, b) ->
                 val ratio = (b.sourceTimeUs - a.sourceTimeUs) / period
                 val count = if (ratio > 1.5) 2 else 1
-                (1.0 - abs(ln(ratio / count)) / 0.28).coerceIn(0.0, 1.0) / count
+                (1.0 - abs(ln(ratio / count)) / MAX_LOG_INTERVAL_ERROR).coerceIn(0.0, 1.0) / count
             }.average()
             val coverage = indices.size.toDouble() / onsets.size
             val meanStrength = selected.map { it.strength.toDouble() }.average()
@@ -166,7 +167,8 @@ object MusicalBeatTracker {
             )
             val localSupport = localIntervals.map { delta ->
                 val count = if (delta > period * 1.5) 2 else 1
-                (1.0 - abs(ln(delta / (period * count))) / 0.28).coerceIn(0.0, 1.0) / count
+                (1.0 - abs(ln(delta / (period * count))) / MAX_LOG_INTERVAL_ERROR)
+                    .coerceIn(0.0, 1.0) / count
             }.average()
             val score = sqrt(onset.strength * localSupport * best.support).toFloat()
             DetectedBeatEvent(beatIndex++, onset.sourceTimeUs,

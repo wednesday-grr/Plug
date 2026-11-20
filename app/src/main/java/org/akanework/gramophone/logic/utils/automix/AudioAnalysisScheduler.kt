@@ -41,9 +41,21 @@ import org.akanework.gramophone.BuildConfig
 class AudioAnalysisScheduler(
     context: Context,
     val cache: TrackAnalysisCache,
+    private val analyzeBeat: (suspend (MediaItem) -> BeatGridCacheRecord)? = null,
     private val analyze: (suspend (MediaItem) -> TrackAnalysis)? = null,
 ) {
     enum class DisplayStatus { ANALYZING, READY, FAILED, PENDING }
+
+    private data class BeatOwnerRequest(val key: AnalysisKey, val generation: Long)
+    private data class ScheduledWork(
+        val item: MediaItem,
+        val key: AnalysisKey,
+        val isLibrary: Boolean,
+        val beatOwner: String? = null,
+        val beatGeneration: Long = 0,
+    ) {
+        val isBeat: Boolean get() = beatOwner != null
+    }
 
     private val decoder = TrackPcmDecoder(context.applicationContext)
     private val dispatcher = Executors.newSingleThreadExecutor { task ->
@@ -64,7 +76,13 @@ class AudioAnalysisScheduler(
     private var currentKey: AnalysisKey? = null
     private var libraryIndex = 0
     private val displayLoads = mutableMapOf<AnalysisKey, Job>()
-    private val failures = ConcurrentHashMap.newKeySet<AnalysisKey>()
+    private val failures = ConcurrentHashMap<AnalysisKey, Boolean>()
+    private val beatFailures = ConcurrentHashMap<AnalysisKey, Boolean>()
+    private val beatOwnerRequests = mutableMapOf<String, BeatOwnerRequest>()
+    private val pendingBeatRequests = linkedMapOf<AnalysisKey, MediaItem>()
+    private var beatGeneration = 0L
+    private var currentBeatKey: AnalysisKey? = null
+    private var currentIsBeat = false
 
     init {
         scope.launch {
@@ -73,84 +91,151 @@ class AudioAnalysisScheduler(
                 while (isActive) {
                     val next = synchronized(lock) {
                         val queued = queue.firstOrNull { AnalysisKey.from(it)?.let { k -> cache.selectedKey(k) !in attempted } == true }
+                        val beatRequest = if (queued == null) pendingBeatRequests.entries.firstOrNull { entry ->
+                            beatOwnerRequests.values.any { it.key == entry.key }
+                        } else null
                         var libraryCandidate: MediaItem? = null
-                        if (queued == null && idle) {
+                        if (queued == null && beatRequest == null && idle) {
                             while (libraryIndex < library.size && libraryCandidate == null) {
                                 val item = library[libraryIndex++]
                                 if (AnalysisKey.from(item)?.let { cache.selectedKey(it) !in attempted } == true)
                                     libraryCandidate = item
                             }
                         }
-                        val candidate = queued ?: libraryCandidate
-                        candidate?.let {
-                            val key = cache.selectedKey(checkNotNull(AnalysisKey.from(it)))
-                            attempted.add(key)
-                            currentIsLibrary = queued == null
-                            currentKey = key
-                            it to key
+                        when {
+                            queued != null -> {
+                                val key = cache.selectedKey(checkNotNull(AnalysisKey.from(queued)))
+                                attempted.add(key)
+                                currentIsLibrary = false
+                                currentIsBeat = false
+                                currentBeatKey = null
+                                currentKey = key
+                                ScheduledWork(queued, key, false)
+                            }
+                            beatRequest != null -> {
+                                pendingBeatRequests.remove(beatRequest.key)
+                                val owner = beatOwnerRequests.entries.first { it.value.key == beatRequest.key }
+                                currentIsLibrary = false
+                                currentIsBeat = true
+                                currentBeatKey = beatRequest.key
+                                currentKey = beatRequest.key
+                                ScheduledWork(beatRequest.value, beatRequest.key, false,
+                                    owner.key, owner.value.generation)
+                            }
+                            libraryCandidate != null -> {
+                                val key = cache.selectedKey(checkNotNull(AnalysisKey.from(libraryCandidate)))
+                                attempted.add(key)
+                                currentIsLibrary = true
+                                currentIsBeat = false
+                                currentBeatKey = null
+                                currentKey = key
+                                ScheduledWork(libraryCandidate, key, true)
+                            }
+                            else -> null
                         }
                     } ?: break
                     val job = launch {
                         try {
-                            val cached = cache.load(next.second)
-                            if (cached == null || (analyze == null && cached.edgeAnalysis == null)) {
-                                val result = if (analyze != null) analyze.invoke(next.first) else {
-                                    val uri = checkNotNull(next.first.localConfiguration).uri
-                                    val base = cached ?: if (next.second.analyzer == "essentia") {
-                                        check(BuildConfig.HAS_ESSENTIA) { "This build does not include Essentia" }
-                                        EssentiaTrackAnalyzer.analyze(decoder.decode(uri, sampleRate = 44_100))
-                                    } else decoder.decode(uri).let {
-                                        val analysis = TrackDspAnalyzer.analyze(it.samples, it.startMs)
-                                        analysis.copy(pulseProvenance = if (analysis.beatOffsetMs != null)
-                                            BeatEvidenceAdapter.spectralFluxProvenance else null)
-                                    }
-                                    val edges = try {
-                                        val start = decoder.decode(uri, TrackPcmDecoder.Region.START)
-                                        val end = decoder.decode(uri, TrackPcmDecoder.Region.END)
-                                        val endMs = end.startMs + end.samples.size.toLong() * 1000 / TrackDspAnalyzer.SAMPLE_RATE
-                                        if (start.startMs <= 100 && kotlin.math.abs(end.durationMs - endMs) <= 500) {
-                                            val edges = TrackEdgeAnalyzer.analyze(start.samples, end.samples, end.durationMs)
-                                            fun grid(analysis: TrackAnalysis): BeatPhaseAligner.Grid? {
-                                                val bpm = analysis.bpm ?: return null
-                                                val offset = analysis.beatOffsetMs ?: return null
-                                                return BeatPhaseAligner.Grid(60_000.0 / bpm, offset, analysis.confidence)
-                                            }
-                                            edges?.copy(
-                                                startGrid = grid(TrackDspAnalyzer.analyze(start.samples, start.startMs)),
-                                                endGrid = grid(TrackDspAnalyzer.analyze(end.samples, end.startMs)),
-                                                startWindowEndMs = start.startMs + start.samples.size.toLong() * 1000 / TrackDspAnalyzer.SAMPLE_RATE,
-                                                endWindowStartMs = end.startMs,
-                                            )
-                                        } else null
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        Log.w("AudioAnalysis", "Edge analysis failed for ${next.second.mediaId}", e)
-                                        null
-                                    }
-                                    base.copy(edgeAnalysis = edges)
+                            if (next.isBeat) {
+                                val existing = cache.loadBeatGrid(next.key)
+                                if (existing !is BeatGridCacheRead.Available) {
+                                    val result = analyzeBeat?.invoke(next.item) ?: analyzeBeatGrid(next.item, next.key)
+                                    currentCoroutineContext().ensureActive()
+                                    if (!isCurrentBeatRequest(next)) throw CancellationException("Beat request superseded")
+                                    if (AnalysisKey.from(next.item) != next.key)
+                                        throw CancellationException("Beat analysis source identity changed")
+                                    if (cache.loadBeatGrid(next.key) !is BeatGridCacheRead.Available)
+                                        cache.storeBeatGrid(next.key, result)
                                 }
-                                currentCoroutineContext().ensureActive()
-                                cache.store(next.second, result)
+                                beatFailures.remove(next.key)
+                            } else {
+                                val cached = cache.load(next.key)
+                                if (cached == null || (analyze == null && cached.edgeAnalysis == null)) {
+                                    val result = if (analyze != null) analyze.invoke(next.item) else {
+                                        val uri = checkNotNull(next.item.localConfiguration).uri
+                                        val sourceKey = AnalysisKey.from(next.item)
+                                        val sharedBeatAnalysis = if (next.key.analyzer == "existing" &&
+                                            sourceKey != null && hasBeatRequest(sourceKey)
+                                        ) {
+                                            val decoded = decoder.decode(uri)
+                                            val timeline = sourceTimeline(sourceKey)
+                                            val beatAnalysis = TrackDspAnalyzer.analyzeWithBeatTracking(
+                                                decoded.samples, decoded.startMs, timeline,
+                                            )
+                                            val record = beatRecord(sourceKey, decoded.samples, decoded.startMs,
+                                                beatAnalysis.tracking, timeline)
+                                            currentCoroutineContext().ensureActive()
+                                            if (isCurrentBeatRequest(sourceKey) &&
+                                                cache.loadBeatGrid(sourceKey) !is BeatGridCacheRead.Available
+                                            ) {
+                                                cache.storeBeatGrid(sourceKey, record)
+                                                synchronized(lock) { pendingBeatRequests.remove(sourceKey) }
+                                            }
+                                            beatAnalysis.analysis
+                                        } else null
+                                        val base = cached ?: if (next.key.analyzer == "essentia") {
+                                            check(BuildConfig.HAS_ESSENTIA) { "This build does not include Essentia" }
+                                            EssentiaTrackAnalyzer.analyze(decoder.decode(uri, sampleRate = 44_100))
+                                        } else (sharedBeatAnalysis ?: decoder.decode(uri).let {
+                                            TrackDspAnalyzer.analyze(it.samples, it.startMs)
+                                        }).let { analysis ->
+                                            analysis.copy(pulseProvenance = if (analysis.beatOffsetMs != null)
+                                                BeatEvidenceAdapter.spectralFluxProvenance else null)
+                                        }
+                                        val edges = try {
+                                            val start = decoder.decode(uri, TrackPcmDecoder.Region.START)
+                                            val end = decoder.decode(uri, TrackPcmDecoder.Region.END)
+                                            val endMs = end.startMs + end.samples.size.toLong() * 1000 / TrackDspAnalyzer.SAMPLE_RATE
+                                            if (start.startMs <= 100 && kotlin.math.abs(end.durationMs - endMs) <= 500) {
+                                                val edges = TrackEdgeAnalyzer.analyze(start.samples, end.samples, end.durationMs)
+                                                fun grid(analysis: TrackAnalysis): BeatPhaseAligner.Grid? {
+                                                    val bpm = analysis.bpm ?: return null
+                                                    val offset = analysis.beatOffsetMs ?: return null
+                                                    return BeatPhaseAligner.Grid(60_000.0 / bpm, offset, analysis.confidence)
+                                                }
+                                                edges?.copy(
+                                                    startGrid = grid(TrackDspAnalyzer.analyze(start.samples, start.startMs)),
+                                                    endGrid = grid(TrackDspAnalyzer.analyze(end.samples, end.startMs)),
+                                                    startWindowEndMs = start.startMs + start.samples.size.toLong() * 1000 / TrackDspAnalyzer.SAMPLE_RATE,
+                                                    endWindowStartMs = end.startMs,
+                                                )
+                                            } else null
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            Log.w("AudioAnalysis", "Edge analysis failed for ${next.key.mediaId}", e)
+                                            null
+                                        }
+                                        base.copy(edgeAnalysis = edges)
+                                    }
+                                    currentCoroutineContext().ensureActive()
+                                    cache.store(next.key, result)
+                                }
+                                failures.remove(next.key)
                             }
-                            failures.remove(next.second)
                         } catch (e: CancellationException) {
                             synchronized(lock) {
-                                attempted.remove(next.second)
-                                if (currentIsLibrary) libraryIndex = 0
+                                if (next.isBeat) {
+                                    if (beatOwnerRequests.values.any { it.key == next.key })
+                                        pendingBeatRequests[next.key] = next.item
+                                } else {
+                                    attempted.remove(next.key)
+                                    if (next.isLibrary) libraryIndex = 0
+                                }
                             }
                             throw e
                         } catch (e: Exception) {
-                            failures.add(next.second)
-                            Log.w("AudioAnalysis", "Analysis failed for ${next.second.mediaId}", e)
+                            if (next.isBeat) beatFailures[next.key] = true else failures[next.key] = true
+                            Log.w("AudioAnalysis", "Analysis failed for ${next.key.mediaId}", e)
                         }
                     }
                     synchronized(lock) {
                         currentJob = job
-                        if (next.second.analyzer != cache.selectedAnalyzer || (currentIsLibrary && !idle) ||
-                            (currentIsLibrary && queue.any {
+                        if (next.isBeat && hasQueuedAnalysis() ||
+                            !next.isBeat && (next.key.analyzer != cache.selectedAnalyzer || (next.isLibrary && !idle) ||
+                            (next.isLibrary && queue.any {
                                 AnalysisKey.from(it)?.let { key -> cache.selectedKey(key) !in attempted } == true
-                            })
+                            }))
                         ) job.cancel()
                     }
                     job.join()
@@ -158,6 +243,8 @@ class AudioAnalysisScheduler(
                         if (currentJob === job) {
                             currentJob = null
                             currentKey = null
+                            currentIsBeat = false
+                            currentBeatKey = null
                         }
                     }
                     delay(250)
@@ -194,21 +281,58 @@ class AudioAnalysisScheduler(
             attempted.clear()
             failures.clear()
             libraryIndex = 0
-            currentJob?.cancel()
+            if (!currentIsBeat) currentJob?.cancel()
         }
 
         signal.trySend(Unit)
     }
 
-    fun analysisFailed(key: AnalysisKey): Boolean = cache.selectedKey(key) in failures
+    fun analysisFailed(key: AnalysisKey): Boolean = failures.containsKey(cache.selectedKey(key))
+
+    fun beatAnalysisFailed(key: AnalysisKey): Boolean = beatFailures.containsKey(key)
+
+    /** Requests one offline beat analysis for an owner; duplicate source requests are coalesced. */
+    fun requestBeatAnalysis(item: MediaItem, ownerId: String): Boolean {
+        require(ownerId.isNotBlank())
+        val key = AnalysisKey.from(item) ?: return false
+        if (cache.peekBeatGrid(key) is BeatGridCacheRead.Available) return false
+        synchronized(lock) {
+            val previous = beatOwnerRequests[ownerId]
+            if (previous?.key == key && !beatFailures.containsKey(key)) return true
+            val generation = ++beatGeneration
+            beatOwnerRequests[ownerId] = BeatOwnerRequest(key, generation)
+            if (previous != null && previous.key != key &&
+                beatOwnerRequests.values.none { it.key == previous.key }
+            ) {
+                pendingBeatRequests.remove(previous.key)
+                if (currentBeatKey == previous.key) currentJob?.cancel()
+            }
+            if (currentBeatKey != key) pendingBeatRequests[key] = item
+            beatFailures.remove(key)
+            if (currentIsLibrary) currentJob?.cancel()
+        }
+        signal.trySend(Unit)
+        return true
+    }
+
+    fun cancelBeatAnalysis(ownerId: String) {
+        synchronized(lock) {
+            val request = beatOwnerRequests.remove(ownerId) ?: return
+            if (beatOwnerRequests.values.none { it.key == request.key }) {
+                pendingBeatRequests.remove(request.key)
+                if (currentBeatKey == request.key) currentJob?.cancel()
+            }
+        }
+        signal.trySend(Unit)
+    }
 
     fun displayStatus(key: AnalysisKey): DisplayStatus {
         val selected = cache.selectedKey(key)
         if (cache.peek(selected) != null) return DisplayStatus.READY
         return synchronized(lock) {
             when {
-                selected in failures -> DisplayStatus.FAILED
-                currentKey == selected && currentJob?.isActive == true -> DisplayStatus.ANALYZING
+                failures.containsKey(selected) -> DisplayStatus.FAILED
+                !currentIsBeat && currentKey == selected && currentJob?.isActive == true -> DisplayStatus.ANALYZING
                 selected in attempted -> DisplayStatus.FAILED
                 else -> DisplayStatus.PENDING
             }
@@ -220,7 +344,9 @@ class AudioAnalysisScheduler(
             if (queue == items) return
             queue = items.toList()
             val first = queue.firstNotNullOfOrNull { AnalysisKey.from(it)?.let(cache::selectedKey) }
-            if (currentIsLibrary || (first != null && currentKey != first && first !in attempted))
+            if (currentIsBeat && hasQueuedAnalysis() || currentIsLibrary ||
+                (first != null && currentKey != first && first !in attempted)
+            )
                 currentJob?.cancel()
         }
         signal.trySend(Unit)
@@ -249,5 +375,62 @@ class AudioAnalysisScheduler(
         }
         scope.cancel()
         signal.close()
+    }
+
+    private fun isCurrentBeatRequest(work: ScheduledWork): Boolean = synchronized(lock) {
+        val owner = checkNotNull(work.beatOwner)
+        beatOwnerRequests[owner]?.let {
+            it.key == work.key && it.generation == work.beatGeneration
+        } == true || beatOwnerRequests.any { (currentOwner, request) ->
+            currentOwner != owner && request.key == work.key
+        }
+    }
+
+    private fun hasBeatRequest(key: AnalysisKey): Boolean = synchronized(lock) {
+        beatOwnerRequests.values.any { it.key == key }
+    }
+
+    private fun hasQueuedAnalysis(): Boolean = synchronized(lock) {
+        queue.any { item ->
+            AnalysisKey.from(item)?.let { cache.selectedKey(it) !in attempted } == true
+        }
+    }
+
+    private fun isCurrentBeatRequest(key: AnalysisKey): Boolean = synchronized(lock) {
+        beatOwnerRequests.values.any { it.key == key }
+    }
+
+    private suspend fun analyzeBeatGrid(item: MediaItem, key: AnalysisKey): BeatGridCacheRecord {
+        val uri = checkNotNull(item.localConfiguration).uri
+        val decoded = decoder.decode(uri)
+        val timeline = sourceTimeline(key)
+        val result = TrackDspAnalyzer.analyzeWithBeatTracking(decoded.samples, decoded.startMs, timeline)
+        return beatRecord(key, decoded.samples, decoded.startMs, result.tracking, timeline)
+    }
+
+    private fun sourceTimeline(key: AnalysisKey) = SourceTimeline(
+        key.uri, TimelineOrigin.DECODER_PRESENTATION, TimelineMapping.UNKNOWN,
+        TimingFact.UNKNOWN, TimingFact.UNKNOWN, TimingFact.UNKNOWN, TimingFact.UNKNOWN,
+    )
+
+    private fun beatRecord(
+        key: AnalysisKey,
+        samples: FloatArray,
+        startMs: Long,
+        tracking: BeatTrackingResult,
+        timeline: SourceTimeline,
+    ): BeatGridCacheRecord {
+        val startUs = SourceTime.millisecondsToMicros(startMs)
+        val durationUs = SourceTime.framesToMicros(samples.size.toLong(), TrackDspAnalyzer.SAMPLE_RATE)
+        require(startUs <= Long.MAX_VALUE - durationUs)
+        val window = AnalysisWindow(startUs, startUs + durationUs)
+        tracking.grid?.let { require(it.window == window) }
+        return BeatGridCacheRecord(
+            key.uri,
+            TrackDspAnalyzer.BEAT_ANALYSIS_CONFIG_VERSION,
+            tracking,
+            window,
+            timeline,
+        )
     }
 }

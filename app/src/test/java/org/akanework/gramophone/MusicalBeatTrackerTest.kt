@@ -54,6 +54,27 @@ class MusicalBeatTrackerTest {
     }
 
     @Test
+    fun variableTempoPreservesObservedIntervalsWithoutExtrapolation() = runBlocking {
+        val times = listOf(
+            100_000L, 600_000L, 1_100_000L, 1_600_000L,
+            2_200_000L, 2_800_000L, 3_400_000L, 4_000_000L,
+        )
+        val strengths = List(times.size) { 1f }
+        val result = MusicalBeatTracker.track(
+            times.zip(strengths).map { (time, strength) -> OnsetCandidate(time, strength) },
+            110f,
+            window,
+            timeline,
+        )
+        val grid = result.grid ?: error("${result.reason}; hypotheses=${result.hypotheses}")
+
+        assertEquals(times, grid.events.map { it.sourceTimeUs })
+        assertEquals(times.zipWithNext().map { (a, b) -> b - a },
+            grid.events.zipWithNext().map { (a, b) -> b.sourceTimeUs - a.sourceTimeUs })
+        assertEquals(BeatTempoInterpretation.PRIMARY, result.selected)
+    }
+
+    @Test
     fun windowBoundsAndLeadingSilenceDoNotInventEvents() = runBlocking {
         val flux = DoubleArray(100)
         flux[10] = 4.0

@@ -40,6 +40,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
+    packaging {
+        jniLibs {
+            pickFirsts += "lib/arm64-v8a/libdlfunc.so"
+            pickFirsts += "lib/armeabi-v7a/libdlfunc.so"
+            pickFirsts += "lib/x86/libdlfunc.so"
+            pickFirsts += "lib/x86_64/libdlfunc.so"
+        }
+    }
     buildFeatures {
         prefab = true
     }

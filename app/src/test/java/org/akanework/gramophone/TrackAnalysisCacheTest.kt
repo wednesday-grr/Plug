@@ -21,12 +21,26 @@ import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import org.akanework.gramophone.logic.utils.automix.AnalysisKey
+import org.akanework.gramophone.logic.utils.automix.AnalysisWindow
+import org.akanework.gramophone.logic.utils.automix.BeatGridCacheRead
+import org.akanework.gramophone.logic.utils.automix.BeatGridCacheRecord
+import org.akanework.gramophone.logic.utils.automix.BeatTempoHypothesis
+import org.akanework.gramophone.logic.utils.automix.BeatTempoInterpretation
+import org.akanework.gramophone.logic.utils.automix.BeatTrackingResult
+import org.akanework.gramophone.logic.utils.automix.DetectedBeatEvent
+import org.akanework.gramophone.logic.utils.automix.DetectedBeatGridEvidence
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysis
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysisCache
 import org.akanework.gramophone.logic.utils.automix.TrackEdges
 import org.akanework.gramophone.logic.utils.automix.BeatPhaseAligner
 import org.akanework.gramophone.logic.utils.automix.BeatEvidenceAdapter
 import org.akanework.gramophone.logic.utils.automix.EvidenceSource
+import org.akanework.gramophone.logic.utils.automix.MusicalBeatTracker
+import org.akanework.gramophone.logic.utils.automix.SourceTimeline
+import org.akanework.gramophone.logic.utils.automix.TimelineMapping
+import org.akanework.gramophone.logic.utils.automix.TimelineOrigin
+import org.akanework.gramophone.logic.utils.automix.TrackDspAnalyzer
+import org.akanework.gramophone.logic.utils.automix.TimingFact
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -47,7 +61,7 @@ class TrackAnalysisCacheTest {
         val analysis = TrackAnalysis(120f, "8A", 125.0, 0.9f, 0, 5000,
             pulseProvenance = BeatEvidenceAdapter.spectralFluxProvenance)
         TrackAnalysisCache(context).also {
-            assertEquals(5, it.writableDatabase.version)
+            assertEquals(6, it.writableDatabase.version)
             it.store(key, analysis)
             it.store(newerKey, analysis.copy(pulseProvenance =
                 BeatEvidenceAdapter.spectralFluxProvenance.copy(algorithmVersion = "future-v2")))
@@ -90,7 +104,7 @@ class TrackAnalysisCacheTest {
             it.close()
         }
         TrackAnalysisCache(context).also {
-            assertEquals(5, it.writableDatabase.version)
+            assertEquals(6, it.writableDatabase.version)
             val loaded = it.load(key)!!
             assertEquals(121f, loaded.bpm!!, 0f)
             assertEquals("8A", loaded.camelotKey)
@@ -323,5 +337,142 @@ class TrackAnalysisCacheTest {
         assertEquals(123L, AnalysisKey.from(local)?.modified)
         assertNull(AnalysisKey.from(local.buildUpon().setMediaMetadata(MediaMetadata.EMPTY).build()))
         assertNull(AnalysisKey.from(local.buildUpon().setUri("https://example.com/song").build()))
+    }
+
+    @Test
+    fun persistsBeatGridAndRejectsVersionSourceAndWindowMismatches() {
+        val context = RuntimeEnvironment.getApplication()
+        val key = AnalysisKey("beat-grid-cache", 1, "content://media/beat-grid")
+        val record = beatRecord(key)
+        TrackAnalysisCache(context).also {
+            it.store(key, TrackAnalysis(120f, "8A", 125.0, 0.9f, 0, 5000,
+                pulseProvenance = BeatEvidenceAdapter.spectralFluxProvenance))
+            it.storeBeatGrid(key, record)
+            it.close()
+        }
+        TrackAnalysisCache(context).also {
+            assertEquals(6, it.writableDatabase.version)
+            assertEquals(BeatGridCacheRead.Available(record), it.loadBeatGrid(key))
+            assertEquals(BeatGridCacheRead.Invalidated, it.loadBeatGrid(
+                key, configurationVersion = "future-config"))
+            assertEquals(BeatGridCacheRead.Invalidated, it.loadBeatGrid(
+                key, expectedWindow = AnalysisWindow(0, 9_000_000)))
+            assertEquals(BeatGridCacheRead.Missing, it.loadBeatGrid(key.copy(uri = "content://media/other")))
+            assertEquals(120f, it.load(key)!!.bpm!!, 0f)
+            assertEquals("8A", it.load(key)!!.camelotKey)
+            assertEquals(125.0, it.load(key)!!.beatOffsetMs!!, 0.0)
+            it.close()
+        }
+    }
+
+    @Test
+    fun cachedEmptyAndUnavailableBeatResultsRemainDistinct() {
+        val cache = TrackAnalysisCache(RuntimeEnvironment.getApplication())
+        val key = AnalysisKey("beat-grid-empty", 1, "content://media/beat-grid-empty")
+        val complete = beatRecord(key)
+        val grid = checkNotNull(complete.result.grid)
+        val empty = complete.copy(result = complete.result.copy(grid = grid.copy(events = emptyList())))
+        val unavailable = complete.copy(result = complete.result.copy(grid = null))
+        try {
+            cache.storeBeatGrid(key, empty)
+            assertEquals(org.akanework.gramophone.logic.utils.automix.BeatGridCacheState.EMPTY,
+                (cache.loadBeatGrid(key) as BeatGridCacheRead.Available).record.state)
+            cache.storeBeatGrid(key, unavailable)
+            assertEquals(org.akanework.gramophone.logic.utils.automix.BeatGridCacheState.UNAVAILABLE,
+                (cache.loadBeatGrid(key) as BeatGridCacheRead.Available).record.state)
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun invalidatesBeatGridsOnAlgorithmAndStoredTimelineMismatch() {
+        val context = RuntimeEnvironment.getApplication()
+        val key = AnalysisKey("beat-grid-invalidated", 1, "content://media/beat-grid-invalidated")
+        val first = TrackAnalysisCache(context)
+        first.storeBeatGrid(key, beatRecord(key))
+        first.writableDatabase.execSQL(
+            "UPDATE beat_grid SET algorithm_version='future-algorithm' WHERE media_id=?",
+            arrayOf<Any>(key.mediaId),
+        )
+        first.close()
+        val algorithmMismatch = TrackAnalysisCache(context)
+        assertEquals(BeatGridCacheRead.Invalidated, algorithmMismatch.loadBeatGrid(key))
+        algorithmMismatch.close()
+
+        val second = TrackAnalysisCache(context)
+        second.storeBeatGrid(key, beatRecord(key))
+        second.writableDatabase.execSQL(
+            "UPDATE beat_grid SET timeline_identity='content://media/other' WHERE media_id=?",
+            arrayOf<Any>(key.mediaId),
+        )
+        second.close()
+        val identityMismatch = TrackAnalysisCache(context)
+        assertEquals(BeatGridCacheRead.Invalidated, identityMismatch.loadBeatGrid(key))
+        identityMismatch.close()
+    }
+
+    @Test
+    fun rejectsInvalidBeatGridWritesBeforePersisting() {
+        val cache = TrackAnalysisCache(RuntimeEnvironment.getApplication())
+        val key = AnalysisKey("invalid-beat-grid", 1, "content://media/invalid-beat-grid")
+        val record = beatRecord(key).copy(
+            result = beatRecord(key).result.copy(grid = null),
+            algorithmVersion = "unknown-algorithm",
+        )
+        try {
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                cache.storeBeatGrid(key, record)
+            }
+            assertEquals(BeatGridCacheRead.Missing, cache.loadBeatGrid(key))
+        } finally {
+            cache.close()
+        }
+    }
+
+    @Test
+    fun migratesVersionFiveWithoutChangingExistingAnalysisRows() {
+        val context = RuntimeEnvironment.getApplication()
+        val key = AnalysisKey("beat-grid-v5", 1, "content://media/beat-grid-v5")
+        TrackAnalysisCache(context).also { cache ->
+            cache.store(key, TrackAnalysis(121f, "8A", 125.0, 0.9f, 0, 5000))
+            cache.writableDatabase.execSQL("DROP TABLE beat_grid")
+            cache.writableDatabase.version = 5
+            cache.close()
+        }
+        TrackAnalysisCache(context).also { cache ->
+            assertEquals(6, cache.writableDatabase.version)
+            assertEquals(121f, cache.load(key)!!.bpm!!, 0f)
+            assertEquals("8A", cache.load(key)!!.camelotKey)
+            assertEquals(125.0, cache.load(key)!!.beatOffsetMs!!, 0.0)
+            assertEquals(BeatGridCacheRead.Missing, cache.loadBeatGrid(key))
+            cache.close()
+        }
+    }
+
+    private fun beatRecord(key: AnalysisKey): BeatGridCacheRecord {
+        val timeline = SourceTimeline(key.uri, TimelineOrigin.DECODER_PRESENTATION,
+            TimelineMapping.UNKNOWN, TimingFact.YES, TimingFact.YES, TimingFact.NO, TimingFact.NO)
+        val window = AnalysisWindow(1_000_000, 9_000_000)
+        val grid = DetectedBeatGridEvidence(
+            listOf(
+                DetectedBeatEvent(0, 1_100_000, 0.7f, onsetStrength = 0.8f),
+                DetectedBeatEvent(1, 1_600_000, 0.8f, onsetStrength = 0.9f),
+            ),
+            "spectral-flux-onsets", MusicalBeatTracker.ALGORITHM_VERSION, window, timeline, 0.75f, null,
+        )
+        return BeatGridCacheRecord(
+            key.uri,
+            TrackDspAnalyzer.BEAT_ANALYSIS_CONFIG_VERSION,
+            BeatTrackingResult(
+                grid,
+                listOf(BeatTempoHypothesis(BeatTempoInterpretation.PRIMARY, 120.0, 0.75f)),
+                BeatTempoInterpretation.PRIMARY,
+                false,
+                "Observed onset sequence",
+            ),
+            window,
+            timeline,
+        )
     }
 }

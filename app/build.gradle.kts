@@ -123,6 +123,7 @@ android {
     defaultConfig {
         applicationId = appIdOverride ?: "org.plug.player"
         minSdk = 23
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "HAS_ESSENTIA", useEssentia.toString())
         if (useEssentia) {
             externalNativeBuild {
@@ -362,6 +363,8 @@ dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.05.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material3.adaptive:adaptive")
