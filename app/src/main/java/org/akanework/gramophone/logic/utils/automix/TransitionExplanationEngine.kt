@@ -30,7 +30,7 @@ internal enum class EffectDecisionReason {
 }
 
 internal enum class EffectSelectionStatus { SELECTED, SKIPPED }
-internal enum class EffectExecutionStatus { PLANNED }
+internal enum class EffectExecutionStatus { PLANNED, PREPARED, EXECUTING, COMPLETED, FAILED }
 internal enum class TransitionExecutionStatus { ACTIVE, COMPLETED }
 
 internal data class BeatmatchEvidence(
@@ -48,6 +48,9 @@ internal data class EffectSelectionExplanation(
     val reasons: List<EffectDecisionReason>,
     val executionStatus: EffectExecutionStatus?,
     val beatmatchEvidence: BeatmatchEvidence? = null,
+    val processedFrames: Long? = null,
+    val sampleRate: Int? = null,
+    val executionDetail: String? = null,
 )
 
 internal data class TransitionAnalysisSnapshot(
@@ -80,6 +83,24 @@ internal data class TransitionAnalysisSnapshot(
 )
 
 internal object TransitionExplanationEngine {
+    fun updateExecution(
+        snapshot: TransitionAnalysisSnapshot,
+        identity: TransitionIdentity,
+        telemetry: Map<String, EffectRuntimeTelemetry>,
+    ): TransitionAnalysisSnapshot? {
+        if (!TransitionGeneration.isCurrent(snapshot.identity, identity)) return null
+        return snapshot.copy(effects = snapshot.effects.map { explanation ->
+            if (explanation.selectionStatus != EffectSelectionStatus.SELECTED) return@map explanation
+            val runtime = telemetry[explanation.effectId] ?: return@map explanation
+            explanation.copy(
+                executionStatus = runtime.state.toExecutionStatus(),
+                processedFrames = runtime.processedFrames,
+                sampleRate = runtime.sampleRate,
+                executionDetail = runtime.detail,
+            )
+        })
+    }
+
     fun explainBeatmatch(
         aligned: Boolean,
         outgoingBpm: Float?,
@@ -131,4 +152,19 @@ internal object TransitionExplanationEngine {
             EffectSelectionExplanation(it.id, EffectSelectionStatus.SKIPPED,
                 listOf(EffectDecisionReason.FILTER_SLOT_CONFLICT), null)
         }
+
+    private fun EffectLifecycleState.toExecutionStatus(): EffectExecutionStatus? = when (this) {
+        EffectLifecycleState.AVAILABLE,
+        EffectLifecycleState.EVALUATED,
+        EffectLifecycleState.SELECTED,
+        EffectLifecycleState.UNAVAILABLE,
+        EffectLifecycleState.REJECTED -> null
+        EffectLifecycleState.PREPARED -> EffectExecutionStatus.PREPARED
+        EffectLifecycleState.EXECUTING -> EffectExecutionStatus.EXECUTING
+        EffectLifecycleState.COMPLETED -> EffectExecutionStatus.COMPLETED
+        EffectLifecycleState.FAILED -> EffectExecutionStatus.FAILED
+    }
 }
+
+internal val TransitionAnalysisSnapshot.identity: TransitionIdentity
+    get() = TransitionIdentity(generation, outgoingId, incomingId)

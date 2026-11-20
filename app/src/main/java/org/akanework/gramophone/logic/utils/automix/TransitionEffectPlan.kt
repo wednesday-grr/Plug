@@ -61,17 +61,17 @@ internal data class TransitionEffectPlan(
             val requested = listOfNotNull(primary) + TransitionEffect.entries.filter {
                 it.id in additional && it != primary
             }
+            val arbitration = AutoMixEffectArbitrator.evaluate(
+                requested.map { checkNotNull(AutoMixEffect.fromId(it.id)) }
+            ).associateBy { it.evaluation.effect }
             val accepted = mutableListOf<ScheduledEffect>()
             val rejected = mutableListOf<TransitionEffect>()
-            var incomingFilterOwned = false
             for (effect in requested) {
-                val ownsIncomingFilter = effect == TransitionEffect.FILTER_SWEEP ||
-                    effect == TransitionEffect.HIGH_PASS_INTRO || effect == TransitionEffect.RISE
-                if (ownsIncomingFilter && incomingFilterOwned) {
-                    rejected.add(effect)
+                val selection = checkNotNull(arbitration[checkNotNull(AutoMixEffect.fromId(effect.id))])
+                if (selection.state != EffectLifecycleState.SELECTED) {
+                    rejected += effect
                     continue
                 }
-                if (ownsIncomingFilter) incomingFilterOwned = true
                 accepted.add(when (effect) {
                     TransitionEffect.BASS_SWAP, TransitionEffect.VOCAL_SWAP ->
                         ScheduledEffect(effect, start = 0.5f, intensity = intensity, curve = EffectCurve.SMOOTH)

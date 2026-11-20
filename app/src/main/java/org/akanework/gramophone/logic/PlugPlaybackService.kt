@@ -1445,6 +1445,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                                 putString("id", effect.effectId)
                                 putString("selection", effect.selectionStatus.name)
                                 putString("execution", effect.executionStatus?.name)
+                                effect.processedFrames?.let { putLong("processed_frames", it) }
+                                effect.sampleRate?.let { putInt("sample_rate", it) }
+                                putString("execution_detail", effect.executionDetail)
                                 putStringArrayList("reasons", ArrayList(effect.reasons.map { it.name }))
                                 effect.beatmatchEvidence?.let { evidence ->
                                     evidence.outgoingBpm?.let { putFloat("out_bpm", it) }

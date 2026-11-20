@@ -49,6 +49,10 @@ internal data class DisplayEffect(
     val gridIn: Float?,
     val minimumGrid: Float?,
     val maximumTempoDeviation: Float?,
+    val execution: EffectExecutionStatus?,
+    val processedFrames: Long?,
+    val sampleRate: Int?,
+    val executionDetail: String?,
 )
 internal data class DisplayTransition(
     val generation: Long,
@@ -159,14 +163,20 @@ internal class AudioQualityInfoBottomSheet(
                 fun evidence(key: String) = if (it.containsKey(key)) it.getFloat(key) else null
                 val selection = EffectSelectionStatus.valueOf(requireNotNull(it.getString("selection")))
                 val execution = it.getString("execution")?.let(EffectExecutionStatus::valueOf)
-                check((selection == EffectSelectionStatus.SELECTED && execution == EffectExecutionStatus.PLANNED) ||
+                check((selection == EffectSelectionStatus.SELECTED && execution != null) ||
                     (selection == EffectSelectionStatus.SKIPPED && execution == null))
                 DisplayEffect(
                     requireNotNull(it.getString("id")),
                     selection,
                     it.getStringArrayList("reasons").orEmpty().map(EffectDecisionReason::valueOf),
                     evidence("out_bpm"), evidence("in_bpm"), evidence("out_grid"),
-                    evidence("in_grid"), evidence("minimum_grid"), evidence("max_tempo_deviation")
+                    evidence("in_grid"), evidence("minimum_grid"), evidence("max_tempo_deviation"),
+                    execution,
+                    it.takeIf { bundle -> bundle.containsKey("processed_frames") }
+                        ?.getLong("processed_frames"),
+                    it.takeIf { bundle -> bundle.containsKey("sample_rate") }
+                        ?.getInt("sample_rate"),
+                    it.getString("execution_detail"),
                 )
             }
             state.value = AudioQualityInfoUiState.Available(DisplayTransition(
@@ -364,8 +374,16 @@ internal class AudioQualityInfoBottomSheet(
             visibility = View.GONE
         }
         val toggle = TextView(context).apply {
-            text = context.getString(R.string.transition_info_effect, name, context.getString(
-                if (effect.selection == EffectSelectionStatus.SELECTED) R.string.transition_info_planned else R.string.transition_info_skipped_label))
+            val label = when {
+                effect.selection == EffectSelectionStatus.SKIPPED -> R.string.transition_info_skipped_label
+                effect.execution == EffectExecutionStatus.PLANNED -> R.string.transition_info_planned
+                effect.execution == EffectExecutionStatus.PREPARED -> R.string.transition_info_prepared
+                effect.execution == EffectExecutionStatus.EXECUTING -> R.string.transition_info_executing
+                effect.execution == EffectExecutionStatus.COMPLETED -> R.string.transition_info_executed
+                effect.execution == EffectExecutionStatus.FAILED -> R.string.transition_info_execution_failed
+                else -> R.string.transition_info_planned
+            }
+            text = context.getString(R.string.transition_info_effect, name, context.getString(label))
             contentDescription = context.getString(R.string.transition_info_effect_details, name)
             isClickable = true
             isFocusable = true
@@ -382,6 +400,11 @@ internal class AudioQualityInfoBottomSheet(
             })
         }
         effect.reasons.drop(1).forEach { detail(reason(it)) }
+        effect.processedFrames?.let {
+            detail(context.getString(R.string.transition_info_execution_frames, it,
+                effect.sampleRate?.toString() ?: context.getString(R.string.transition_info_no_data)))
+        }
+        effect.executionDetail?.let(::detail)
         val unknown = context.getString(R.string.transition_info_no_data)
         val number = NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }
         fun format(value: Float?) = value?.let(number::format) ?: unknown

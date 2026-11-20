@@ -26,10 +26,15 @@
     <string name="transition_info_analyzer">ตัววิเคราะห์ที่ตั้งค่าไว้</string>
     <string name="transition_info_analyzer_note">BPM และ Key จากแท็กอาจถูกใช้แทนผลวิเคราะห์</string>
     <string name="transition_info_scheduled">เอฟเฟกต์ที่วางแผนไว้</string>
-    <string name="transition_info_unconfirmed">เครื่องเล่นไม่ยืนยันผลการประมวลผลแต่ละเอฟเฟกต์ จึงไม่แสดงว่าใช้สำเร็จแล้ว</string>
     <string name="transition_info_compact_active">กำลังมิกซ์ · วางแผนไว้: %1$s</string>
     <string name="transition_info_compact_completed">มิกซ์เสร็จแล้ว · วางแผนไว้: %1$s</string>
     <string name="transition_info_planned">วางแผนไว้ ยังไม่ยืนยันผล</string>
+    <string name="transition_info_prepared">เตรียมแล้ว แต่ยังไม่ยืนยันการประมวลผล</string>
+    <string name="transition_info_executing">ยืนยันการประมวลผลแล้ว</string>
+    <string name="transition_info_executed">ประมวลผลเสร็จแล้ว</string>
+    <string name="transition_info_execution_failed">การประมวลผลล้มเหลว</string>
+    <string name="transition_info_execution_frames">ประมวลผล PCM %1$d เฟรม ที่ %2$s Hz</string>
+    <string name="transition_info_unconfirmed">รายงานการทำงานของเอฟเฟกต์หลังตรวจพบการประมวลผลหรือการทำงานของซองระดับเสียงเท่านั้น</string>
     <string name="transition_info_skipped">เอฟเฟกต์ที่พิจารณาแล้วแต่ไม่ได้ใช้</string>
     <string name="transition_info_skipped_label">ข้าม</string>
     <string name="transition_info_beatmatch">Beatmatching</string>

@@ -28,6 +28,23 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+enum class TransitionProcessorEffect {
+    FILTER_HIGH_PASS,
+    FILTER_LOW_PASS,
+    BASS,
+    VOCAL,
+    EQ,
+    ECHO,
+    REVERB,
+}
+
+data class TransitionProcessorRuntimeSnapshot(
+    val configured: Boolean,
+    val sampleRate: Int?,
+    val processedFrames: Long,
+    val activeEffects: Set<TransitionProcessorEffect>,
+)
+
 /** Per-deck stereo PCM effects processor. Setters publish configuration to the audio thread. */
 class DjTransitionAudioProcessor(
     private val forcePcm16Output: Boolean = false,
@@ -100,6 +117,33 @@ class DjTransitionAudioProcessor(
     private val eqZ2 = Array(3) { DoubleArray(2) }
     private var eqCoefficients = emptyArray<Coefficients>()
     private val eqMix = DoubleArray(3)
+    @Volatile
+    private var runtimeConfigured = false
+    @Volatile
+    private var runtimeSampleRate = 0
+    @Volatile
+    private var runtimeProcessedFrames = 0L
+    @Volatile
+    private var runtimeEffectMask = 0
+
+    fun runtimeSnapshot(): TransitionProcessorRuntimeSnapshot {
+        val mask = runtimeEffectMask
+        val effects = buildSet {
+            if (mask and FILTER_HIGH_PASS_MASK != 0) add(TransitionProcessorEffect.FILTER_HIGH_PASS)
+            if (mask and FILTER_LOW_PASS_MASK != 0) add(TransitionProcessorEffect.FILTER_LOW_PASS)
+            if (mask and BASS_MASK != 0) add(TransitionProcessorEffect.BASS)
+            if (mask and VOCAL_MASK != 0) add(TransitionProcessorEffect.VOCAL)
+            if (mask and EQ_MASK != 0) add(TransitionProcessorEffect.EQ)
+            if (mask and ECHO_MASK != 0) add(TransitionProcessorEffect.ECHO)
+            if (mask and REVERB_MASK != 0) add(TransitionProcessorEffect.REVERB)
+        }
+        return TransitionProcessorRuntimeSnapshot(
+            runtimeConfigured,
+            runtimeSampleRate.takeIf { it > 0 },
+            runtimeProcessedFrames,
+            effects,
+        )
+    }
 
     fun setFilter(type: Type, cutoffHz: Float, intensity: Float = 1f) {
         require(cutoffHz.isFinite() && cutoffHz > 0f)
@@ -216,7 +260,14 @@ class DjTransitionAudioProcessor(
         if (inputAudioFormat.sampleRate <= 0 || inputAudioFormat.channelCount != 2 ||
             (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
                 inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT)
-        ) return AudioProcessor.AudioFormat.NOT_SET
+        ) {
+            runtimeConfigured = false
+            runtimeSampleRate = 0
+            runtimeEffectMask = 0
+            return AudioProcessor.AudioFormat.NOT_SET
+        }
+        runtimeConfigured = true
+        runtimeSampleRate = inputAudioFormat.sampleRate
         return if (forcePcm16Output) {
             AudioProcessor.AudioFormat(inputAudioFormat.sampleRate, 2, C.ENCODING_PCM_16BIT)
         } else inputAudioFormat
@@ -229,6 +280,7 @@ class DjTransitionAudioProcessor(
         clearVocalState()
         clearReverbState()
         clearEqState()
+        runtimeEffectMask = 0
         appliedVersion = -1L
         appliedStateVersion = -1L
         appliedBassStateVersion = -1L
@@ -326,6 +378,8 @@ class DjTransitionAudioProcessor(
         ) {
             if (eqCoefficients.isNotEmpty()) clearEqState()
             output.put(inputBuffer).flip()
+            runtimeProcessedFrames += frameCount
+            runtimeEffectMask = 0
             return
         }
 
@@ -413,6 +467,8 @@ class DjTransitionAudioProcessor(
         }
         inputBuffer.position(input.position())
         output.flip()
+        runtimeProcessedFrames += frameCount
+        runtimeEffectMask = runtimeMask(current, filter, bassFilter)
     }
 
     override fun onReset() {
@@ -422,6 +478,9 @@ class DjTransitionAudioProcessor(
         clearVocalState()
         clearReverbState()
         clearEqState()
+        runtimeConfigured = false
+        runtimeSampleRate = 0
+        runtimeEffectMask = 0
         coefficients = null
         bassCoefficients = null
         appliedVersion = -1L
@@ -435,6 +494,27 @@ class DjTransitionAudioProcessor(
         appliedDelayFrames = 0
         vocalCoefficients = null
         appliedVocalAttenuation = null
+    }
+
+    private fun runtimeMask(
+        current: Request,
+        filter: Coefficients?,
+        bassFilter: Coefficients?,
+    ): Int {
+        var mask = 0
+        if (filter != null && current.intensity > 0f) {
+            mask = mask or when (current.type) {
+                Type.HIGH_PASS -> FILTER_HIGH_PASS_MASK
+                Type.LOW_PASS -> FILTER_LOW_PASS_MASK
+                null -> 0
+            }
+        }
+        if (bassFilter != null && current.bassGain < 1f) mask = mask or BASS_MASK
+        if (current.vocalAttenuation > 0f) mask = mask or VOCAL_MASK
+        if (current.eqLow < 1f || current.eqMid < 1f || current.eqHigh < 1f) mask = mask or EQ_MASK
+        if (current.echoEnabled && (current.wetMix > 0f || current.dryGain < 1f)) mask = mask or ECHO_MASK
+        if (current.reverbEnabled && current.reverbWet > 0f) mask = mask or REVERB_MASK
+        return mask
     }
 
     private fun processChannel(
@@ -581,6 +661,13 @@ class DjTransitionAudioProcessor(
     }
 
     private companion object {
+        const val FILTER_HIGH_PASS_MASK = 1
+        const val FILTER_LOW_PASS_MASK = 1 shl 1
+        const val BASS_MASK = 1 shl 2
+        const val VOCAL_MASK = 1 shl 3
+        const val EQ_MASK = 1 shl 4
+        const val ECHO_MASK = 1 shl 5
+        const val REVERB_MASK = 1 shl 6
         const val BASS_CUTOFF_HZ = 200f
         const val MIN_BASS_GAIN = 0.0001
         const val MIN_ECHO_DELAY_MS = 1f

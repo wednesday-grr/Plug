@@ -19,6 +19,7 @@ package org.akanework.gramophone
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import org.akanework.gramophone.logic.utils.automix.DjTransitionAudioProcessor
+import org.akanework.gramophone.logic.utils.automix.TransitionProcessorEffect
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -30,6 +31,22 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 class DjTransitionAudioProcessorTest {
+    @Test
+    fun runtimeSnapshotReportsConfiguredPcmAndObservedProcessing() {
+        val processor = configured(C.ENCODING_PCM_FLOAT)
+        val before = processor.runtimeSnapshot()
+        assertTrue(before.configured)
+        assertEquals(48_000, before.sampleRate)
+        assertEquals(0L, before.processedFrames)
+        assertTrue(before.activeEffects.isEmpty())
+
+        processor.setEcho(delayMs = 100f, wetMix = 0.4f)
+        processor.queueInput(sineBuffer(1000.0, 48_000, 1024))
+        val after = processor.runtimeSnapshot()
+        assertEquals(1024L, after.processedFrames)
+        assertTrue(TransitionProcessorEffect.ECHO in after.activeEffects)
+    }
+
     @Test
     fun transitionEqIndependentlyAttenuatesAllThreeBands() {
         fun measure(frequency: Double, low: Float, mid: Float, high: Float): Double {

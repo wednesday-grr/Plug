@@ -26,10 +26,15 @@
     <string name="transition_info_analyzer">Analyzer setting</string>
     <string name="transition_info_analyzer_note">Tagged BPM and key can take precedence over analyzer results.</string>
     <string name="transition_info_scheduled">Scheduled effects</string>
-    <string name="transition_info_unconfirmed">The player does not confirm individual effect rendering. Scheduled effects are not reported as applied.</string>
     <string name="transition_info_compact_active">Mixing · Scheduled: %1$s</string>
     <string name="transition_info_compact_completed">Mix complete · Scheduled: %1$s</string>
     <string name="transition_info_planned">Scheduled, rendering unconfirmed</string>
+    <string name="transition_info_prepared">Prepared, processing not yet confirmed</string>
+    <string name="transition_info_executing">Processing confirmed</string>
+    <string name="transition_info_executed">Processing completed</string>
+    <string name="transition_info_execution_failed">Processing failed</string>
+    <string name="transition_info_execution_frames">PCM frames processed: %1$d at %2$s Hz</string>
+    <string name="transition_info_unconfirmed">Effect execution is reported only after processing or transition-envelope activity is observed.</string>
     <string name="transition_info_skipped">Evaluated effects not scheduled</string>
     <string name="transition_info_skipped_label">Skipped</string>
     <string name="transition_info_beatmatch">Beatmatching</string>

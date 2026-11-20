@@ -10,12 +10,18 @@ package org.akanework.gramophone
 
 import org.akanework.gramophone.logic.utils.automix.AutomixEffectSelector
 import org.akanework.gramophone.logic.utils.automix.AutomixMath
+import org.akanework.gramophone.logic.utils.automix.AutoMixEffect
 import org.akanework.gramophone.logic.utils.automix.BeatPhaseAligner
 import org.akanework.gramophone.logic.utils.automix.EffectDecisionReason
 import org.akanework.gramophone.logic.utils.automix.EffectExecutionStatus
+import org.akanework.gramophone.logic.utils.automix.EffectLifecycleState
+import org.akanework.gramophone.logic.utils.automix.EffectRuntimeTelemetry
 import org.akanework.gramophone.logic.utils.automix.EffectSelectionStatus
 import org.akanework.gramophone.logic.utils.automix.TransitionEffectPlan
+import org.akanework.gramophone.logic.utils.automix.TransitionAnalysisSnapshot
+import org.akanework.gramophone.logic.utils.automix.TransitionExecutionStatus
 import org.akanework.gramophone.logic.utils.automix.TransitionExplanationEngine
+import org.akanework.gramophone.logic.utils.automix.TransitionIdentity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -103,5 +109,52 @@ class TransitionExplanationEngineTest {
         assertThrows(IllegalStateException::class.java) {
             TransitionExplanationEngine.explain(plan, decision.style, emptyList(), setOf("echo_out"))
         }
+    }
+
+    @Test
+    fun executionTelemetryUpdatesOnlyTheMatchingTransitionGeneration() {
+        val effects = TransitionExplanationEngine.explain(
+            TransitionEffectPlan.create("fade", emptySet()), "fade",
+            listOf(EffectDecisionReason.USER_PRESET), emptySet()
+        )
+        val snapshot = TransitionAnalysisSnapshot(
+            generation = 10,
+            outgoingId = "out",
+            incomingId = "in",
+            outgoingIndex = 0,
+            incomingIndex = 1,
+            outgoingTitle = null,
+            incomingTitle = null,
+            durationMs = 5000,
+            transitionStyle = "fade",
+            transitionReasons = emptyList(),
+            selectorDifferencePercent = null,
+            selectorThresholdPercent = null,
+            selectorRisingPercent = null,
+            selectorRisingThresholdPercent = null,
+            selectorVocalThreshold = null,
+            status = TransitionExecutionStatus.ACTIVE,
+            analyzer = null,
+            outgoingBpm = null,
+            incomingBpm = null,
+            outgoingGridConfidence = null,
+            incomingGridConfidence = null,
+            outgoingKey = null,
+            incomingKey = null,
+            outgoingVocalEnergy = null,
+            incomingVocalEnergy = null,
+            effects = effects,
+        )
+        val telemetry = mapOf("crossfade" to EffectRuntimeTelemetry(
+            AutoMixEffect.CROSSFADE, EffectLifecycleState.EXECUTING, 1024, 48_000
+        ))
+        val updated = TransitionExplanationEngine.updateExecution(
+            snapshot, TransitionIdentity(10, "out", "in"), telemetry
+        )
+        assertEquals(EffectExecutionStatus.EXECUTING, updated?.effects?.single()?.executionStatus)
+        assertEquals(1024L, updated?.effects?.single()?.processedFrames)
+        assertNull(TransitionExplanationEngine.updateExecution(
+            snapshot, TransitionIdentity(11, "out", "in"), telemetry
+        ))
     }
 }

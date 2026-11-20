@@ -13,6 +13,7 @@ import android.view.ContextThemeWrapper
 import android.widget.TextView
 import org.akanework.gramophone.R
 import org.akanework.gramophone.logic.utils.automix.EffectDecisionReason
+import org.akanework.gramophone.logic.utils.automix.EffectExecutionStatus
 import org.akanework.gramophone.logic.utils.automix.EffectSelectionStatus
 import org.akanework.gramophone.logic.utils.automix.TransitionExecutionStatus
 import org.junit.Assert.assertEquals
@@ -47,9 +48,11 @@ class AudioQualityInfoBottomSheetTest {
         val context = ContextThemeWrapper(RuntimeEnvironment.getApplication(), R.style.Theme_Gramophone)
         val sheet = AudioQualityInfoBottomSheet(context) { null }
         val effect = DisplayEffect("echo_out", EffectSelectionStatus.SELECTED,
-            listOf(EffectDecisionReason.USER_ADDITIONAL_EFFECT), null, null, null, null, null, null)
+            listOf(EffectDecisionReason.USER_ADDITIONAL_EFFECT), null, null, null, null, null, null,
+            EffectExecutionStatus.PLANNED, null, null, null)
         val skipped = DisplayEffect("filter_sweep", EffectSelectionStatus.SKIPPED,
-            listOf(EffectDecisionReason.FILTER_SLOT_CONFLICT), null, null, null, null, null, null)
+            listOf(EffectDecisionReason.FILTER_SLOT_CONFLICT), null, null, null, null, null, null,
+            null, null, null, null)
         sheet.render(AudioQualityInfoUiState.Available(DisplayTransition(
             1, TransitionExecutionStatus.COMPLETED, null, null, 5000, "fade",
             listOf(EffectDecisionReason.BPM_UNAVAILABLE), null, null, null, null, null, null,

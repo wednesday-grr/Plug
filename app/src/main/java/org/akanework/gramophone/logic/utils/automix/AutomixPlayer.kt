@@ -262,8 +262,10 @@ class AutomixPlayer private constructor(
     private var lastEffectIds: List<String> = emptyList()
     private val mutableTransitionExplanation = MutableStateFlow<TransitionAnalysisSnapshot?>(null)
     internal val transitionExplanation = mutableTransitionExplanation.asStateFlow()
-    private var explanationGeneration = 0L
+    private val mutableRuntimeTelemetry = MutableStateFlow<TransitionRuntimeTelemetry?>(null)
+    internal val runtimeTelemetry = mutableRuntimeTelemetry.asStateFlow()
     private var explanationQueue: QueueSnapshot? = null
+    private val gainOwnershipRegistry = GainOwnershipRegistry()
     private var activeTransitionBeatmatched = false
     private var lastTransitionStyle: String? = null
     private var lastTransitionBeatmatched = false
@@ -271,6 +273,8 @@ class AutomixPlayer private constructor(
     private var echoDelayMs = DEFAULT_ECHO_DELAY_MS
     private var activeFadeDurationMs = 0L
     private var transitionProgress = 0f
+    private var transitionStartActiveFrames = 0L
+    private var transitionStartStandbyFrames = 0L
     private var durationMs = 5000L
     private var automaticDuration = false
     private var maxSkipMs = 15_000L
@@ -765,7 +769,9 @@ class AutomixPlayer private constructor(
 
     private fun cancelTransition() {
         if (isCrossfading) {
+            releaseGainOwnership()
             mutableTransitionExplanation.value = null
+            mutableRuntimeTelemetry.value = null
             explanationQueue = null
         }
         decks.factoryA.djTransitionAudioProcessor.bypass()
@@ -934,6 +940,7 @@ class AutomixPlayer private constructor(
                 )
             }
             applyVolumes()
+            updateEffectExecutionTelemetry()
             if (progress >= 1f) handoff(now)
             return
         }
@@ -1059,12 +1066,15 @@ class AutomixPlayer private constructor(
         transitionProgress = 0f
         transition.start(fadeDuration, SystemClock.elapsedRealtime())
         transition.pause(SystemClock.elapsedRealtime())
+        transitionStartActiveFrames = activeDjFilter.runtimeSnapshot().processedFrames
+        transitionStartStandbyFrames = standbyDjFilter.runtimeSnapshot().processedFrames
         val outgoingItem = active.currentMediaItem
         val incomingItem = standby.currentMediaItem
         if (outgoingItem != null && incomingItem != null) {
             explanationQueue = queueSnapshot()
+            val generation = TransitionGeneration.next()
             mutableTransitionExplanation.value = TransitionAnalysisSnapshot(
-                generation = ++explanationGeneration,
+                generation = generation,
                 outgoingId = outgoingItem.mediaId,
                 incomingId = incomingItem.mediaId,
                 outgoingIndex = active.currentMediaItemIndex,
@@ -1092,6 +1102,14 @@ class AutomixPlayer private constructor(
                 effects = TransitionExplanationEngine.explain(activeEffectPlan, activeTransitionStyle,
                     automaticDecision?.reasons, additionalEffects) + listOfNotNull(pendingBeatmatchExplanation),
             )
+            gainOwnershipRegistry.beginGeneration(generation)
+            gainOwnershipRegistry.claim(AutoMixEffect.CROSSFADE, generation)
+            activeEffectPlan.effects.forEach { scheduled ->
+                gainOwnershipRegistry.claim(
+                    checkNotNull(AutoMixEffect.fromId(scheduled.effect.id)), generation
+                )
+            }
+            updateEffectExecutionTelemetry(prepared = true)
         }
         applyVolumes()
         standby.playWhenReady = true
@@ -1159,7 +1177,9 @@ class AutomixPlayer private constructor(
             if (vinylBrakeTransition) 1f else outgoing.playbackParameters.speed,
             outgoing.playbackParameters.pitch
         )
+        updateEffectExecutionTelemetry(completed = true)
         transition.complete(now)
+        releaseGainOwnership()
         activeEffectPlan = TransitionEffectPlan.create("smooth", emptySet())
         decks.factoryA.djTransitionAudioProcessor.bypass()
         decks.factoryB.djTransitionAudioProcessor.bypass()
@@ -1186,6 +1206,79 @@ class AutomixPlayer private constructor(
         outgoing.stop()
         outgoing.shuffleOrder = ShuffleOrder.DefaultShuffleOrder(outgoing.mediaItemCount)
         outgoing.clearMediaItems()
+    }
+
+    private fun updateEffectExecutionTelemetry(
+        prepared: Boolean = false,
+        completed: Boolean = false,
+    ) {
+        val snapshot = mutableTransitionExplanation.value ?: return
+        val identity = mutableTransitionExplanation.value?.identity ?: return
+        val activeRuntime = activeDjFilter.runtimeSnapshot()
+        val standbyRuntime = standbyDjFilter.runtimeSnapshot()
+        val runtimeById = snapshot.effects.mapNotNull { effect ->
+            if (effect.selectionStatus != EffectSelectionStatus.SELECTED) return@mapNotNull null
+            val processorEffects = processorEffects(effect.effectId)
+            val activeSeen = processorEffects.any { it in activeRuntime.activeEffects }
+            val standbySeen = processorEffects.any { it in standbyRuntime.activeEffects }
+            val seen = activeSeen || standbySeen
+            val envelopeEffect = effect.effectId == "crossfade" || effect.effectId == "beatmatch" ||
+                (effect.effectId == "rise" && activeTransitionStyle == "rise")
+            val executionObserved = seen || (envelopeEffect && transitionProgress > 0f)
+            val state = when {
+                completed -> if (executionObserved) EffectLifecycleState.COMPLETED
+                    else EffectLifecycleState.FAILED
+                prepared -> EffectLifecycleState.PREPARED
+                envelopeEffect ->
+                    if (transitionProgress > 0f) EffectLifecycleState.EXECUTING else EffectLifecycleState.PREPARED
+                seen -> EffectLifecycleState.EXECUTING
+                else -> return@mapNotNull null
+            }
+            val processor = if (activeSeen) activeRuntime else standbyRuntime
+            val baselineFrames = if (activeSeen) transitionStartActiveFrames
+                else transitionStartStandbyFrames
+            effect.effectId to EffectRuntimeTelemetry(
+                effect = AutoMixEffect.fromId(effect.effectId) ?: return@mapNotNull null,
+                state = state,
+                processedFrames = (processor.processedFrames - baselineFrames).coerceAtLeast(0L),
+                sampleRate = processor.sampleRate,
+                activeGain = if (activeSeen) activeGain else standbyGain,
+                targetGain = if (activeSeen) activeGain else standbyGain,
+                detail = when {
+                    completed && !executionObserved -> "No execution evidence was observed."
+                    !processor.configured && processorEffects.isNotEmpty() ->
+                        "Audio processor is not configured."
+                    else -> null
+                },
+            )
+        }.toMap()
+        TransitionExplanationEngine.updateExecution(snapshot, identity, runtimeById)?.let {
+            if (!TransitionGeneration.isCurrent(it.identity, mutableTransitionExplanation.value?.identity)) {
+                return
+            }
+            mutableTransitionExplanation.value = it
+            mutableRuntimeTelemetry.value = TransitionRuntimeTelemetry(
+                identity, transitionProgress.coerceIn(0f, 1f), runtimeById.values.toList()
+            )
+        }
+    }
+
+    private fun processorEffects(effectId: String): Set<TransitionProcessorEffect> = when (effectId) {
+        "bass_swap" -> setOf(TransitionProcessorEffect.BASS)
+        "vocal_swap" -> setOf(TransitionProcessorEffect.VOCAL)
+        "eq_transition" -> setOf(TransitionProcessorEffect.EQ)
+        "filter_sweep" -> setOf(
+            TransitionProcessorEffect.FILTER_HIGH_PASS, TransitionProcessorEffect.FILTER_LOW_PASS
+        )
+        "high_pass_intro" -> setOf(TransitionProcessorEffect.FILTER_HIGH_PASS)
+        "rise" -> setOf(TransitionProcessorEffect.FILTER_LOW_PASS)
+        "echo_out" -> setOf(TransitionProcessorEffect.ECHO)
+        "reverb_tail" -> setOf(TransitionProcessorEffect.REVERB)
+        else -> emptySet()
+    }
+
+    private fun releaseGainOwnership() {
+        mutableTransitionExplanation.value?.generation?.let(gainOwnershipRegistry::releaseGeneration)
     }
 
     private fun exponentialCutoff(startHz: Float, endHz: Float, progress: Float): Float =
