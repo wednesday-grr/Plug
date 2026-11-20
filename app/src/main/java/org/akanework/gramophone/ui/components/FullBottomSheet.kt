@@ -160,6 +160,7 @@ internal fun djTransitionEffectLabelResource(effect: String?): Int = when (effec
     "tremolo_fade" -> R.string.automix_transition_tremolo_fade
     "fade" -> R.string.automix_transition_fade
     "rise" -> R.string.automix_transition_rise
+    "loop_transition" -> R.string.automix_transition_loop
     "smooth" -> R.string.dj_crossfade
     else -> R.string.dj_crossfade
 }

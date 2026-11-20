@@ -28,6 +28,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import org.akanework.gramophone.logic.utils.ReplayGainAudioProcessor
 import org.akanework.gramophone.logic.utils.automix.AutomixPlayer
+import org.akanework.gramophone.logic.utils.automix.EffectLifecycleState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertFalse
@@ -113,6 +114,25 @@ class AutomixPlayerTest {
                     AudioAttributes.Builder().setUsage(C.USAGE_ALARM).build(), true
                 )
             }
+        } finally {
+            player.release()
+        }
+    }
+
+    @Test
+    fun beatCommandsRejectMissingTrackAnalysisAndLoopTransitionStyleIsAccepted() {
+        val context = RuntimeEnvironment.getApplication()
+        shadowOf(context).grantPermissions("${context.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
+        val player = AutomixPlayer(context, ReplayGainAudioProcessor().snapshotSettings())
+        try {
+            player.updateAutomixConfig(true, true, 5, transitionStyle = "loop_transition")
+            val jump = player.jumpBeats(4, 1)
+            assertEquals(EffectLifecycleState.REJECTED, jump.state)
+            assertFalse(jump.selected)
+            val loop = player.startBeatLoop(4)
+            assertEquals(EffectLifecycleState.REJECTED, loop.state)
+            assertFalse(loop.selected)
+            assertEquals(EffectLifecycleState.COMPLETED, player.clearBeatLoop().state)
         } finally {
             player.release()
         }

@@ -198,6 +198,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         const val SERVICE_GET_AUDIO_FORMAT = "get_audio_format"
         const val SERVICE_GET_DJ_METRICS = "get_dj_metrics"
         const val SERVICE_GET_TRANSITION_INFO = "get_transition_info"
+        const val SERVICE_BEAT_JUMP = "automix_beat_jump"
+        const val SERVICE_BEAT_LOOP = "automix_beat_loop"
+        const val SERVICE_CLEAR_BEAT_LOOP = "automix_clear_beat_loop"
         const val SERVICE_GET_LYRICS = "get_lyrics"
         const val LYRICS_CACHE_PREFERENCES = "lyrics_response_cache"
         const val CLIENT_AUTOMIX_LYRICS = "automix_lyrics"
@@ -988,6 +991,9 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         availableSessionCommands.add(SessionCommand(SERVICE_SORT_AUTOMIX, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_GET_DJ_METRICS, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_GET_TRANSITION_INFO, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_BEAT_JUMP, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_BEAT_LOOP, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_CLEAR_BEAT_LOOP, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_PIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_UNPIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_RENAME_QUEUE, Bundle.EMPTY))
@@ -1448,6 +1454,13 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                                 effect.processedFrames?.let { putLong("processed_frames", it) }
                                 effect.sampleRate?.let { putInt("sample_rate", it) }
                                 putString("execution_detail", effect.executionDetail)
+                                putString("tempo_interpretation", effect.tempoInterpretation)
+                                effect.tempoRatio?.let { putFloat("tempo_ratio", it) }
+                                effect.effectiveIncomingBpm?.let { putFloat("effective_incoming_bpm", it) }
+                                effect.pitchPreserved?.let { putBoolean("pitch_preserved", it) }
+                                effect.loopStartMs?.let { putLong("loop_start_ms", it) }
+                                effect.loopEndMs?.let { putLong("loop_end_ms", it) }
+                                putString("timing_limitation", effect.timingLimitation)
                                 putStringArrayList("reasons", ArrayList(effect.reasons.map { it.name }))
                                 effect.beatmatchEvidence?.let { evidence ->
                                     evidence.outgoingBpm?.let { putFloat("out_bpm", it) }
@@ -1460,6 +1473,72 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                             }
                         }))
                     }
+                }
+                engine?.currentBeatEffectTelemetry?.let { telemetry ->
+                    result.extras.putBundle("beat_effect", Bundle().apply {
+                        putString("id", telemetry.effectId)
+                        putBoolean("available", telemetry.available)
+                        putBoolean("evaluated", telemetry.evaluated)
+                        putBoolean("selected", telemetry.selected)
+                        putString("state", telemetry.state.name)
+                        telemetry.gridConfidence?.let { putFloat("grid_confidence", it) }
+                        telemetry.beatPositionMs?.let { putLong("beat_position_ms", it) }
+                        telemetry.beatIndex?.let { putLong("beat_index", it) }
+                        telemetry.loopStartMs?.let { putLong("loop_start_ms", it) }
+                        telemetry.loopEndMs?.let { putLong("loop_end_ms", it) }
+                        putString("tempo_interpretation", telemetry.tempoInterpretation)
+                        telemetry.tempoRatio?.let { putFloat("tempo_ratio", it) }
+                        putString("reason", telemetry.reason)
+                        putString("timing_limitation", telemetry.timingLimitation)
+                    })
+                }
+
+                if (customCommand.customAction == SERVICE_BEAT_JUMP ||
+                    customCommand.customAction == SERVICE_BEAT_LOOP ||
+                    customCommand.customAction == SERVICE_CLEAR_BEAT_LOOP
+                ) {
+                    val engine = endedWorkaroundPlayer?.playbackEngine as? AutomixPlayer
+                        ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_INVALID_STATE))
+                    val beats = args.getInt("beats", 0)
+                    val direction = args.getInt("direction", 0)
+                    if ((customCommand.customAction == SERVICE_BEAT_JUMP &&
+                            (beats !in setOf(1, 2, 4, 8, 16) || direction !in setOf(-1, 1))) ||
+                        (customCommand.customAction == SERVICE_BEAT_LOOP && beats !in setOf(1, 2, 4, 8, 16))
+                    ) {
+                        return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                    }
+                    val completion = SettableFuture.create<SessionResult>()
+                    if (!playbackHandler.post {
+                            if ((endedWorkaroundPlayer?.playbackEngine as? AutomixPlayer) !== engine) {
+                                completion.set(SessionResult(SessionError.ERROR_INVALID_STATE))
+                                return@post
+                            }
+                            val telemetry = when (customCommand.customAction) {
+                                SERVICE_BEAT_JUMP -> engine.jumpBeats(beats, direction)
+                                SERVICE_BEAT_LOOP -> engine.startBeatLoop(beats)
+                                else -> engine.clearBeatLoop()
+                            }
+                            completion.set(SessionResult(SessionResult.RESULT_SUCCESS).also { result ->
+                                result.extras.putBundle("beat_effect", Bundle().apply {
+                            putString("id", telemetry.effectId)
+                            putBoolean("available", telemetry.available)
+                            putBoolean("evaluated", telemetry.evaluated)
+                            putBoolean("selected", telemetry.selected)
+                            putString("state", telemetry.state.name)
+                            telemetry.gridConfidence?.let { putFloat("grid_confidence", it) }
+                            telemetry.beatPositionMs?.let { putLong("beat_position_ms", it) }
+                            telemetry.beatIndex?.let { putLong("beat_index", it) }
+                            telemetry.loopStartMs?.let { putLong("loop_start_ms", it) }
+                            telemetry.loopEndMs?.let { putLong("loop_end_ms", it) }
+                            putString("tempo_interpretation", telemetry.tempoInterpretation)
+                            telemetry.tempoRatio?.let { putFloat("tempo_ratio", it) }
+                            putString("reason", telemetry.reason)
+                            putString("timing_limitation", telemetry.timingLimitation)
+                                })
+                            })
+                        }
+                    ) completion.set(SessionResult(SessionError.ERROR_INVALID_STATE))
+                    return completion
                 }
             })
         }

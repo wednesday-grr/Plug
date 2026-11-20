@@ -1267,6 +1267,7 @@
     <string name="automix_transition_tremolo_fade">Tremolo Fade</string>
     <string name="automix_transition_fade">Fade</string>
     <string name="automix_transition_rise">Rise</string>
+    <string name="automix_transition_loop">Loop-based Transition</string>
     <string name="automix_transition_eq">Three-Band EQ Transition</string>
     <string-array name="automix_additional_effects">
         <item>@string/automix_transition_bass_swap</item>
@@ -1300,6 +1301,7 @@
         <item>@string/automix_transition_tremolo_fade</item>
         <item>@string/automix_transition_fade</item>
         <item>@string/automix_transition_rise</item>
+        <item>@string/automix_transition_loop</item>
     </string-array>
     <string-array name="automix_transition_style_values">
         <item>auto</item>
@@ -1313,6 +1315,7 @@
         <item>tremolo_fade</item>
         <item>fade</item>
         <item>rise</item>
+        <item>loop_transition</item>
     </string-array>
     <string name="sort_for_automix">Sort for Automix</string>
     <string name="sort_for_automix_failed">Could not sort the queue. Check that Automix is enabled and try again after any transition.</string>

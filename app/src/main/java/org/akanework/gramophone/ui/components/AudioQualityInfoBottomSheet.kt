@@ -34,6 +34,7 @@ import org.akanework.gramophone.logic.PlugPlaybackService
 import org.akanework.gramophone.logic.dpToPx
 import org.akanework.gramophone.logic.utils.automix.EffectDecisionReason
 import org.akanework.gramophone.logic.utils.automix.EffectExecutionStatus
+import org.akanework.gramophone.logic.utils.automix.EffectLifecycleState
 import org.akanework.gramophone.logic.utils.automix.EffectSelectionStatus
 import org.akanework.gramophone.logic.utils.automix.TransitionExecutionStatus
 import java.text.NumberFormat
@@ -53,6 +54,29 @@ internal data class DisplayEffect(
     val processedFrames: Long?,
     val sampleRate: Int?,
     val executionDetail: String?,
+    val tempoInterpretation: String? = null,
+    val tempoRatio: Float? = null,
+    val effectiveIncomingBpm: Float? = null,
+    val pitchPreserved: Boolean? = null,
+    val loopStartMs: Long? = null,
+    val loopEndMs: Long? = null,
+    val timingLimitation: String? = null,
+)
+internal data class DisplayBeatEffect(
+    val id: String,
+    val available: Boolean,
+    val evaluated: Boolean,
+    val selected: Boolean,
+    val state: EffectLifecycleState,
+    val gridConfidence: Float?,
+    val beatPositionMs: Long?,
+    val beatIndex: Long?,
+    val loopStartMs: Long?,
+    val loopEndMs: Long?,
+    val tempoInterpretation: String?,
+    val tempoRatio: Float?,
+    val reason: String?,
+    val timingLimitation: String?,
 )
 internal data class DisplayTransition(
     val generation: Long,
@@ -77,6 +101,7 @@ internal data class DisplayTransition(
     val selectorRisingThreshold: Float?,
     val selectorVocalThreshold: Float?,
     val effects: List<DisplayEffect>,
+    val beatEffect: DisplayBeatEffect? = null,
 )
 
 internal data class DisplayTrackAnalysis(
@@ -92,7 +117,8 @@ internal sealed interface AudioQualityInfoUiState {
     data object Loading : AudioQualityInfoUiState
     data object Unavailable : AudioQualityInfoUiState
     data object Error : AudioQualityInfoUiState
-    data class Available(val transition: DisplayTransition) : AudioQualityInfoUiState
+    data class Available(val transition: DisplayTransition?, val beatEffect: DisplayBeatEffect? = null) :
+        AudioQualityInfoUiState
     data class TrackAnalysis(val current: DisplayTrackAnalysis, val next: DisplayTrackAnalysis?) :
         AudioQualityInfoUiState
 }
@@ -144,6 +170,10 @@ internal class AudioQualityInfoBottomSheet(
             }
             val data = result.extras
             if (!data.containsKey("generation")) {
+                parseBeatEffect(data)?.let {
+                    state.value = AudioQualityInfoUiState.Available(null, it)
+                    return
+                }
                 refreshTrackAnalysis(browser)
                 return
             }
@@ -177,6 +207,15 @@ internal class AudioQualityInfoBottomSheet(
                     it.takeIf { bundle -> bundle.containsKey("sample_rate") }
                         ?.getInt("sample_rate"),
                     it.getString("execution_detail"),
+                    it.getString("tempo_interpretation"), evidence("tempo_ratio"),
+                    evidence("effective_incoming_bpm"),
+                    it.takeIf { bundle -> bundle.containsKey("pitch_preserved") }
+                        ?.getBoolean("pitch_preserved"),
+                    it.takeIf { bundle -> bundle.containsKey("loop_start_ms") }
+                        ?.getLong("loop_start_ms"),
+                    it.takeIf { bundle -> bundle.containsKey("loop_end_ms") }
+                        ?.getLong("loop_end_ms"),
+                    it.getString("timing_limitation"),
                 )
             }
             state.value = AudioQualityInfoUiState.Available(DisplayTransition(
@@ -188,8 +227,9 @@ internal class AudioQualityInfoBottomSheet(
                 value("outgoing_grid"), value("incoming_grid"), data.getString("outgoing_key"),
                 data.getString("incoming_key"), value("outgoing_vocal"), value("incoming_vocal"),
                 value("selector_difference"), value("selector_threshold"), value("selector_rising"),
-                value("selector_rising_threshold"), value("selector_vocal_threshold"), effects
-            ))
+                value("selector_rising_threshold"), value("selector_vocal_threshold"), effects,
+                parseBeatEffect(data),
+            ), parseBeatEffect(data))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -207,6 +247,7 @@ internal class AudioQualityInfoBottomSheet(
             state.value = AudioQualityInfoUiState.Error
             return
         }
+
         val data = result.extras
         val index = data.getInt("index", -1)
         val mediaId = data.getString("media_id")
@@ -239,6 +280,24 @@ internal class AudioQualityInfoBottomSheet(
         state.value = AudioQualityInfoUiState.TrackAnalysis(current, next)
     }
 
+    private fun parseBeatEffect(data: Bundle): DisplayBeatEffect? {
+        val bundle = data.getBundle("beat_effect") ?: return null
+        val id = bundle.getString("id") ?: return null
+        fun long(key: String) = if (bundle.containsKey(key)) bundle.getLong(key) else null
+        fun float(key: String) = if (bundle.containsKey(key)) bundle.getFloat(key) else null
+        return DisplayBeatEffect(
+            id,
+            bundle.getBoolean("available"),
+            bundle.getBoolean("evaluated"),
+            bundle.getBoolean("selected"),
+            EffectLifecycleState.valueOf(requireNotNull(bundle.getString("state"))),
+            float("grid_confidence"), long("beat_position_ms"), long("beat_index"), long("loop_start_ms"),
+            long("loop_end_ms"), bundle.getString("tempo_interpretation"),
+            float("tempo_ratio"), bundle.getString("reason"),
+            bundle.getString("timing_limitation"),
+        )
+    }
+
     internal fun render(state: AudioQualityInfoUiState) {
         content.removeAllViews()
         heading(context.getString(R.string.transition_info_title))
@@ -246,7 +305,10 @@ internal class AudioQualityInfoBottomSheet(
             AudioQualityInfoUiState.Loading -> text(context.getString(R.string.transition_info_loading))
             AudioQualityInfoUiState.Unavailable -> text(context.getString(R.string.transition_info_unavailable))
             AudioQualityInfoUiState.Error -> text(context.getString(R.string.transition_info_error))
-            is AudioQualityInfoUiState.Available -> renderTransition(state.transition)
+            is AudioQualityInfoUiState.Available -> {
+                state.transition?.let(::renderTransition)
+                state.beatEffect?.let(::renderBeatEffect)
+            }
             is AudioQualityInfoUiState.TrackAnalysis -> renderTrackAnalysis(state)
         }
     }
@@ -327,6 +389,7 @@ internal class AudioQualityInfoBottomSheet(
         val selected = t.effects.filter { it.selection == EffectSelectionStatus.SELECTED }
         if (selected.isEmpty()) text(unknown)
         selected.forEach { effect(it, t) }
+        t.beatEffect?.let(::renderBeatEffect)
         val skipped = t.effects.filter { it.selection == EffectSelectionStatus.SKIPPED }
         if (skipped.isNotEmpty()) {
             heading(context.getString(R.string.transition_info_skipped))
@@ -367,6 +430,8 @@ internal class AudioQualityInfoBottomSheet(
         val name = when (effect.id) {
             "beatmatch" -> context.getString(R.string.transition_info_beatmatch)
             "crossfade" -> context.getString(R.string.dj_crossfade)
+            "half_time_double_time" -> context.getString(R.string.transition_info_half_double)
+            "loop_transition" -> context.getString(R.string.automix_transition_loop)
             else -> context.getString(djTransitionEffectLabelResource(effect.id))
         }
         val details = LinearLayout(context).apply {
@@ -393,6 +458,9 @@ internal class AudioQualityInfoBottomSheet(
         content.addView(toggle)
         effect.reasons.firstOrNull()?.let { text(reason(it)) }
         content.addView(details)
+        val unknown = context.getString(R.string.transition_info_no_data)
+        val number = NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }
+        fun format(value: Float?) = value?.let(number::format) ?: unknown
         fun detail(value: String) {
             details.addView(TextView(context).apply {
                 text = value
@@ -405,12 +473,28 @@ internal class AudioQualityInfoBottomSheet(
                 effect.sampleRate?.toString() ?: context.getString(R.string.transition_info_no_data)))
         }
         effect.executionDetail?.let(::detail)
-        val unknown = context.getString(R.string.transition_info_no_data)
-        val number = NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }
-        fun format(value: Float?) = value?.let(number::format) ?: unknown
+        effect.tempoInterpretation?.let {
+            detail(context.getString(R.string.transition_info_tempo_interpretation, it))
+        }
+        effect.tempoRatio?.let {
+            detail(context.getString(R.string.transition_info_tempo_ratio, format(it)))
+        }
+        effect.effectiveIncomingBpm?.let {
+            detail(context.getString(R.string.transition_info_effective_incoming_bpm, format(it)))
+        }
+        effect.pitchPreserved?.let {
+            detail(context.getString(R.string.transition_info_pitch_preserved, it.toString()))
+        }
+        if (effect.loopStartMs != null && effect.loopEndMs != null) {
+            detail(context.getString(R.string.transition_info_loop_region,
+                effect.loopStartMs, effect.loopEndMs))
+        }
+        effect.timingLimitation?.let {
+            detail(context.getString(R.string.transition_info_timing_limitation, it))
+        }
         fun row(label: Int, value: Float?) = detail(context.getString(R.string.transition_info_row,
             context.getString(label), format(value)))
-        if (effect.id == "beatmatch") {
+        if (effect.id == "beatmatch" || effect.id == "half_time_double_time") {
             row(R.string.transition_info_outgoing_bpm, effect.beatOut)
             row(R.string.transition_info_incoming_bpm, effect.beatIn)
             row(R.string.transition_info_outgoing_grid, effect.gridOut)
@@ -464,7 +548,54 @@ internal class AudioQualityInfoBottomSheet(
         EffectDecisionReason.BEAT_GRID_UNAVAILABLE -> R.string.transition_reason_grid_unavailable
         EffectDecisionReason.BEAT_GRID_LOW_CONFIDENCE -> R.string.transition_reason_grid_low
         EffectDecisionReason.INSUFFICIENT_ANALYSIS_DATA -> R.string.transition_reason_insufficient
+        EffectDecisionReason.BPM_HALF_TIME_SELECTED -> R.string.transition_reason_half_time
+        EffectDecisionReason.BPM_DOUBLE_TIME_SELECTED -> R.string.transition_reason_double_time
+        EffectDecisionReason.BPM_CANDIDATE_OUT_OF_RANGE -> R.string.transition_reason_speed_limit
+        EffectDecisionReason.LOOP_GRID_UNAVAILABLE -> R.string.transition_reason_loop_grid
+        EffectDecisionReason.LOOP_FALLBACK_CROSSFADE -> R.string.transition_reason_loop_fallback
+        EffectDecisionReason.LOOP_TRANSITION_READY -> R.string.transition_reason_loop_ready
+        EffectDecisionReason.BEAT_JUMP_REJECTED -> R.string.transition_reason_jump_rejected
+        EffectDecisionReason.BEAT_LOOP_REJECTED -> R.string.transition_reason_loop_rejected
     })
+
+    private fun renderBeatEffect(effect: DisplayBeatEffect) {
+        val title = when (effect.id) {
+            "beat_jump" -> R.string.transition_info_beat_jump
+            "beat_loop" -> R.string.transition_info_beat_loop
+            "half_time_double_time" -> R.string.transition_info_half_double
+            "loop_transition" -> R.string.automix_transition_loop
+            else -> R.string.transition_info_scheduled
+        }
+        val number = NumberFormat.getNumberInstance().apply { maximumFractionDigits = 2 }
+        heading(context.getString(R.string.transition_info_runtime_effect, context.getString(title)))
+        text(context.getString(R.string.transition_info_availability, effect.available.toString()))
+        text(context.getString(R.string.transition_info_evaluated, effect.evaluated.toString()))
+        text(context.getString(R.string.transition_info_selected, effect.selected.toString()))
+        text(context.getString(R.string.transition_info_effect_state, effect.state.name))
+        effect.reason?.let(::text)
+        effect.gridConfidence?.let {
+            text(context.getString(R.string.transition_info_grid_confidence, number.format(it)))
+        }
+        effect.beatPositionMs?.let {
+            text(context.getString(R.string.transition_info_beat_position, it))
+        }
+        effect.beatIndex?.let {
+            text(context.getString(R.string.transition_info_beat_index, it))
+        }
+        if (effect.loopStartMs != null && effect.loopEndMs != null) {
+            text(context.getString(R.string.transition_info_loop_region,
+                effect.loopStartMs, effect.loopEndMs))
+        }
+        effect.tempoInterpretation?.let {
+            text(context.getString(R.string.transition_info_tempo_interpretation, it))
+        }
+        effect.tempoRatio?.let {
+            text(context.getString(R.string.transition_info_tempo_ratio, number.format(it)))
+        }
+        effect.timingLimitation?.let {
+            text(context.getString(R.string.transition_info_timing_limitation, it))
+        }
+    }
 
     private fun heading(value: String) {
         content.addView(TextView(context).apply {

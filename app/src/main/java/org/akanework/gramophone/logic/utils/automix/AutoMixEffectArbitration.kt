@@ -94,6 +94,8 @@ enum class EffectGainParameter {
     OUTGOING_INSTRUMENTAL_STEM_GAIN,
     INCOMING_VOCAL_STEM_GAIN,
     INCOMING_INSTRUMENTAL_STEM_GAIN,
+    OUTGOING_SEEK,
+    OUTGOING_LOOP_REGION,
 }
 
 data class AutoMixEffectCapability(
@@ -141,11 +143,33 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.ECHO,
             AutoMixEffect.REVERB,
             AutoMixEffect.REPLAY_GAIN,
+            AutoMixEffect.BEAT_JUMP,
+            AutoMixEffect.BEAT_LOOP,
+            AutoMixEffect.HALF_TIME_DOUBLE_TIME,
+            AutoMixEffect.LOOP_TRANSITION,
         )
         val gainParameters = when (effect) {
             AutoMixEffect.CROSSFADE, AutoMixEffect.LINEAR_FADE, AutoMixEffect.SMOOTH_CROSSFADE,
-            AutoMixEffect.EXPONENTIAL_FADE, AutoMixEffect.S_CURVE_FADE ->
+            AutoMixEffect.EXPONENTIAL_FADE, AutoMixEffect.S_CURVE_FADE,
+            AutoMixEffect.TREMOLO_FADE ->
                 setOf(EffectGainParameter.OUTGOING_DECK_GAIN, EffectGainParameter.INCOMING_DECK_GAIN)
+            AutoMixEffect.RISE -> setOf(
+                EffectGainParameter.OUTGOING_DECK_GAIN,
+                EffectGainParameter.INCOMING_DECK_GAIN,
+                EffectGainParameter.INCOMING_FILTER,
+            )
+            AutoMixEffect.VINYL_BRAKE -> setOf(
+                EffectGainParameter.OUTGOING_DECK_GAIN,
+                EffectGainParameter.INCOMING_DECK_GAIN,
+                EffectGainParameter.OUTGOING_PLAYBACK_SPEED,
+            )
+            AutoMixEffect.BEAT_JUMP -> setOf(EffectGainParameter.OUTGOING_SEEK)
+            AutoMixEffect.BEAT_LOOP -> setOf(EffectGainParameter.OUTGOING_LOOP_REGION)
+            AutoMixEffect.LOOP_TRANSITION -> setOf(
+                EffectGainParameter.OUTGOING_DECK_GAIN,
+                EffectGainParameter.INCOMING_DECK_GAIN,
+                EffectGainParameter.OUTGOING_LOOP_REGION,
+            )
             AutoMixEffect.BASS_SWAP -> setOf(
                 EffectGainParameter.OUTGOING_BASS_GAIN, EffectGainParameter.INCOMING_BASS_GAIN
             )
@@ -158,13 +182,12 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.FILTER_SWEEP -> setOf(
                 EffectGainParameter.OUTGOING_FILTER, EffectGainParameter.INCOMING_FILTER
             )
-            AutoMixEffect.HIGH_PASS_INTRO, AutoMixEffect.RISE ->
-                setOf(EffectGainParameter.INCOMING_FILTER)
+            AutoMixEffect.HIGH_PASS_INTRO -> setOf(EffectGainParameter.INCOMING_FILTER)
             AutoMixEffect.ECHO -> setOf(EffectGainParameter.OUTGOING_ECHO)
             AutoMixEffect.REVERB -> setOf(EffectGainParameter.OUTGOING_REVERB)
             AutoMixEffect.TEMPO_RAMP -> setOf(EffectGainParameter.INCOMING_PLAYBACK_SPEED)
-            AutoMixEffect.VINYL_BRAKE -> setOf(EffectGainParameter.OUTGOING_PLAYBACK_SPEED)
-            AutoMixEffect.BEATMATCH, AutoMixEffect.BPM_MATCHING ->
+            AutoMixEffect.BEATMATCH, AutoMixEffect.BPM_MATCHING,
+            AutoMixEffect.HALF_TIME_DOUBLE_TIME ->
                 setOf(EffectGainParameter.INCOMING_PLAYBACK_SPEED)
             AutoMixEffect.REPLAY_GAIN -> setOf(
                 EffectGainParameter.OUTGOING_REPLAY_GAIN, EffectGainParameter.INCOMING_REPLAY_GAIN
@@ -203,7 +226,16 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.STEM_AUTOMIX,
         )
         val sourceCount = when (effect) {
-            AutoMixEffect.CROSSFADE, AutoMixEffect.STEM_AUTOMIX -> 2
+            AutoMixEffect.CROSSFADE, AutoMixEffect.LINEAR_FADE, AutoMixEffect.SMOOTH_CROSSFADE,
+            AutoMixEffect.TREMOLO_FADE, AutoMixEffect.BEATMATCH, AutoMixEffect.BPM_MATCHING,
+            AutoMixEffect.BASS_SWAP, AutoMixEffect.VOCAL_SWAP, AutoMixEffect.EQ_TRANSITION,
+            AutoMixEffect.FILTER_SWEEP, AutoMixEffect.RISE, AutoMixEffect.REPLAY_GAIN,
+            AutoMixEffect.LOUDNESS_MATCHING, AutoMixEffect.AUTOMATIC_GAIN_CONTROL,
+            AutoMixEffect.ENERGY_MATCHING, AutoMixEffect.INSTRUMENTAL_DROP,
+            AutoMixEffect.INSTRUMENTAL_FADE, AutoMixEffect.VOCAL_TO_INSTRUMENTAL,
+            AutoMixEffect.INSTRUMENTAL_TO_VOCAL, AutoMixEffect.INDEPENDENT_STEM_GAIN,
+            AutoMixEffect.STEM_AUTOMIX, AutoMixEffect.HALF_TIME_DOUBLE_TIME,
+            AutoMixEffect.LOOP_TRANSITION -> 2
             AutoMixEffect.BEAT_JUMP, AutoMixEffect.BEAT_LOOP -> 1
             else -> 1
         }
@@ -310,6 +342,10 @@ object AutoMixEffectCompatibilityEvaluator {
             setOf(first, second) == setOf(AutoMixEffect.VOCAL_SWAP, AutoMixEffect.EQ_TRANSITION)
         ) return result(first, second, EffectCompatibility.COMPATIBLE,
             "The transition processor coordinates band ownership.")
+        if (setOf(first, second) == setOf(AutoMixEffect.CROSSFADE, AutoMixEffect.RISE) ||
+            setOf(first, second) == setOf(AutoMixEffect.CROSSFADE, AutoMixEffect.TREMOLO_FADE)
+        ) return result(first, second, EffectCompatibility.COMPATIBLE,
+            "The transition envelope coordinates deck gain with the style-specific automation.")
         if (setOf(first, second) == setOf(AutoMixEffect.BPM_MATCHING, AutoMixEffect.TEMPO_RAMP)) {
             return result(first, second, EffectCompatibility.COMPATIBLE,
                 "The tempo ramp can consume BPM matching as its starting playback speed.")
@@ -320,9 +356,15 @@ object AutoMixEffectCompatibilityEvaluator {
         }
 
         if (setOf(first, second) == setOf(AutoMixEffect.EXPONENTIAL_FADE, AutoMixEffect.S_CURVE_FADE) ||
-            setOf(first, second) == setOf(AutoMixEffect.BEAT_LOOP, AutoMixEffect.LOOP_TRANSITION)
+            setOf(first, second) == setOf(AutoMixEffect.BEAT_LOOP, AutoMixEffect.LOOP_TRANSITION) ||
+            setOf(first, second) == setOf(AutoMixEffect.BEAT_JUMP, AutoMixEffect.BEAT_LOOP) ||
+            setOf(first, second) == setOf(AutoMixEffect.BEAT_JUMP, AutoMixEffect.LOOP_TRANSITION) ||
+            setOf(first, second) == setOf(AutoMixEffect.BEATMATCH, AutoMixEffect.HALF_TIME_DOUBLE_TIME) ||
+            setOf(first, second) == setOf(
+                AutoMixEffect.BPM_MATCHING, AutoMixEffect.HALF_TIME_DOUBLE_TIME
+            )
         ) return result(first, second, EffectCompatibility.MUTUALLY_EXCLUSIVE,
-            "Both effects require exclusive ownership of the same transition or loop operation.")
+            "The effects require exclusive ownership of a deck seek, loop, or tempo operation.")
 
         if (setOf(first, second) == setOf(AutoMixEffect.AUTOMATIC_GAIN_CONTROL, AutoMixEffect.REPLAY_GAIN) ||
             setOf(first, second) == setOf(AutoMixEffect.AUTOMATIC_GAIN_CONTROL, AutoMixEffect.LOUDNESS_MATCHING) ||
@@ -335,6 +377,11 @@ object AutoMixEffectCompatibilityEvaluator {
             setOf(first, second) == setOf(AutoMixEffect.STEM_AUTOMIX, AutoMixEffect.CROSSFADE)
         ) return result(first, second, EffectCompatibility.CONDITIONALLY_COMPATIBLE,
             "Compatibility depends on transition state and coordinated gain ownership.")
+
+        if (setOf(first, second) == setOf(AutoMixEffect.LOOP_TRANSITION, AutoMixEffect.CROSSFADE)) {
+            return result(first, second, EffectCompatibility.COMPATIBLE,
+                "Loop Transition uses the existing crossfade envelope as its deterministic loop exit.")
+        }
 
         val shared = AutoMixEffectCapabilityRegistry.capability(first).gainParameters intersect
             AutoMixEffectCapabilityRegistry.capability(second).gainParameters
@@ -433,18 +480,26 @@ data class GainOwnership(
 class GainOwnershipRegistry {
     private val owners = mutableMapOf<EffectGainParameter, MutableSet<GainOwnership>>()
     private var activeGeneration: Long? = null
+    private var latestGeneration = 0L
 
+    @Synchronized
     fun beginGeneration(generation: Long) {
         require(generation > 0)
-        if (activeGeneration != generation) {
+        check(generation >= latestGeneration) { "Cannot activate a stale transition generation." }
+        if (generation > latestGeneration) {
             owners.clear()
+            latestGeneration = generation
             activeGeneration = generation
+        } else {
+            check(activeGeneration == generation) { "Transition generation has already been released." }
         }
     }
 
+    @Synchronized
     fun claim(effect: AutoMixEffect, generation: Long): Set<GainOwnership> {
-        beginGeneration(generation)
         val capability = AutoMixEffectCapabilityRegistry.capability(effect)
+        check(capability.runtimeAvailable) { "Effect $effect has no runtime implementation." }
+        beginGeneration(generation)
         val conflicts = capability.gainParameters.flatMap { parameter ->
             owners[parameter].orEmpty().filter { owner ->
                 owner.effect != effect &&
@@ -461,6 +516,7 @@ class GainOwnershipRegistry {
         return capability.gainParameters.flatMap { owners[it].orEmpty() }.toSet()
     }
 
+    @Synchronized
     fun releaseGeneration(generation: Long) {
         if (activeGeneration == generation) {
             owners.clear()
@@ -468,8 +524,10 @@ class GainOwnershipRegistry {
         }
     }
 
+    @Synchronized
     fun owner(parameter: EffectGainParameter): GainOwnership? = owners[parameter]?.firstOrNull()
 
+    @Synchronized
     fun owners(parameter: EffectGainParameter): Set<GainOwnership> = owners[parameter].orEmpty().toSet()
 }
 

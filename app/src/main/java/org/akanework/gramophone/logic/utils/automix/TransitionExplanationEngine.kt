@@ -27,6 +27,14 @@ internal enum class EffectDecisionReason {
     BEAT_GRID_UNAVAILABLE,
     BEAT_GRID_LOW_CONFIDENCE,
     INSUFFICIENT_ANALYSIS_DATA,
+    BPM_HALF_TIME_SELECTED,
+    BPM_DOUBLE_TIME_SELECTED,
+    BPM_CANDIDATE_OUT_OF_RANGE,
+    LOOP_GRID_UNAVAILABLE,
+    LOOP_FALLBACK_CROSSFADE,
+    LOOP_TRANSITION_READY,
+    BEAT_JUMP_REJECTED,
+    BEAT_LOOP_REJECTED,
 }
 
 internal enum class EffectSelectionStatus { SELECTED, SKIPPED }
@@ -40,6 +48,10 @@ internal data class BeatmatchEvidence(
     val incomingGridConfidence: Float?,
     val minimumGridConfidence: Float,
     val maximumTempoDeviation: Float,
+    val interpretation: String = BpmInterpretation.NORMAL.name,
+    val selectedSpeed: Float? = null,
+    val effectiveIncomingBpm: Float? = null,
+    val pitchPreserved: Boolean = true,
 )
 
 internal data class EffectSelectionExplanation(
@@ -51,6 +63,13 @@ internal data class EffectSelectionExplanation(
     val processedFrames: Long? = null,
     val sampleRate: Int? = null,
     val executionDetail: String? = null,
+    val tempoInterpretation: String? = null,
+    val tempoRatio: Float? = null,
+    val effectiveIncomingBpm: Float? = null,
+    val pitchPreserved: Boolean? = null,
+    val loopStartMs: Long? = null,
+    val loopEndMs: Long? = null,
+    val timingLimitation: String? = null,
 )
 
 internal data class TransitionAnalysisSnapshot(
@@ -107,8 +126,14 @@ internal object TransitionExplanationEngine {
         incomingBpm: Float?,
         outgoingGrid: BeatPhaseAligner.Grid?,
         incomingGrid: BeatPhaseAligner.Grid?,
+        evaluation: BpmMatchEvaluation? = null,
     ): EffectSelectionExplanation {
+        val selected = evaluation?.selected
         val reason = when {
+            selected?.interpretation == BpmInterpretation.HALF_TIME ->
+                EffectDecisionReason.BPM_HALF_TIME_SELECTED
+            selected?.interpretation == BpmInterpretation.DOUBLE_TIME ->
+                EffectDecisionReason.BPM_DOUBLE_TIME_SELECTED
             aligned -> EffectDecisionReason.BEAT_GRID_COMPATIBLE
             AutomixMath.tempoRatio(outgoingBpm, incomingBpm) == null ->
                 if (outgoingBpm == null || incomingBpm == null || outgoingBpm <= 0f || incomingBpm <= 0f ||
@@ -121,11 +146,23 @@ internal object TransitionExplanationEngine {
                 EffectDecisionReason.BEAT_GRID_LOW_CONFIDENCE
             else -> EffectDecisionReason.INSUFFICIENT_ANALYSIS_DATA
         }
-        return EffectSelectionExplanation("beatmatch",
+        val effectId = if (selected == null || selected.interpretation == BpmInterpretation.NORMAL) {
+            "beatmatch"
+        } else {
+            AutoMixEffect.HALF_TIME_DOUBLE_TIME.id
+        }
+        return EffectSelectionExplanation(effectId,
             if (aligned) EffectSelectionStatus.SELECTED else EffectSelectionStatus.SKIPPED,
             listOf(reason), if (aligned) EffectExecutionStatus.PLANNED else null,
             BeatmatchEvidence(outgoingBpm, incomingBpm, outgoingGrid?.confidence, incomingGrid?.confidence,
-                BeatPhaseAligner.DEFAULT_MINIMUM_CONFIDENCE, AutomixMath.DEFAULT_MAX_TEMPO_DEVIATION))
+                BeatPhaseAligner.DEFAULT_MINIMUM_CONFIDENCE, AutomixMath.DEFAULT_MAX_TEMPO_DEVIATION,
+                selected?.interpretation?.name ?: BpmInterpretation.NORMAL.name,
+                selected?.incomingSpeed, selected?.effectiveIncomingBpm, pitchPreserved = true),
+            tempoInterpretation = selected?.interpretation?.name ?: BpmInterpretation.NORMAL.name,
+            tempoRatio = selected?.incomingSpeed,
+            effectiveIncomingBpm = selected?.effectiveIncomingBpm,
+            pitchPreserved = true,
+        )
     }
 
     fun explain(

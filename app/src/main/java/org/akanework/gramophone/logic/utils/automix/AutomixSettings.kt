@@ -50,7 +50,7 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
         private const val ANALYZER = "automix_analyzer"
         private val TRANSITION_STYLES = setOf(
             "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out",
-            "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise"
+            "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise", "loop_transition"
         )
     }
 

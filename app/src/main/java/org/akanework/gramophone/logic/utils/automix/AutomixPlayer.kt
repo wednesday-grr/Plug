@@ -172,6 +172,9 @@ class AutomixPlayer private constructor(
         private const val FILTER_OUT_END_HZ = 3500f
         private const val FILTER_IN_START_HZ = 300f
         private const val FILTER_IN_END_HZ = 20_000f
+        private const val LOOP_TRANSITION_BEATS = 4
+        private const val BEAT_SEEK_TIMING_LIMITATION =
+            "Media3 seek is not sample-accurate; decoder and renderer seek latency may vary."
 
         private fun createDecks(
             context: Context,
@@ -266,6 +269,17 @@ class AutomixPlayer private constructor(
     internal val runtimeTelemetry = mutableRuntimeTelemetry.asStateFlow()
     private var explanationQueue: QueueSnapshot? = null
     private val gainOwnershipRegistry = GainOwnershipRegistry()
+    private var gainOwnershipGeneration: Long? = null
+    private val observedExecutionEffects = mutableSetOf<AutoMixEffect>()
+    private val beatLoopScheduler = LoopBoundaryScheduler()
+    private var beatLoopGeneration: Long? = null
+    @Volatile
+    private var beatEffectTelemetry: BeatEffectTelemetry? = null
+    private var loopTransitionRegion: LoopRegion? = null
+    private var loopTransitionReplayed = false
+    private var loopTransitionFallbackReason: EffectDecisionReason? = null
+    private var bpmMatchEvaluation: BpmMatchEvaluation? = null
+    private var pendingBeatJumpTarget: Long? = null
     private var activeTransitionBeatmatched = false
     private var lastTransitionStyle: String? = null
     private var lastTransitionBeatmatched = false
@@ -378,7 +392,11 @@ class AutomixPlayer private constructor(
         scope.launch {
             while (isActive) {
                 tick()
-                delay(if (enabled && nextItem != null) TICK_MS else 250L)
+                delay(if ((enabled && nextItem != null) ||
+                    beatLoopScheduler.state().lifecycle in setOf(
+                        LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED
+                    )
+                ) TICK_MS else 250L)
             }
         }
     }
@@ -422,6 +440,175 @@ class AutomixPlayer private constructor(
         get() = upcomingMediaItem?.takeIf { standby.currentMediaItem == it }?.let { standby }
     val upcomingPlaybackSpeed: Float
         get() = upcomingStandbyPlayer?.playbackParameters?.speed ?: matchedSpeed
+    internal val currentBeatEffectTelemetry: BeatEffectTelemetry?
+        get() = beatEffectTelemetry
+
+    fun jumpBeats(beatCount: Int, direction: Int): BeatEffectTelemetry {
+        assertThread()
+        require(beatCount in BeatLoopIntervals.supported)
+        require(direction == -1 || direction == 1)
+        val metadata = audioMetadata(active)
+        val grid = beatGrid(metadata, active)
+        val current = active.currentPosition
+        val position = grid?.quantize(current.toDouble(), BeatQuantization.NEAREST)
+        val duration = active.duration
+        val target = grid?.jumpTarget(current.toDouble(), beatCount, direction, duration)
+        val reason = when {
+            transition.phase != DeckTransition.Phase.IDLE ->
+                "Beat Jump is unavailable while a transition is being prepared or executed."
+            beatLoopScheduler.state().lifecycle == LoopLifecycleState.ACTIVE ->
+                "Beat Jump is incompatible with an active Beat Loop."
+            grid == null || position == null -> "A confident beat grid is unavailable."
+            target == null || duration == C.TIME_UNSET ->
+                "The requested beat position is outside the track."
+            else -> null
+        }
+        if (reason != null) return publishBeatTelemetry(
+            BeatEffectTelemetry(
+                AutoMixEffect.BEAT_JUMP.id, true, true, false, EffectLifecycleState.REJECTED,
+                grid?.confidence?.value, reason = reason,
+                timingLimitation = BEAT_SEEK_TIMING_LIMITATION,
+            )
+        )
+        val generation = TransitionGeneration.next()
+        val claim = AutoMixEffectArbitrator.evaluate(
+            listOf(AutoMixEffect.BEAT_JUMP),
+            generation = generation,
+        ).single()
+        if (claim.state != EffectLifecycleState.SELECTED) return publishBeatTelemetry(
+            BeatEffectTelemetry(
+                AutoMixEffect.BEAT_JUMP.id, true, true, false, claim.state,
+                grid?.confidence?.value, reason = claim.reason,
+                timingLimitation = BEAT_SEEK_TIMING_LIMITATION,
+            )
+        )
+        gainOwnershipRegistry.claim(AutoMixEffect.BEAT_JUMP, generation)
+        return try {
+            val targetMs = target!!.timeMs.toLong()
+            pendingBeatJumpTarget = targetMs
+            val telemetry = publishBeatTelemetry(
+                BeatEffectTelemetry(
+                    AutoMixEffect.BEAT_JUMP.id, true, true, true, EffectLifecycleState.EXECUTING,
+                    grid!!.confidence.value, targetMs,
+                    beatIndex = target.beatIndex,
+                    reason = "Media3 seek requested at beat index ${target.beatIndex}; awaiting position discontinuity.",
+                    timingLimitation = BEAT_SEEK_TIMING_LIMITATION,
+                )
+            )
+            active.seekTo(targetMs)
+            telemetry
+        } finally {
+            gainOwnershipRegistry.releaseGeneration(generation)
+        }
+    }
+
+    fun startBeatLoop(beatCount: Int): BeatEffectTelemetry {
+        assertThread()
+        require(beatCount in BeatLoopIntervals.supported)
+        val metadata = audioMetadata(active)
+        val grid = beatGrid(metadata, active)
+        val region = grid?.loopRegion(
+            active.currentPosition.toDouble(), beatCount, active.duration
+        )
+        val reason = when {
+            transition.phase != DeckTransition.Phase.IDLE ->
+                "Beat Loop is unavailable while a transition is being prepared or executed."
+            active.currentMediaItem == null -> "No active track."
+            active.duration == C.TIME_UNSET || active.duration <= 0 -> "Track duration is unavailable."
+            beatLoopScheduler.state().lifecycle == LoopLifecycleState.ACTIVE ->
+                "A Beat Loop is already active."
+            region == null -> "A valid, confident beat-grid loop is unavailable within the track."
+            else -> null
+        }
+        if (reason != null) return publishBeatTelemetry(
+            BeatEffectTelemetry(
+                AutoMixEffect.BEAT_LOOP.id, true, true, false, EffectLifecycleState.REJECTED,
+                grid?.confidence?.value, reason = reason,
+                timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
+            )
+        )
+        val generation = TransitionGeneration.next()
+        val selection = AutoMixEffectArbitrator.evaluate(
+            listOf(AutoMixEffect.BEAT_LOOP), generation = generation
+        ).single()
+        if (selection.state != EffectLifecycleState.SELECTED) return publishBeatTelemetry(
+            BeatEffectTelemetry(
+                AutoMixEffect.BEAT_LOOP.id, true, true, false, selection.state,
+                grid?.confidence?.value, reason = selection.reason,
+                timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
+            )
+        )
+        gainOwnershipRegistry.claim(AutoMixEffect.BEAT_LOOP, generation)
+        beatLoopGeneration = generation
+        val started = beatLoopScheduler.activate(checkNotNull(region), active.duration)
+        if (started.state.lifecycle != LoopLifecycleState.ACTIVE) {
+            gainOwnershipRegistry.releaseGeneration(generation)
+            beatLoopGeneration = null
+            return publishBeatTelemetry(
+                BeatEffectTelemetry(
+                    AutoMixEffect.BEAT_LOOP.id, true, true, false, EffectLifecycleState.REJECTED,
+                    grid?.confidence?.value, reason = started.state.reason,
+                    timingLimitation = started.timingAccuracy,
+                )
+            )
+        }
+        active.seekTo(checkNotNull(region).startMs)
+        return publishBeatTelemetry(
+            BeatEffectTelemetry(
+                AutoMixEffect.BEAT_LOOP.id, true, true, true, EffectLifecycleState.PREPARED,
+                grid?.confidence?.value, beatIndex = region.startBeatIndex,
+                loopStartMs = region.startMs, loopEndMs = region.endMs,
+                reason = "Loop armed for ${region.beatCount} beats; Media3 seek boundaries are approximate.",
+                timingLimitation = started.timingAccuracy,
+            )
+        )
+    }
+
+    fun clearBeatLoop(reason: String = "Beat Loop stopped."): BeatEffectTelemetry {
+        assertThread()
+        val previous = beatLoopScheduler.state()
+        val result = beatLoopScheduler.cancel(reason)
+        beatLoopGeneration?.let(gainOwnershipRegistry::releaseGeneration)
+        beatLoopGeneration = null
+        return publishBeatTelemetry(
+            BeatEffectTelemetry(
+                AutoMixEffect.BEAT_LOOP.id, true, true, previous.region != null,
+                if (previous.region == null) EffectLifecycleState.COMPLETED
+                else EffectLifecycleState.COMPLETED,
+                beatEffectTelemetry?.gridConfidence,
+                loopStartMs = previous.region?.startMs,
+                loopEndMs = previous.region?.endMs,
+                reason = result.state.reason,
+                timingLimitation = result.timingAccuracy,
+            )
+        )
+    }
+
+    private fun beatGrid(
+        metadata: ResolvedTrackAudioMetadata,
+        player: ExoPlayer,
+    ): BeatGrid? {
+        val existing = metadata.beatGrid
+            ?: BeatPhaseAligner.estimate(metadata.bpm, transientSamples(player).toList())
+            ?: return null
+        if (!existing.confidence.isFinite() || existing.confidence !in 0f..1f ||
+            !existing.beatPeriodMs.isFinite() || existing.beatPeriodMs <= 0 ||
+            !existing.phaseOffsetMs.isFinite()
+        ) return null
+        return BeatGrid(
+            BeatGridConfidence(existing.confidence),
+            nominalPeriodMs = existing.beatPeriodMs,
+            phaseOffsetMs = existing.phaseOffsetMs,
+        )
+    }
+
+    private fun transientSamples(player: ExoPlayer): ArrayDeque<Long> =
+        if (player === decks.a) samplesA else samplesB
+
+    private fun publishBeatTelemetry(value: BeatEffectTelemetry): BeatEffectTelemetry {
+        beatEffectTelemetry = value
+        return value
+    }
 
     fun setNextMediaItem(mediaItem: MediaItem?) {
         assertThread()
@@ -463,7 +650,7 @@ class AutomixPlayer private constructor(
         require(effectIntensityPercent in 0..100)
         require(transitionStyle in setOf(
             "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out",
-            "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise"
+            "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise", "loop_transition"
         ))
         if (this.enabled != enabled || this.beatmatchEnabled != beatmatchEnabled ||
             durationMs != durationSec * 1000L || this.transitionStyle != transitionStyle ||
@@ -769,11 +956,16 @@ class AutomixPlayer private constructor(
 
     private fun cancelTransition() {
         if (isCrossfading) {
-            releaseGainOwnership()
             mutableTransitionExplanation.value = null
-            mutableRuntimeTelemetry.value = null
             explanationQueue = null
         }
+        if (beatLoopScheduler.state().lifecycle in setOf(
+                LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED
+            )
+        ) clearBeatLoop("Playback operation cancelled the Beat Loop.")
+        releaseGainOwnership()
+        observedExecutionEffects.clear()
+        mutableRuntimeTelemetry.value = null
         decks.factoryA.djTransitionAudioProcessor.bypass()
         decks.factoryB.djTransitionAudioProcessor.bypass()
         if (vinylBrakeTransition) {
@@ -787,6 +979,11 @@ class AutomixPlayer private constructor(
         transitionProgress = 0f
         pendingStartPositionMs = null
         pendingBeatmatchExplanation = null
+        pendingBeatJumpTarget = null
+        loopTransitionRegion = null
+        loopTransitionReplayed = false
+        loopTransitionFallbackReason = null
+        bpmMatchEvaluation = null
         preparedItem = null
         preparedQueue = null
         standby.playWhenReady = false
@@ -802,6 +999,31 @@ class AutomixPlayer private constructor(
     }
 
     private fun deckListener(deck: ExoPlayer) = object : Player.Listener {
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            val target = pendingBeatJumpTarget
+            if (!released && deck === active && target != null &&
+                reason == Player.DISCONTINUITY_REASON_SEEK
+            ) {
+                val succeeded = newPosition.positionMs == target
+                beatEffectTelemetry?.takeIf { it.effectId == AutoMixEffect.BEAT_JUMP.id }?.let {
+                    publishBeatTelemetry(it.copy(
+                        state = if (succeeded) EffectLifecycleState.COMPLETED else EffectLifecycleState.FAILED,
+                        beatPositionMs = newPosition.positionMs,
+                        reason = if (succeeded) {
+                            "Media3 reported the requested seek position; device-output audio is not observable."
+                        } else {
+                            "Media3 reported ${newPosition.positionMs} ms instead of the requested $target ms."
+                        },
+                    ))
+                }
+                pendingBeatJumpTarget = null
+            }
+        }
+
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             if (released) return
             if (deck === standby) {
@@ -871,7 +1093,30 @@ class AutomixPlayer private constructor(
     }
 
     private fun tick() {
-        if (released || !enabled || nextItem == null) return
+        if (released) return
+        val loopState = beatLoopScheduler.state()
+        if (loopState.lifecycle in setOf(LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED)) {
+            val result = beatLoopScheduler.onPosition(active.currentPosition, active.isPlaying)
+            val lifecycle = when (result.state.lifecycle) {
+                LoopLifecycleState.ACTIVE -> if (result.state.completedIterations > 0) {
+                    EffectLifecycleState.EXECUTING
+                } else EffectLifecycleState.PREPARED
+                LoopLifecycleState.PAUSED -> EffectLifecycleState.PREPARED
+                else -> EffectLifecycleState.COMPLETED
+            }
+            beatEffectTelemetry?.let { previous ->
+                publishBeatTelemetry(previous.copy(
+                    state = lifecycle,
+                    beatPositionMs = result.seekPositionMs,
+                    reason = if (result.seekPositionMs != null) {
+                        "Loop boundary reached; seeking to the matching loop position."
+                    } else previous.reason,
+                ))
+            }
+            result.seekPositionMs?.let(active::seekTo)
+            return
+        }
+        if (!enabled || nextItem == null) return
         if (transition.phase == DeckTransition.Phase.FADING) {
             if (active.pauseAtEndOfMediaItems) {
                 cancelTransition()
@@ -944,6 +1189,10 @@ class AutomixPlayer private constructor(
             if (progress >= 1f) handoff(now)
             return
         }
+        if (beatLoopScheduler.state().lifecycle in setOf(
+                LoopLifecycleState.ACTIVE, LoopLifecycleState.PAUSED
+            )
+        ) return
         if (!active.isPlaying || active.duration == C.TIME_UNSET ||
             active.playbackParameters.speed != 1f || active.isPlayingAd ||
             active.pauseAtEndOfMediaItems
@@ -955,7 +1204,8 @@ class AutomixPlayer private constructor(
         val plannedEnd = if (candidateEnd - active.currentPosition > END_MARGIN_MS) {
             candidateEnd
         } else active.duration
-        val remaining = plannedEnd - active.currentPosition
+        var transitionEnd = plannedEnd
+        var remaining = transitionEnd - active.currentPosition
         if (remaining <= 0) return
         if (transition.phase == DeckTransition.Phase.IDLE &&
             remainingToEnd <= maxOf((if (automaticDuration) 30_000L else durationMs) +
@@ -978,10 +1228,15 @@ class AutomixPlayer private constructor(
             ?: BeatPhaseAligner.estimate(outBpm, outgoingSamples.toList())
         val incomingGrid = incoming.beatGrid?.takeIf { it.confidence >= 0.8f }
             ?: BeatPhaseAligner.estimate(inBpm, incomingSamples.toList())
-        val phaseAlignment = BeatPhaseAligner.align(
+        bpmMatchEvaluation = BpmMatchEvaluator.evaluate(
             outBpm, inBpm, outgoingGrid, incomingGrid,
-            active.currentPosition.toDouble(), standby.currentPosition.toDouble()
+            active.currentPosition.toDouble(), standby.currentPosition.toDouble(),
         )
+        val phaseAlignment = bpmMatchEvaluation?.selected?.alignment
+            ?: BeatPhaseAligner.align(
+                outBpm, inBpm, outgoingGrid, incomingGrid,
+                active.currentPosition.toDouble(), standby.currentPosition.toDouble()
+            )
         val automaticDecision = if (transitionStyle == "auto") {
             AutomixEffectSelector.decide(
                 outBpm, inBpm, phaseAlignment != null,
@@ -990,9 +1245,66 @@ class AutomixPlayer private constructor(
         } else null
         activeTransitionStyle = automaticDecision?.style ?: transitionStyle
         vinylBrakeTransition = activeTransitionStyle == "vinyl_brake"
+        loopTransitionFallbackReason = null
+        if (activeTransitionStyle == "loop_transition") {
+            if (loopTransitionRegion == null && !loopTransitionReplayed) {
+                loopTransitionRegion = beatGrid(outgoing, active)?.loopRegionEndingBefore(
+                    active.currentPosition, plannedEnd, LOOP_TRANSITION_BEATS, active.duration
+                )
+                if (loopTransitionRegion == null) {
+                    loopTransitionFallbackReason = EffectDecisionReason.LOOP_GRID_UNAVAILABLE
+                    publishBeatTelemetry(
+                        BeatEffectTelemetry(
+                            AutoMixEffect.LOOP_TRANSITION.id, true, true, false,
+                            EffectLifecycleState.REJECTED, outgoingGrid?.confidence,
+                            reason = "No confident outgoing loop boundary; using the normal crossfade.",
+                            timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
+                        )
+                    )
+                    activeTransitionStyle = "smooth"
+                    Log.w(TAG, "Loop Transition has no valid confident loop; using normal crossfade")
+                } else {
+                    publishBeatTelemetry(
+                        BeatEffectTelemetry(
+                            AutoMixEffect.LOOP_TRANSITION.id, true, true, true,
+                            EffectLifecycleState.PREPARED, outgoingGrid?.confidence,
+                            beatIndex = loopTransitionRegion?.startBeatIndex,
+                            loopStartMs = loopTransitionRegion?.startMs,
+                            loopEndMs = loopTransitionRegion?.endMs,
+                            reason = "Prepared a ${LOOP_TRANSITION_BEATS}-beat outgoing loop.",
+                            timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
+                        )
+                    )
+                }
+            }
+            val region = loopTransitionRegion
+            if (activeTransitionStyle == "loop_transition" && region != null && !loopTransitionReplayed) {
+                if (active.currentPosition < region.endMs) return
+                loopTransitionReplayed = true
+                beatEffectTelemetry?.takeIf {
+                    it.effectId == AutoMixEffect.LOOP_TRANSITION.id
+                }?.let {
+                    publishBeatTelemetry(it.copy(
+                        state = EffectLifecycleState.EXECUTING,
+                        reason = "Outgoing loop replayed; its final pass is crossfading to the incoming deck.",
+                    ))
+                }
+                active.seekTo(region.startMs)
+                return
+            }
+            if (activeTransitionStyle == "loop_transition") {
+                transitionEnd = checkNotNull(loopTransitionRegion).endMs
+                remaining = transitionEnd - active.currentPosition
+            }
+        }
         var requestedFadeDuration = if (automaticDuration) {
             AutomixMath.automaticDurationMs(outBpm)
         } else durationMs
+        if (activeTransitionStyle == "loop_transition") {
+            requestedFadeDuration = requestedFadeDuration.coerceAtMost(
+                checkNotNull(loopTransitionRegion).durationMs
+            )
+        }
         if (standby.duration != C.TIME_UNSET) {
             val incomingRemaining = standby.duration - standby.currentPosition - END_MARGIN_MS
             val speed = if (beatmatchEnabled && !vinylBrakeTransition) {
@@ -1026,14 +1338,16 @@ class AutomixPlayer private constructor(
             activeTransitionBeatmatched = alignment != null
             pendingBeatmatchExplanation = if (beatmatchEnabled && !vinylBrakeTransition) {
                 TransitionExplanationEngine.explainBeatmatch(
-                    alignment != null, outBpm, inBpm, outgoingGrid, incomingGrid)
+                    alignment != null, outBpm, inBpm, outgoingGrid, incomingGrid,
+                    bpmMatchEvaluation,
+                )
             } else null
             val delayMs = alignment?.startDelayMs?.let { ceil(it).toLong() } ?: 0L
             pendingStartPositionMs = active.currentPosition +
                 delayMs.coerceAtMost(remaining - END_MARGIN_MS - 1)
         }
         if (active.currentPosition < pendingStartPositionMs!!) return
-        var fadeDuration = (plannedEnd - active.currentPosition - END_MARGIN_MS)
+        var fadeDuration = (transitionEnd - active.currentPosition - END_MARGIN_MS)
             .coerceAtMost(requestedFadeDuration)
         if (standby.duration != C.TIME_UNSET) {
             val incomingRemaining = standby.duration - standby.currentPosition - END_MARGIN_MS
@@ -1052,6 +1366,7 @@ class AutomixPlayer private constructor(
             active.playbackParameters.pitch
         )
         activeEffectPlan = TransitionEffectPlan.create(activeTransitionStyle, additionalEffects, effectIntensity / 100f)
+        observedExecutionEffects.clear()
         if (activeEffectPlan.rejected.isNotEmpty()) {
             Log.w(TAG, "Transition filter conflict; skipped ${activeEffectPlan.rejected}")
         }
@@ -1100,10 +1415,35 @@ class AutomixPlayer private constructor(
                 outgoingVocalEnergy = outgoing.vocalEnergy,
                 incomingVocalEnergy = incoming.vocalEnergy,
                 effects = TransitionExplanationEngine.explain(activeEffectPlan, activeTransitionStyle,
-                    automaticDecision?.reasons, additionalEffects) + listOfNotNull(pendingBeatmatchExplanation),
+                    automaticDecision?.reasons, additionalEffects) +
+                    listOfNotNull(pendingBeatmatchExplanation) +
+                    listOfNotNull(loopTransitionExplanation()),
             )
             gainOwnershipRegistry.beginGeneration(generation)
-            gainOwnershipRegistry.claim(AutoMixEffect.CROSSFADE, generation)
+            gainOwnershipGeneration = generation
+            if (activeTransitionStyle != "vinyl_brake") {
+                gainOwnershipRegistry.claim(AutoMixEffect.CROSSFADE, generation)
+            } else {
+                gainOwnershipRegistry.claim(AutoMixEffect.VINYL_BRAKE, generation)
+            }
+            if (activeTransitionStyle == "tremolo_fade") {
+                gainOwnershipRegistry.claim(AutoMixEffect.TREMOLO_FADE, generation)
+            }
+            if (activeTransitionBeatmatched) {
+                val beatmatchEffect = pendingBeatmatchExplanation?.effectId
+                    ?.let(AutoMixEffect::fromId) ?: AutoMixEffect.BEATMATCH
+                gainOwnershipRegistry.claim(beatmatchEffect, generation)
+            }
+            if (activeTransitionStyle == "loop_transition") {
+                val selection = AutoMixEffectArbitrator.evaluate(
+                    listOf(AutoMixEffect.LOOP_TRANSITION, AutoMixEffect.CROSSFADE),
+                    generation = generation,
+                )
+                check(selection.all { it.state == EffectLifecycleState.SELECTED }) {
+                    "Loop Transition is incompatible with the active crossfade."
+                }
+                gainOwnershipRegistry.claim(AutoMixEffect.LOOP_TRANSITION, generation)
+            }
             activeEffectPlan.effects.forEach { scheduled ->
                 gainOwnershipRegistry.claim(
                     checkNotNull(AutoMixEffect.fromId(scheduled.effect.id)), generation
@@ -1171,13 +1511,25 @@ class AutomixPlayer private constructor(
         val outgoing = active
         val incoming = standby
         lastTransitionStyle = activeTransitionStyle
-        lastEffectIds = activeEffectPlan.effects.map { it.effect.id }
+        lastEffectIds = activeEffectPlan.effects.map { it.effect.id } +
+            if (activeTransitionStyle == "loop_transition") {
+                listOf(AutoMixEffect.LOOP_TRANSITION.id)
+            } else emptyList()
         lastTransitionBeatmatched = activeTransitionBeatmatched
         incoming.playbackParameters = PlaybackParameters(
             if (vinylBrakeTransition) 1f else outgoing.playbackParameters.speed,
             outgoing.playbackParameters.pitch
         )
         updateEffectExecutionTelemetry(completed = true)
+        beatEffectTelemetry?.takeIf {
+            it.effectId == AutoMixEffect.LOOP_TRANSITION.id &&
+                it.selected && it.state != EffectLifecycleState.FAILED
+        }?.let {
+            publishBeatTelemetry(it.copy(
+                state = EffectLifecycleState.COMPLETED,
+                reason = "Loop Transition completed through the crossfade exit.",
+            ))
+        }
         transition.complete(now)
         releaseGainOwnership()
         activeEffectPlan = TransitionEffectPlan.create("smooth", emptySet())
@@ -1195,6 +1547,10 @@ class AutomixPlayer private constructor(
         activeTransitionBeatmatched = false
         activeFadeDurationMs = 0L
         transitionProgress = 0f
+        loopTransitionRegion = null
+        loopTransitionReplayed = false
+        loopTransitionFallbackReason = null
+        bpmMatchEvaluation = null
         applyVolumes()
         onActiveDeckChanged?.invoke(outgoing, incoming)
         forwarding.handoff(incoming)
@@ -1218,17 +1574,31 @@ class AutomixPlayer private constructor(
         val standbyRuntime = standbyDjFilter.runtimeSnapshot()
         val runtimeById = snapshot.effects.mapNotNull { effect ->
             if (effect.selectionStatus != EffectSelectionStatus.SELECTED) return@mapNotNull null
+            val autoMixEffect = AutoMixEffect.fromId(effect.effectId) ?: return@mapNotNull null
             val processorEffects = processorEffects(effect.effectId)
             val activeSeen = processorEffects.any { it in activeRuntime.activeEffects }
             val standbySeen = processorEffects.any { it in standbyRuntime.activeEffects }
             val seen = activeSeen || standbySeen
-            val envelopeEffect = effect.effectId == "crossfade" || effect.effectId == "beatmatch" ||
+            val beatmatchEffect = effect.effectId == "beatmatch" ||
+                effect.effectId == AutoMixEffect.HALF_TIME_DOUBLE_TIME.id
+            val tempoControlSeen = beatmatchEffect && activeTransitionBeatmatched &&
+                standby.isPlaying && kotlin.math.abs(
+                    standby.playbackParameters.speed -
+                        AutomixMath.rampSpeed(matchedSpeed, transitionProgress)
+                ) < 0.0001f
+            val envelopeEffect = effect.effectId == "crossfade" ||
+                (effect.effectId == AutoMixEffect.LOOP_TRANSITION.id &&
+                    activeTransitionStyle == "loop_transition") ||
                 (effect.effectId == "rise" && activeTransitionStyle == "rise")
-            val executionObserved = seen || (envelopeEffect && transitionProgress > 0f)
+            if (seen || tempoControlSeen || (envelopeEffect && transitionProgress > 0f)) {
+                observedExecutionEffects += autoMixEffect
+            }
+            val executionObserved = autoMixEffect in observedExecutionEffects
             val state = when {
-                completed -> if (executionObserved) EffectLifecycleState.COMPLETED
-                    else EffectLifecycleState.FAILED
+                completed && executionObserved -> EffectLifecycleState.COMPLETED
+                completed -> EffectLifecycleState.PREPARED
                 prepared -> EffectLifecycleState.PREPARED
+                tempoControlSeen -> EffectLifecycleState.EXECUTING
                 envelopeEffect ->
                     if (transitionProgress > 0f) EffectLifecycleState.EXECUTING else EffectLifecycleState.PREPARED
                 seen -> EffectLifecycleState.EXECUTING
@@ -1238,7 +1608,7 @@ class AutomixPlayer private constructor(
             val baselineFrames = if (activeSeen) transitionStartActiveFrames
                 else transitionStartStandbyFrames
             effect.effectId to EffectRuntimeTelemetry(
-                effect = AutoMixEffect.fromId(effect.effectId) ?: return@mapNotNull null,
+                effect = autoMixEffect,
                 state = state,
                 processedFrames = (processor.processedFrames - baselineFrames).coerceAtLeast(0L),
                 sampleRate = processor.sampleRate,
@@ -1246,6 +1616,8 @@ class AutomixPlayer private constructor(
                 targetGain = if (activeSeen) activeGain else standbyGain,
                 detail = when {
                     completed && !executionObserved -> "No execution evidence was observed."
+                    tempoControlSeen ->
+                        "Media3 playback parameters were applied; device-output audio is not observable."
                     !processor.configured && processorEffects.isNotEmpty() ->
                         "Audio processor is not configured."
                     else -> null
@@ -1277,8 +1649,32 @@ class AutomixPlayer private constructor(
         else -> emptySet()
     }
 
+    private fun loopTransitionExplanation(): EffectSelectionExplanation? {
+        val region = loopTransitionRegion
+        if (activeTransitionStyle == "loop_transition" && region != null) {
+            return EffectSelectionExplanation(
+                AutoMixEffect.LOOP_TRANSITION.id,
+                EffectSelectionStatus.SELECTED,
+                listOf(EffectDecisionReason.LOOP_TRANSITION_READY),
+                EffectExecutionStatus.PREPARED,
+                loopStartMs = region.startMs,
+                loopEndMs = region.endMs,
+                timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
+            )
+        }
+        val reason = loopTransitionFallbackReason ?: return null
+        return EffectSelectionExplanation(
+            AutoMixEffect.LOOP_TRANSITION.id,
+            EffectSelectionStatus.SKIPPED,
+            listOf(reason, EffectDecisionReason.LOOP_FALLBACK_CROSSFADE),
+            null,
+            timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
+        )
+    }
+
     private fun releaseGainOwnership() {
-        mutableTransitionExplanation.value?.generation?.let(gainOwnershipRegistry::releaseGeneration)
+        gainOwnershipGeneration?.let(gainOwnershipRegistry::releaseGeneration)
+        gainOwnershipGeneration = null
     }
 
     private fun exponentialCutoff(startHz: Float, endHz: Float, progress: Float): Float =

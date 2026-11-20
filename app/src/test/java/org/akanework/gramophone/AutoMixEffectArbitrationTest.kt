@@ -57,15 +57,27 @@ class AutoMixEffectArbitrationTest {
     @Test
     fun configuredPrioritiesOnlyAffectEffectsWhenExplicitlyProvided() {
         val default = AutoMixEffectArbitrator.evaluate(
-            listOf(AutoMixEffect.ECHO, AutoMixEffect.REVERB),
+            listOf(AutoMixEffect.RISE, AutoMixEffect.FILTER_SWEEP),
             PreserveRequestOrderPriorityPolicy,
         )
         val configured = AutoMixEffectArbitrator.evaluate(
-            listOf(AutoMixEffect.ECHO, AutoMixEffect.REVERB),
-            ConfiguredEffectPriorityPolicy(mapOf(AutoMixEffect.REVERB to 1, AutoMixEffect.ECHO to 0)),
+            listOf(AutoMixEffect.RISE, AutoMixEffect.FILTER_SWEEP),
+            ConfiguredEffectPriorityPolicy(
+                mapOf(AutoMixEffect.RISE to 1, AutoMixEffect.FILTER_SWEEP to 0)
+            ),
         )
-        assertEquals(listOf(AutoMixEffect.ECHO, AutoMixEffect.REVERB), default.map { it.evaluation.effect })
-        assertEquals(listOf(AutoMixEffect.ECHO, AutoMixEffect.REVERB), configured.map { it.evaluation.effect })
+        assertEquals(
+            listOf(AutoMixEffect.RISE, AutoMixEffect.FILTER_SWEEP),
+            default.map { it.evaluation.effect },
+        )
+        assertEquals(
+            listOf(AutoMixEffect.FILTER_SWEEP, AutoMixEffect.RISE),
+            configured.map { it.evaluation.effect },
+        )
+        assertEquals(EffectLifecycleState.SELECTED, default.first().state)
+        assertEquals(EffectLifecycleState.REJECTED, default.last().state)
+        assertEquals(EffectLifecycleState.SELECTED, configured.first().state)
+        assertEquals(EffectLifecycleState.REJECTED, configured.last().state)
         assertEquals(null, PreserveRequestOrderPriorityPolicy.rank(AutoMixEffect.ECHO))
         assertEquals(1, ConfiguredEffectPriorityPolicy(mapOf(AutoMixEffect.REVERB to 1))
             .rank(AutoMixEffect.REVERB))
@@ -103,6 +115,35 @@ class AutoMixEffectArbitrationTest {
         }
         registry.beginGeneration(2)
         assertNull(registry.owner(EffectGainParameter.OUTGOING_DECK_GAIN))
+        registry.releaseGeneration(2)
+        assertThrows(IllegalStateException::class.java) {
+            registry.claim(AutoMixEffect.CROSSFADE, 1)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            registry.claim(AutoMixEffect.CROSSFADE, 2)
+        }
+    }
+
+    @Test
+    fun unavailableEffectsCannotAcquireGainOwnershipAndCoordinatedRiseCanShareCrossfade() {
+        val registry = GainOwnershipRegistry()
+        assertThrows(IllegalStateException::class.java) {
+            registry.claim(AutoMixEffect.VOCAL_SEPARATION, 1)
+        }
+
+        registry.claim(AutoMixEffect.CROSSFADE, 2)
+        registry.claim(AutoMixEffect.RISE, 2)
+        assertEquals(
+            setOf(AutoMixEffect.CROSSFADE, AutoMixEffect.RISE),
+            registry.owners(EffectGainParameter.INCOMING_DECK_GAIN).map { it.effect }.toSet(),
+        )
+
+        val vinylRegistry = GainOwnershipRegistry()
+        vinylRegistry.claim(AutoMixEffect.VINYL_BRAKE, 1)
+        assertEquals(
+            AutoMixEffect.VINYL_BRAKE,
+            vinylRegistry.owner(EffectGainParameter.INCOMING_DECK_GAIN)?.effect,
+        )
     }
 
     @Test
@@ -117,6 +158,52 @@ class AutoMixEffectArbitrationTest {
                 AutoMixEffect.BPM_MATCHING, AutoMixEffect.TEMPO_RAMP
             ).compatibility,
         )
+    }
+
+    @Test
+    fun phaseTwoCompatibilityEncodesLoopAndTempoExclusions() {
+        assertEquals(
+            EffectCompatibility.MUTUALLY_EXCLUSIVE,
+            AutoMixEffectCompatibilityEvaluator.evaluate(
+                AutoMixEffect.BEAT_JUMP, AutoMixEffect.BEAT_LOOP
+            ).compatibility,
+        )
+        assertEquals(
+            EffectCompatibility.MUTUALLY_EXCLUSIVE,
+            AutoMixEffectCompatibilityEvaluator.evaluate(
+                AutoMixEffect.BEAT_LOOP, AutoMixEffect.LOOP_TRANSITION
+            ).compatibility,
+        )
+        assertEquals(
+            EffectCompatibility.COMPATIBLE,
+            AutoMixEffectCompatibilityEvaluator.evaluate(
+                AutoMixEffect.LOOP_TRANSITION, AutoMixEffect.CROSSFADE
+            ).compatibility,
+        )
+        assertEquals(
+            EffectCompatibility.MUTUALLY_EXCLUSIVE,
+            AutoMixEffectCompatibilityEvaluator.evaluate(
+                AutoMixEffect.BEATMATCH, AutoMixEffect.HALF_TIME_DOUBLE_TIME
+            ).compatibility,
+        )
+        assertEquals(
+            EffectCompatibility.CONDITIONALLY_COMPATIBLE,
+            AutoMixEffectCompatibilityEvaluator.evaluate(
+                AutoMixEffect.BEAT_JUMP, AutoMixEffect.CROSSFADE
+            ).compatibility,
+        )
+    }
+
+    @Test
+    fun coordinatedLoopTransitionCanShareTheCrossfadeDeckGainEnvelope() {
+        val registry = GainOwnershipRegistry()
+        registry.claim(AutoMixEffect.CROSSFADE, 100)
+        registry.claim(AutoMixEffect.LOOP_TRANSITION, 100)
+        assertEquals(
+            setOf(AutoMixEffect.CROSSFADE, AutoMixEffect.LOOP_TRANSITION),
+            registry.owners(EffectGainParameter.OUTGOING_DECK_GAIN).map { it.effect }.toSet(),
+        )
+        assertNotNull(registry.owner(EffectGainParameter.OUTGOING_LOOP_REGION))
     }
 
     @Test

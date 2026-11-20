@@ -365,4 +365,5 @@
     <string name="bitrate_format">%1$d kbps</string>
     <string name="bitrate_unknown">ไม่ทราบบิตเรต</string>
     <string name="settings_open_source_licenses">สัญญาซอฟต์แวร์แบบเปิด</string>
+    <string name="automix_transition_loop">การเปลี่ยนเพลงแบบลูป</string>
 </resources>

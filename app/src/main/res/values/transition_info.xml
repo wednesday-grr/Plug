@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="transition_info_title">Audio quality info</string>
     <string name="transition_info_loading">Loading transition information…</string>
     <string name="transition_info_unavailable">No current or recent AutoMix transition is available for this queue.</string>
@@ -29,15 +29,32 @@
     <string name="transition_info_compact_active">Mixing · Scheduled: %1$s</string>
     <string name="transition_info_compact_completed">Mix complete · Scheduled: %1$s</string>
     <string name="transition_info_planned">Scheduled, rendering unconfirmed</string>
-    <string name="transition_info_prepared">Prepared, processing not yet confirmed</string>
-    <string name="transition_info_executing">Processing confirmed</string>
-    <string name="transition_info_executed">Processing completed</string>
-    <string name="transition_info_execution_failed">Processing failed</string>
-    <string name="transition_info_execution_frames">PCM frames processed: %1$d at %2$s Hz</string>
+    <string name="transition_info_prepared" tools:ignore="MissingTranslation">Prepared, processing not yet confirmed</string>
+    <string name="transition_info_executing" tools:ignore="MissingTranslation">Processing confirmed</string>
+    <string name="transition_info_executed" tools:ignore="MissingTranslation">Processing completed</string>
+    <string name="transition_info_execution_failed" tools:ignore="MissingTranslation">Processing failed</string>
+    <string name="transition_info_execution_frames" tools:ignore="MissingTranslation">PCM frames processed: %1$d at %2$s Hz</string>
     <string name="transition_info_unconfirmed">Effect execution is reported only after processing or transition-envelope activity is observed.</string>
     <string name="transition_info_skipped">Evaluated effects not scheduled</string>
     <string name="transition_info_skipped_label">Skipped</string>
     <string name="transition_info_beatmatch">Beatmatching</string>
+    <string name="transition_info_beat_jump" tools:ignore="MissingTranslation">Beat Jump</string>
+    <string name="transition_info_beat_loop" tools:ignore="MissingTranslation">Beat Loop</string>
+    <string name="transition_info_half_double" tools:ignore="MissingTranslation">Half-time / Double-time BPM matching</string>
+    <string name="transition_info_runtime_effect" tools:ignore="MissingTranslation">%1$s runtime status</string>
+    <string name="transition_info_availability" tools:ignore="MissingTranslation">Available: %1$s</string>
+    <string name="transition_info_evaluated" tools:ignore="MissingTranslation">Evaluated: %1$s</string>
+    <string name="transition_info_selected" tools:ignore="MissingTranslation">Selected: %1$s</string>
+    <string name="transition_info_effect_state" tools:ignore="MissingTranslation">Lifecycle state: %1$s</string>
+    <string name="transition_info_grid_confidence" tools:ignore="MissingTranslation">Beat-grid confidence: %1$s</string>
+    <string name="transition_info_beat_position" tools:ignore="MissingTranslation">Beat position: %1$d ms</string>
+    <string name="transition_info_beat_index" tools:ignore="MissingTranslation">Beat index: %1$d</string>
+    <string name="transition_info_tempo_interpretation" tools:ignore="MissingTranslation">BPM interpretation: %1$s</string>
+    <string name="transition_info_tempo_ratio" tools:ignore="MissingTranslation">Incoming playback-speed ratio: %1$s</string>
+    <string name="transition_info_effective_incoming_bpm" tools:ignore="MissingTranslation">Effective incoming BPM: %1$s</string>
+    <string name="transition_info_pitch_preserved" tools:ignore="MissingTranslation">Pitch preservation requested: %1$s</string>
+    <string name="transition_info_loop_region" tools:ignore="MissingTranslation">Loop region: %1$d–%2$d ms</string>
+    <string name="transition_info_timing_limitation" tools:ignore="MissingTranslation">Timing limitation: %1$s</string>
     <string name="transition_info_details">Analysis details (tap to expand)</string>
     <string name="transition_info_outgoing_grid">Outgoing beat-grid confidence at transition start</string>
     <string name="transition_info_incoming_grid">Incoming beat-grid confidence at transition start</string>
@@ -84,4 +101,12 @@
     <string name="transition_reason_grid_unavailable">Beatmatching was skipped because a beat grid was unavailable.</string>
     <string name="transition_reason_grid_low">Beatmatching was skipped because beat-grid confidence was too low.</string>
     <string name="transition_reason_insufficient">The available analysis did not provide a usable beat alignment.</string>
+    <string name="transition_reason_half_time" tools:ignore="MissingTranslation">The half-time BPM candidate met the existing speed and beat-phase checks.</string>
+    <string name="transition_reason_double_time" tools:ignore="MissingTranslation">The double-time BPM candidate met the existing speed and beat-phase checks.</string>
+    <string name="transition_reason_speed_limit" tools:ignore="MissingTranslation">No tempo interpretation met the existing playback-speed limit.</string>
+    <string name="transition_reason_loop_grid" tools:ignore="MissingTranslation">A sufficiently confident beat grid and valid loop boundary were unavailable; the normal crossfade was used.</string>
+    <string name="transition_reason_loop_fallback" tools:ignore="MissingTranslation">Loop Transition fell back to the existing normal crossfade.</string>
+    <string name="transition_reason_loop_ready" tools:ignore="MissingTranslation">A confident outgoing loop region was prepared for the transition.</string>
+    <string name="transition_reason_jump_rejected" tools:ignore="MissingTranslation">Beat Jump was rejected by the current playback or beat-grid state.</string>
+    <string name="transition_reason_loop_rejected" tools:ignore="MissingTranslation">Beat Loop was rejected by the current playback or beat-grid state.</string>
 </resources>
