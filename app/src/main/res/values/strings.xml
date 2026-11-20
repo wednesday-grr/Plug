@@ -778,7 +778,6 @@
     <string name="settings_lyrics_no_animation_summary">Disable all line transition lyric animations</string>
     <string name="settings_lyric_word_expansion_duration">Character expansion duration (ms)</string>
     <string name="settings_lyric_spring_primary">Main lyric motion</string>
-    <string name="settings_lyric_spring_duet">Duet lyric motion</string>
     <string name="settings_lyric_spring_background">Background lyric motion</string>
     <string name="settings_lyric_spring_scroll">Automatic scroll motion</string>
     <string name="settings_lyric_spring_duration">Duration (ms)</string>

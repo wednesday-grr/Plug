@@ -449,7 +449,6 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
         spForRender!!.second.forEachIndexed { i, it ->
             val lineSpring = springSpec(
                 if (it.speaker?.isBackground == true) "background"
-                else if (it.speaker?.isVoice2 == true || it.speaker?.isGroup == true) "duet"
                 else "primary"
             )
             val lineAnimTime = if (lyricAnimTime == 0f) 0f else lineSpring.durationMs.toFloat()
@@ -796,7 +795,6 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     val speaker = it.speaker
                     val spring = springSpec(
                         if (speaker?.isBackground == true) "background"
-                        else if (speaker?.isVoice2 == true || speaker?.isGroup == true) "duet"
                         else "primary"
                     )
                     val scale = activeWordScale(
@@ -1121,7 +1119,8 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
             requestLayout()
             return true
         }
-        val y = e.y + scrollY
+        // ScrollingView2 already offsets gesture coordinates into scroll-content space.
+        val y = e.y
         val x = e.x - globalPaddingHorizontal
         var heightSoFar = spForRender!!.first[2]
         spForRender!!.second.forEachIndexed { index, item ->
@@ -1295,7 +1294,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     override fun onLongPress(e: MotionEvent) {
         val items = spForRender?.second ?: return
         var heightSoFar = spForRender!!.first[2]
-        val y = e.y + scrollY
+        val y = e.y
         val item = items.firstOrNull { row ->
             val fraction = backgroundRowFraction(items.indexOf(row), row)
             val top = heightSoFar + row.paddingTop -

@@ -39,6 +39,7 @@ import android.view.Gravity
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import android.view.ViewGroup
 import android.view.ContextThemeWrapper
@@ -82,7 +83,6 @@ import org.akanework.gramophone.ui.MainActivity
 import androidx.core.view.isVisible
 import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.app.AlertDialog
-import com.google.android.material.button.MaterialButton
 import coil3.asDrawable
 import coil3.dispose
 import coil3.imageLoader
@@ -221,6 +221,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         incomingId = null
         splitAmount = 0f
         endingSplit = false
+        lyricsToolbar = null
         albumArtBackgrounds.forEach { it.animate().cancel() }
         removeAllViews()
         val oldPaddingTop = newView?.paddingTop ?: recyclerView?.paddingTop ?: 0
@@ -327,34 +328,21 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             setBackgroundColor(0x66000000)
         }
         fun button(label: String, onClick: () -> Unit) =
-            MaterialButton(context).apply {
+            TextView(context).apply {
                 text = label
-                minWidth = 0
+                gravity = Gravity.CENTER
+                setPadding(12f.dpToPx(context).toInt(), 0, 12f.dpToPx(context).toInt(), 0)
+                setTextColor(Color.WHITE)
+                background = context.getDrawable(R.drawable.rp_buttons_dynamic)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 44f.dpToPx(context).toInt()
+                )
                 setOnClickListener { onClick() }
             }
         val sourceButton = button(context.getString(R.string.lyrics_source)) {}
         sourceButton.setOnClickListener { showLyricsSourceMenu(sourceButton) }
         toolbar.addView(sourceButton)
         toolbar.addView(button(context.getString(R.string.lyrics_search)) { showGeniusSearch() })
-        toolbar.addView(button("‹") {
-            (context as? MainActivity)?.getPlayer()?.seekToPrevious()
-        }.apply { contentDescription = context.getString(R.string.skip_previous) })
-        lateinit var playButton: MaterialButton
-        playButton = button(if ((context as? MainActivity)?.getPlayer()?.isPlaying == true) "Ⅱ" else "▶") {
-            (context as? MainActivity)?.getPlayer()?.let {
-                if (it.isPlaying) {
-                    it.pause()
-                    playButton.text = "▶"
-                } else {
-                    it.play()
-                    playButton.text = "Ⅱ"
-                }
-            }
-        }.apply { contentDescription = context.getString(R.string.play_pause) }
-        toolbar.addView(playButton)
-        toolbar.addView(button("›") {
-            (context as? MainActivity)?.getPlayer()?.seekToNext()
-        }.apply { contentDescription = context.getString(R.string.skip_next) })
         val params = LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.END)
         params.topMargin = 8f.dpToPx(context).toInt()
@@ -720,6 +708,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         prefs.unregisterOnSharedPreferenceChangeListener(this)
+        lyricsToolbar?.removeCallbacks(hideLyricsToolbar)
         incomingArtworkRequest?.dispose()
         incomingArtworkRequest = null
         incomingPaletteRequest?.dispose()
@@ -899,7 +888,10 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             inflate(context, R.layout.lyric_view_v2, container)
             incomingView = container.findViewById<NewLyricsView>(R.id.lyric_view).also {
                 it.instance = callbacks
-                it.setPadding(contentPaddingLeft, contentPaddingTop, contentPaddingRight, contentPaddingBottom)
+                it.setPadding(
+                    contentPaddingLeft, contentPaddingTop, contentPaddingRight,
+                    contentPaddingBottom
+                )
                 it.updateLyrics(null)
             }
             incomingContent = incomingView
@@ -907,7 +899,10 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         } else {
             inflate(context, R.layout.lyric_view, container)
             val list = container.findViewById<MyRecyclerView>(R.id.recycler_view)
-            list.setPadding(contentPaddingLeft, contentPaddingTop, contentPaddingRight, contentPaddingBottom)
+            list.setPadding(
+                contentPaddingLeft, contentPaddingTop, contentPaddingRight,
+                contentPaddingBottom
+            )
             list.addItemDecoration(LyricPaddingDecoration(context))
             incomingAdapter = LegacyLyricsAdapter(context).also {
                 it.callback = callbacks
@@ -1042,12 +1037,7 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         val startAmount = splitAmount
         val animator = ValueAnimator.ofFloat(0f, 1f)
         splitAnimator = animator
-        val duet = listOfNotNull(lyrics, incomingLyrics).any { content ->
-            (content as? SemanticLyrics.SyncedLyrics)?.text?.any {
-                it.speaker?.isVoice2 == true || it.speaker?.isGroup == true
-            } == true
-        }
-        val spring = lyricSpringSpec(prefs, if (duet) "duet" else "primary")
+        val spring = lyricSpringSpec(prefs, "primary")
         val startTime = android.os.SystemClock.uptimeMillis()
         animator.duration = spring.durationMs.toLong()
         animator.addUpdateListener {

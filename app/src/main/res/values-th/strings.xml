@@ -97,7 +97,6 @@
     <string name="settings_lyrics_no_animation">ปิดแอนิเมชัน</string>
     <string name="settings_lyric_word_expansion_duration">ระยะเวลาการขยายอักษร (มิลลิวินาที)</string>
     <string name="settings_lyric_spring_primary">การเคลื่อนไหวเนื้อเพลงหลัก</string>
-    <string name="settings_lyric_spring_duet">การเคลื่อนไหวเนื้อเพลงดูเอ็ท</string>
     <string name="settings_lyric_spring_background">การเคลื่อนไหวเนื้อเพลงแบ็คกราวด์</string>
     <string name="settings_lyric_spring_scroll">การเลื่อนอัตโนมัติ</string>
     <string name="settings_lyric_spring_duration">ระยะเวลา (มิลลิวินาที)</string>

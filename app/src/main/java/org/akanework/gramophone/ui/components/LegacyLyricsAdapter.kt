@@ -240,7 +240,6 @@ class LegacyLyricsAdapter(
             lyricSpringSpec(
                 prefs,
                 if (speaker?.isBackground == true) "background"
-                else if (speaker?.isVoice2 == true || speaker?.isGroup == true) "duet"
                 else "primary"
             )
         )
@@ -519,7 +518,6 @@ class LegacyLyricsAdapter(
                 lyricSpringSpec(
                     prefs,
                     if (speaker?.isBackground == true) "background"
-                    else if (speaker?.isVoice2 == true || speaker?.isGroup == true) "duet"
                     else "primary"
                 )
             )

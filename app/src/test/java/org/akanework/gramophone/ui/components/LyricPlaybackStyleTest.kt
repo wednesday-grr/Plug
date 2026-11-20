@@ -12,6 +12,7 @@ import android.text.Spanned
 import android.text.style.RelativeSizeSpan
 import android.view.View
 import android.view.ViewGroup
+import android.view.MotionEvent
 import android.widget.FrameLayout
 import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.RecyclerView
@@ -120,6 +121,59 @@ class LyricPlaybackStyleTest {
         assertTrue(item.longWords[0]!!.characters[0].bounds.width() > 0f)
         assertTrue(item.longWords[1]!!.characters[0].bounds.width() > 0f)
         assertTrue(item.longWords[2]!!.characters[0].bounds.width() > 0f)
+    }
+
+    @Test
+    fun tappingScrolledLyricSeeksTheRenderedLine() {
+        val context = RuntimeEnvironment.getApplication()
+        val lyrics = SemanticLyrics.SyncedLyrics(
+            (0..11).map { index ->
+                val start = index.toULong() * 1_000uL
+                line("lyric line $index", start, start + 900uL, null)
+            }
+        )
+        val view = NewLyricsView(context, null)
+        var soughtPosition = -1L
+        view.instance = object : NewLyricsView.Callbacks {
+            override fun getCurrentPosition() = 0uL
+            override fun isPlaying() = false
+            override fun speed() = 1f
+            override fun seekTo(positionMs: Long) {
+                soughtPosition = positionMs
+            }
+            override fun destroy() {}
+        }
+        view.updateLyrics(lyrics)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(300, View.MeasureSpec.EXACTLY)
+        )
+        view.layout(0, 0, 400, 300)
+        view.scrollTo(0, 300)
+        assertTrue(view.scrollY > 0)
+
+        val (metrics, items) = view.buildSpForMeasure(lyrics, 400)
+        val targetIndex = 5
+        val target = items[targetIndex]
+        var rowTop = metrics[2].toFloat()
+        for (index in 0 until targetIndex) {
+            val item = items[index]
+            rowTop += item.paddingTop + item.layout.height + item.paddingBottom
+        }
+        rowTop += target.paddingTop
+        val xField = NewLyricsView::class.java.getDeclaredField("globalPaddingHorizontal")
+            .apply { isAccessible = true }
+        val globalHorizontal = xField.getFloat(view)
+        val x = globalHorizontal + target.layout.getLineLeft(0) + target.layout.getLineWidth(0) / 2f
+        val event = MotionEvent.obtain(
+            0L, 0L, MotionEvent.ACTION_UP, x, rowTop + target.layout.height / 2f, 0
+        )
+        try {
+            view.onSingleTapConfirmed(event)
+        } finally {
+            event.recycle()
+        }
+        assertEquals(target.line!!.start.toLong(), soughtPosition)
     }
 
     @Test

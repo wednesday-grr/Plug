@@ -133,18 +133,11 @@
         app:min="50"
         app:showSeekBarValue="true"
         app:iconSpaceReserved="false" />
-
     <PreferenceCategory android:title="@string/settings_lyric_spring_primary">
         <SeekBarPreference android:key="lyric_spring_primary_duration" android:title="@string/settings_lyric_spring_duration" android:defaultValue="800" android:max="2000" app:min="100" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
         <SeekBarPreference android:key="lyric_spring_primary_stiffness" android:title="@string/settings_lyric_spring_stiffness" android:defaultValue="100" android:max="500" app:min="10" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
         <SeekBarPreference android:key="lyric_spring_primary_damping" android:title="@string/settings_lyric_spring_damping" android:defaultValue="15" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
         <SeekBarPreference android:key="lyric_spring_primary_mass" android:title="@string/settings_lyric_spring_mass" android:defaultValue="10" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
-    </PreferenceCategory>
-    <PreferenceCategory android:title="@string/settings_lyric_spring_duet">
-        <SeekBarPreference android:key="lyric_spring_duet_duration" android:title="@string/settings_lyric_spring_duration" android:defaultValue="800" android:max="2000" app:min="100" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
-        <SeekBarPreference android:key="lyric_spring_duet_stiffness" android:title="@string/settings_lyric_spring_stiffness" android:defaultValue="100" android:max="500" app:min="10" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
-        <SeekBarPreference android:key="lyric_spring_duet_damping" android:title="@string/settings_lyric_spring_damping" android:defaultValue="15" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
-        <SeekBarPreference android:key="lyric_spring_duet_mass" android:title="@string/settings_lyric_spring_mass" android:defaultValue="10" android:max="50" app:min="1" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/settings_lyric_spring_background">
         <SeekBarPreference android:key="lyric_spring_background_duration" android:title="@string/settings_lyric_spring_duration" android:defaultValue="400" android:max="2000" app:min="100" app:showSeekBarValue="true" app:iconSpaceReserved="false" />
@@ -180,8 +173,10 @@
     <SwitchPreferenceCompat
         android:defaultValue="true"
         android:key="lrclib_enabled"
+        android:layout="@layout/preference_switch"
         android:title="@string/settings_lrclib_enabled"
         android:summary="@string/settings_lrclib_enabled_summary"
+        android:widgetLayout="@layout/preference_switch_widget"
         app:iconSpaceReserved="false" />
 
     <EditTextPreference
