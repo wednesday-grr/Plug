@@ -137,8 +137,30 @@ class MusicalBeatTrackerTest {
         assertThrows(IllegalArgumentException::class.java) { OnsetCandidate(-1, 0.5f) }
         assertThrows(IllegalArgumentException::class.java) { OnsetCandidate(10, Float.NaN) }
         val sparse = listOf(OnsetCandidate(100_000, 1f), OnsetCandidate(600_000, 1f))
-        assertNull(MusicalBeatTracker.track(sparse, 120f, window, timeline).grid)
+        val result = MusicalBeatTracker.track(sparse, 120f, window, timeline)
+        assertNull(result.grid)
+        assertEquals(listOf(BeatRegionEvidence(window, BeatRegionObservation.NO_CONSECUTIVE_EVENTS)),
+            result.regions)
         assertNull(MusicalBeatTracker.track(sparse, null, window, timeline).grid)
+    }
+
+    @Test
+    fun regionsDescribeObservedIntervalsAndGapsWithoutClaimingReliability() {
+        val events = listOf(
+            DetectedBeatEvent(0, 1_000_000),
+            DetectedBeatEvent(1, 1_500_000),
+            DetectedBeatEvent(3, 2_500_000),
+            DetectedBeatEvent(4, 3_000_000),
+        )
+        assertEquals(listOf(
+            BeatRegionEvidence(AnalysisWindow(0, 1_000_000), BeatRegionObservation.NO_CONSECUTIVE_EVENTS),
+            BeatRegionEvidence(AnalysisWindow(1_000_000, 1_500_000), BeatRegionObservation.CONSECUTIVE_OBSERVED_EVENTS),
+            BeatRegionEvidence(AnalysisWindow(1_500_000, 2_500_000), BeatRegionObservation.NO_CONSECUTIVE_EVENTS),
+            BeatRegionEvidence(AnalysisWindow(2_500_000, 3_000_000), BeatRegionObservation.CONSECUTIVE_OBSERVED_EVENTS),
+            BeatRegionEvidence(AnalysisWindow(3_000_000, 10_000_000), BeatRegionObservation.NO_CONSECUTIVE_EVENTS),
+        ), beatRegions(window, events))
+        assertEquals(listOf(BeatRegionEvidence(window, BeatRegionObservation.NO_CONSECUTIVE_EVENTS)),
+            beatRegions(window, emptyList()))
     }
 
     @Test

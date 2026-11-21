@@ -117,14 +117,61 @@ These are real-audio development metrics, not genre-wide accuracy and not eviden
 is calibrated. The earlier synthetic click-track result (F1 0.974, median absolute timing error
 45.7 ms) is a separate synthetic test and must not be conflated with this evaluation.
 
+## Candombe session-separated evaluation
+
+The [Uruguayan Candombe dataset](https://doi.org/10.5281/zenodo.6533068) is published by Luis
+Jure and Martin Rocamora under CC BY 4.0, with 35 studio performances, 44.1 kHz stereo 16-bit
+FLAC, and expert beat annotations. Cite Nunes, Rocamora, Jure and Biscainho, *Beat and Downbeat
+Tracking Based on Rhythmic Patterns Applied to the Uruguayan Candombe Drumming*, ISMIR 2015.
+The source `.beats` files contain beat times in seconds and a beat-position column; only the
+first column is used. The publisher describes the annotations as corresponding to the complete
+recordings. No trim, guessed offset, or sample-rate conversion is applied when extracting the
+first 60 seconds to WAV. The evaluation runner uses its tested 44.1 kHz to 11,025 Hz conversion
+and clips reference timestamps to the analyzed window. Reference BPM is the median beat-interval
+tempo in that window. These recordings represent percussion ensembles, not general music.
+
+The 1992 and 1995 sessions (21 recordings) were used for development; all 14 2014 session
+recordings were held out until the unchanged v3 tracker was fixed. Session separation does not
+guarantee performer independence. The results are **not confidence calibration**:
+
+| Split | Tracks | Detections / references | Matches | Precision | Recall | F1 | Ambiguous / unavailable |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1992 + 1995 development | 21 | 138 / 2,745 | 37 | 0.268 | 0.013 | 0.026 | 20 / 21 |
+| 2014 held out | 14 | 0 / 1,644 | 0 | undefined | 0.000 | 0.000 | 14 / 14 |
+
+All holdout recordings produced unavailable, ambiguous grids. No match-probability model or
+reference-coverage estimator was fitted or shipped. A bounded-tempo experiment on the development
+sets raised RWC-R F1 to 0.596 and Candombe development recall to 0.042, but lowered Candombe
+event precision to 0.204 and did not fix RWC_R010; it was discarded. The final unchanged tracker
+reproduced the RWC-R F1 of 0.552. This outcome blocks calibrated-confidence and reliable
+percussion-grid claims; a wider, representative independent benchmark and improved detector are
+needed. The Candombe holdout must not be reused to tune a model and then claimed as independent.
+
+With the publisher's archives stored outside the repository and Python `soundfile` installed,
+the session split and evaluation are reproducible:
+
+```powershell
+python tools\prepare_candombe_evaluation.py C:\data\candombe_audio.zip C:\data\candombe_annotations.zip C:\data\prepared --split training
+python tools\prepare_candombe_evaluation.py C:\data\candombe_audio.zip C:\data\candombe_annotations.zip C:\data\prepared --split holdout
+python tools\beat_evaluation.py C:\data\prepared\candombe-training.json C:\data\candombe-training-results.json
+python tools\beat_evaluation.py C:\data\prepared\candombe-holdout.json C:\data\candombe-holdout-results.json
+```
+
+The preparation script checks the publisher's archive MD5 values and refuses to overwrite
+existing generated files. The JSON report includes per-track counts and, for detected events,
+the uncalibrated tracker score and one-to-one match label. Audio remains local and is not included
+in this repository.
+
 `AudioAnalysisScheduler` exposes `requestBeatAnalysis(item, ownerId)` and
 `cancelBeatAnalysis(ownerId)`. The track details screen now offers an explicit **Analyze beats**
 action through a MediaSession command; it does not analyze automatically on screen opening.
 Scheduler tests cover its offline queue behavior, and the cache stores results in schema v6,
 separate from legacy BPM/Key and periodic-pulse rows. Beat-grid reads distinguish missing,
-invalidated, unavailable, empty, and detected results. The MediaSession command path was exercised
-by device instrumentation; tapping the Detail-screen action and audible playback continuity are
-not verified. Beat analysis does not feed playback or AutoMix.
+invalidated, unavailable, empty, and detected results. The actual Detail-screen button, cancellation,
+and subsequent polled result were exercised by device instrumentation using a synthetic MediaStore
+fixture. That test temporarily suspends the debug service's queued offline analysis, restores it
+afterward, and does not change the playback queue. Audible playback continuity is not verified.
+Beat analysis does not feed playback or AutoMix.
 
 Provide WAV files as mono signed 16-bit little-endian PCM at 11,025 Hz, each at most 60 seconds.
 The waveform must be aligned with the supplied reference timestamps; do not silently apply
@@ -167,8 +214,13 @@ metrics, pooling events and errors across tracks.
 observed-onset interval. Its reported BPM is the median local period; output beat events remain
 only observed onsets, and the tracker does not fill missing beats or extrapolate through silent
 regions. A small support margin determines whether tempo interpretation is ambiguous. Onset,
-periodicity, and musical-beat support are not calibrated probabilities, and uncertainty is only
-represented for the analysis result as a whole; region-level confidence is not implemented.
+periodicity, and musical-beat support are not calibrated probabilities. Regions partition the
+analysis window into intervals between consecutive observed events and intervals without such
+adjacency, including missing-index gaps and outer edges. This is observational metadata, not
+proof that a beat is correct or that all beats were found: region-level calibrated event-match
+probability and reference coverage are unavailable. It is persisted in the existing schema-v6
+JSON metadata; the configuration version `track-dsp-beat-config-v3-observation-regions`
+invalidates earlier beat-grid records without changing legacy BPM, key, or phase records.
 
 `TrackPcmDecoder` uses Android `MediaExtractor` and `MediaCodec`, so it is container-agnostic and
 can decode any local audio stream for which the current device exposes a decoder. This is not a
@@ -218,6 +270,15 @@ measured load-miss, write, and load-hit durations.
 Cancellation response was 127.0 ms on the 360-second MP3 fixture. The MediaSession command was
 also exercised through the production service on-device, and both instrumentation tests passed.
 No actual playback was observed during analysis; audible continuity remains unverified.
+
+### RMX3939 local M4A smoke check
+
+With the owner's permission, 39 local `.m4a` files in shared `Music` were decoded and analyzed
+on RMX3939; all 39 completed and all 39 cache records survived a close/reopen round-trip. This
+is a format/stability check only: ground-truth beat annotations were not supplied, no accuracy
+or calibration metric can be calculated, and the audio was neither copied from the device nor
+committed. The test removes its own cache rows afterwards. Files with other names, extensions,
+or locations were not included.
 
 Tempo interpretation accuracy compares the selected interpretation against the independently
 provided reference BPM: the closest of prior, half prior and double prior must be within 4% of

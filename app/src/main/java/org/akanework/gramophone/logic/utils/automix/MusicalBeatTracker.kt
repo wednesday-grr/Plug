@@ -36,6 +36,7 @@ data class BeatTrackingResult(
     val selected: BeatTempoInterpretation?,
     val ambiguous: Boolean,
     val reason: String,
+    val regions: List<BeatRegionEvidence> = emptyList(),
 )
 
 /**
@@ -99,7 +100,8 @@ object MusicalBeatTracker {
         require(onsets.all { it.sourceTimeUs in window.startUs..window.endUs })
         require(onsets.zipWithNext().all { (a, b) -> a.sourceTimeUs < b.sourceTimeUs })
         if (bpmPrior == null || !bpmPrior.isFinite() || bpmPrior <= 0f || onsets.size < MIN_ONSETS)
-            return BeatTrackingResult(null, emptyList(), null, false, "Insufficient onset or tempo evidence")
+            return BeatTrackingResult(null, emptyList(), null, false, "Insufficient onset or tempo evidence",
+                beatRegions(window, emptyList()))
 
         data class Path(
             val interpretation: BeatTempoInterpretation,
@@ -185,11 +187,11 @@ object MusicalBeatTracker {
         }.sortedByDescending { it.support }
         val hypotheses = paths.map { BeatTempoHypothesis(it.interpretation, it.bpm, it.support.toFloat()) }
         val best = paths.firstOrNull() ?: return BeatTrackingResult(null, hypotheses, null, false,
-            "No sufficiently supported observed onset sequence")
+            "No sufficiently supported observed onset sequence", beatRegions(window, emptyList()))
         val ambiguous = paths.size > 1 &&
             best.support - paths[1].support < AMBIGUITY_SUPPORT_MARGIN
         if (ambiguous) return BeatTrackingResult(null, hypotheses, null, true,
-            "Tempo interpretations have similar uncalibrated support")
+            "Tempo interpretations have similar uncalibrated support", beatRegions(window, emptyList()))
         var nextBeatIndex = 0L
         val events = best.indexes.mapIndexed { index, onsetIndex ->
             if (index > 0) nextBeatIndex += best.beatSteps[onsetIndex] - 1
@@ -218,6 +220,7 @@ object MusicalBeatTracker {
                 best.support.toFloat(), null),
             hypotheses, best.interpretation, false,
             "Observed onset sequence; musical-beat scores are uncalibrated",
+            beatRegions(window, events),
         )
     }
 }

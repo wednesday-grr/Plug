@@ -27,6 +27,7 @@ import org.akanework.gramophone.logic.utils.automix.BeatGridCacheRecord
 import org.akanework.gramophone.logic.utils.automix.BeatTempoHypothesis
 import org.akanework.gramophone.logic.utils.automix.BeatTempoInterpretation
 import org.akanework.gramophone.logic.utils.automix.BeatTrackingResult
+import org.akanework.gramophone.logic.utils.automix.beatRegions
 import org.akanework.gramophone.logic.utils.automix.DetectedBeatEvent
 import org.akanework.gramophone.logic.utils.automix.DetectedBeatGridEvidence
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysis
@@ -382,6 +383,40 @@ class TrackAnalysisCacheTest {
                 (cache.loadBeatGrid(key) as BeatGridCacheRead.Available).record.state)
         } finally {
             cache.close()
+        }
+    }
+
+    @Test
+    fun persistsObservedAndUnavailableRegionsAcrossCacheReopen() {
+        val context = RuntimeEnvironment.getApplication()
+        val key = AnalysisKey("beat-regions", 1, "content://media/beat-regions")
+        val unavailableKey = key.copy(mediaId = "beat-regions-unavailable",
+            uri = "content://media/beat-regions-unavailable")
+        val initial = beatRecord(key)
+        val withRegions = initial.copy(result = initial.result.copy(
+            regions = beatRegions(initial.window, checkNotNull(initial.result.grid).events)))
+        val unavailableBase = beatRecord(unavailableKey)
+        val unavailable = unavailableBase.copy(result = unavailableBase.result.copy(
+            grid = null, regions = beatRegions(unavailableBase.window, emptyList())))
+        TrackAnalysisCache(context).also {
+            it.storeBeatGrid(key, withRegions)
+            it.storeBeatGrid(unavailableKey, unavailable)
+            it.close()
+        }
+        TrackAnalysisCache(context).also {
+            assertEquals(6, it.writableDatabase.version)
+            assertEquals(BeatGridCacheRead.Available(withRegions), it.loadBeatGrid(key))
+            assertEquals(BeatGridCacheRead.Available(unavailable), it.loadBeatGrid(unavailableKey))
+            it.close()
+        }
+    }
+
+    @Test
+    fun rejectsRegionsInconsistentWithObservedEvents() {
+        val key = AnalysisKey("beat-regions-invalid", 1, "content://media/beat-regions-invalid")
+        val record = beatRecord(key)
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            record.copy(result = record.result.copy(regions = beatRegions(record.window, emptyList())))
         }
     }
 

@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from beat_evaluation import match_beats, metrics, read_reference, reference_interpretation
+from beat_evaluation import match_beat_indices, match_beats, metrics, read_reference, reference_interpretation
 
 
 class BeatEvaluationTest(unittest.TestCase):
@@ -18,6 +18,9 @@ class BeatEvaluationTest(unittest.TestCase):
         self.assertIsNone(metrics(0, 0, [])["f_measure"])
         self.assertEqual(0, metrics(0, 2, [])["recall"])
         self.assertIsNone(metrics(0, 2, [])["precision"])
+
+    def test_match_indices_label_duplicate_events_only_once(self):
+        self.assertEqual([(0, 0, 0)], match_beat_indices([100000, 100000], [100000]))
 
     def test_interpretations_and_out_of_tolerance(self):
         self.assertEqual("PRIMARY", reference_interpretation(120, 120))

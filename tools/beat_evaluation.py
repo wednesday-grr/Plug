@@ -16,8 +16,8 @@ TOLERANCE_US = 70000
 TEMPO_RELATIVE_TOLERANCE = 0.04
 
 
-def match_beats(detected, reference, tolerance=TOLERANCE_US):
-    """Earliest compatible one-to-one match; unmatched and duplicate events count as errors."""
+def match_beat_indices(detected, reference, tolerance=TOLERANCE_US):
+    """Return one-to-one indices and errors using earliest compatible events."""
     i = j = 0
     errors = []
     while i < len(detected) and j < len(reference):
@@ -27,10 +27,15 @@ def match_beats(detected, reference, tolerance=TOLERANCE_US):
         elif delta > tolerance:
             j += 1
         else:
-            errors.append(abs(delta))
+            errors.append((i, j, abs(delta)))
             i += 1
             j += 1
     return errors
+
+
+def match_beats(detected, reference, tolerance=TOLERANCE_US):
+    """Earliest compatible one-to-one match; unmatched and duplicate events count as errors."""
+    return [error for _, _, error in match_beat_indices(detected, reference, tolerance)]
 
 
 def metrics(detected_count, reference_count, errors):
@@ -115,13 +120,21 @@ def evaluate(manifest_path, output_path):
     all_errors = []
     totals = [0, 0]
     for index, (track, row) in enumerate(zip(tracks, rows)):
-        if len(row) not in (9, 10, 11) or int(row[0]) != index:
+        if len(row) not in (9, 10, 11, 12) or int(row[0]) != index:
             raise ValueError("Evaluation runner returned a malformed or unordered result")
         duration_us = int(row[1]) * 1000000 // RATE
         reference = read_reference(track, duration_us)
         unavailable = row[7] == "unavailable"
         detected = [] if unavailable or not row[7] else [int(t) for t in row[7].split(",")]
-        errors = match_beats(detected, reference)
+        matches = match_beat_indices(detected, reference)
+        errors = [error for _, _, error in matches]
+        matched_indices = {match[0] for match in matches}
+        scores = ([float(value) if value else None for value in row[11].split(",")]
+                  if len(row) == 12 and row[11] else [None] * len(detected))
+        if len(scores) != len(detected) or any(
+                score is not None and (not math.isfinite(score) or not 0 <= score <= 1)
+                for score in scores):
+            raise ValueError(f"{track['id']}: invalid event scores")
         all_errors.extend(errors)
         totals[0] += len(detected)
         totals[1] += len(reference)
@@ -143,7 +156,13 @@ def evaluate(manifest_path, output_path):
                         "interpretation_correct": selected == expected if expected else None,
                         "ambiguous": row[5] == "true", "unavailable": unavailable,
                         "algorithm_version": row[8],
-                        "configuration_version": row[10] if len(row) == 11 else None,
+                        "configuration_version": row[10] if len(row) >= 11 else None,
+                        "events": [
+                            {"timestamp_us": timestamp, "score": score,
+                             "matched": event_index in matched_indices}
+                            for event_index, (timestamp, score) in enumerate(zip(
+                                detected, scores))
+                        ],
                         **metrics(len(detected), len(reference), errors)})
     def accuracy(subset):
         return sum(r["interpretation_correct"] for r in subset) / len(subset) if subset else None

@@ -138,6 +138,49 @@ data class DetectedBeatEvent(
     }
 }
 
+enum class BeatRegionObservation { CONSECUTIVE_OBSERVED_EVENTS, NO_CONSECUTIVE_EVENTS }
+
+/**
+ * Describes observed event spacing only. It is not a reliability classification, a probability
+ * of a beat match, or an estimate of reference-beat coverage.
+ */
+data class BeatRegionEvidence(
+    val window: AnalysisWindow,
+    val observation: BeatRegionObservation,
+)
+
+/** Partitions the window without interpolating events or assigning reliability to gaps. */
+fun beatRegions(window: AnalysisWindow, events: List<DetectedBeatEvent>): List<BeatRegionEvidence> {
+    require(events.all { it.sourceTimeUs in window.startUs..window.endUs })
+    require(events.zipWithNext().all { (a, b) ->
+        a.index < b.index && a.sourceTimeUs < b.sourceTimeUs
+    })
+    val regions = mutableListOf<BeatRegionEvidence>()
+    fun add(start: Long, end: Long, observation: BeatRegionObservation) {
+        if (start == end && window.startUs != window.endUs) return
+        val last = regions.lastOrNull()
+        if (last != null && last.observation == observation && last.window.endUs == start) {
+            regions[regions.lastIndex] = last.copy(window = AnalysisWindow(last.window.startUs, end))
+        } else {
+            regions.add(BeatRegionEvidence(AnalysisWindow(start, end), observation))
+        }
+    }
+    if (events.isEmpty()) {
+        add(window.startUs, window.endUs, BeatRegionObservation.NO_CONSECUTIVE_EVENTS)
+    } else {
+        add(window.startUs, events.first().sourceTimeUs, BeatRegionObservation.NO_CONSECUTIVE_EVENTS)
+        events.zipWithNext().forEach { (first, second) ->
+            add(first.sourceTimeUs, second.sourceTimeUs,
+                if (first.index != Long.MAX_VALUE && second.index == first.index + 1)
+                    BeatRegionObservation.CONSECUTIVE_OBSERVED_EVENTS
+                else BeatRegionObservation.NO_CONSECUTIVE_EVENTS)
+        }
+        add(events.last().sourceTimeUs, window.endUs, BeatRegionObservation.NO_CONSECUTIVE_EVENTS)
+    }
+    if (regions.isEmpty()) add(window.startUs, window.endUs, BeatRegionObservation.NO_CONSECUTIVE_EVENTS)
+    return regions
+}
+
 /** An empty event list is a valid result and differs from a null (unavailable) grid. */
 data class DetectedBeatGridEvidence(
     val events: List<DetectedBeatEvent>,
@@ -168,6 +211,7 @@ data class BeatGridCacheRecord(
     init {
         require(sourceIdentity.isNotBlank() && configurationVersion.isNotBlank() && algorithmVersion.isNotBlank())
         require(timeline.identity == sourceIdentity)
+        require(result.regions.isEmpty() || result.regions == beatRegions(window, result.grid?.events.orEmpty()))
         result.grid?.let {
             require(it.window == window && it.timeline == timeline)
             require(it.algorithmVersion == algorithmVersion)

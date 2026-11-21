@@ -78,6 +78,9 @@ class BeatEvaluationRunnerTest {
                         "${it.interpretation.name},${it.bpm},${it.support}"
                     },
                     TrackDspAnalyzer.BEAT_ANALYSIS_CONFIG_VERSION,
+                    tracking.grid?.events?.joinToString(",") {
+                        it.musicalBeatConfidence?.toString() ?: ""
+                    } ?: "",
                 ).joinToString("\t"))
                 writer.newLine()
             }

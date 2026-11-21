@@ -255,7 +255,9 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                     if (cursor.isNull(12)) null else cursor.getLong(12),
                 )
                 val window = AnalysisWindow(cursor.getLong(3), cursor.getLong(4))
-                val hypotheses = JSONArray(cursor.getString(19)).let { array ->
+                val metadata = cursor.getString(19)
+                val metadataObject = if (metadata.trimStart().startsWith("{")) JSONObject(metadata) else null
+                val hypotheses = (metadataObject?.getJSONArray("hypotheses") ?: JSONArray(metadata)).let { array ->
                     List(array.length()) { index ->
                         val value = array.getJSONObject(index)
                         BeatTempoHypothesis(
@@ -265,6 +267,15 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                         )
                     }
                 }
+                val regions = metadataObject?.getJSONArray("regions")?.let { array ->
+                    List(array.length()) { index ->
+                        val value = array.getJSONObject(index)
+                        BeatRegionEvidence(
+                            AnalysisWindow(value.getLong("startUs"), value.getLong("endUs")),
+                            BeatRegionObservation.valueOf(value.getString("observation")),
+                        )
+                    }
+                }.orEmpty()
                 val grid = if (cursor.isNull(20)) null else {
                     val array = JSONArray(cursor.getString(20))
                     val events = List(array.length()) { index ->
@@ -290,6 +301,7 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
                     cursor.getString(15)?.let(BeatTempoInterpretation::valueOf),
                     cursor.getInt(16) != 0,
                     cursor.getString(14),
+                    regions,
                 )
                 val record = BeatGridCacheRecord(
                     key.uri, configurationVersion, result, window, timeline, cursor.getString(0),
@@ -338,12 +350,21 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
             else put("musical_beat_confidence", grid.musicalBeatConfidence.toDouble())
             if (grid?.downbeatConfidence == null) putNull("downbeat_confidence")
             else put("downbeat_confidence", grid.downbeatConfidence.toDouble())
-            put("hypotheses_json", JSONArray().apply {
+            val hypotheses = JSONArray().apply {
                 record.result.hypotheses.forEach { hypothesis ->
                     put(JSONObject().put("interpretation", hypothesis.interpretation.name)
                         .put("bpm", hypothesis.bpm).put("support", hypothesis.support.toDouble()))
                 }
-            }.toString())
+            }
+            val regions = JSONArray().apply {
+                record.result.regions.forEach { region ->
+                    put(JSONObject().put("startUs", region.window.startUs)
+                        .put("endUs", region.window.endUs)
+                        .put("observation", region.observation.name))
+                }
+            }
+            put("hypotheses_json", JSONObject().put("hypotheses", hypotheses)
+                .put("regions", regions).toString())
             if (grid == null) putNull("events_json") else put("events_json", JSONArray().apply {
                 grid.events.forEach { event ->
                     put(JSONObject().put("index", event.index).put("sourceTimeUs", event.sourceTimeUs)

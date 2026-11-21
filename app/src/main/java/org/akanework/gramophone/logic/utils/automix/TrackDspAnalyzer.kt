@@ -44,7 +44,7 @@ data class TrackBeatAnalysis(val analysis: TrackAnalysis, val tracking: BeatTrac
 /** Offline analysis; beat grids describe only the analyzed window, not a bar or a whole song. */
 object TrackDspAnalyzer {
     const val SAMPLE_RATE = 11025
-    const val BEAT_ANALYSIS_CONFIG_VERSION = "track-dsp-beat-config-v2-local-interval"
+    const val BEAT_ANALYSIS_CONFIG_VERSION = "track-dsp-beat-config-v3-observation-regions"
     private const val FFT_SIZE = 2048
     private const val HOP = 256
     private val major = doubleArrayOf(6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
@@ -69,7 +69,13 @@ object TrackDspAnalyzer {
         require(samples.all { it.isFinite() })
         val endMs = startMs + samples.size.toLong() * 1000 / SAMPLE_RATE
         if (samples.size < FFT_SIZE * 4) return TrackAnalysis(null, null, null, 0f, startMs, endMs) to
-            timeline?.let { BeatTrackingResult(null, emptyList(), null, false, "Analysis window is too short") }
+            timeline?.let {
+                val startUs = SourceTime.millisecondsToMicros(startMs)
+                val durationUs = SourceTime.framesToMicros(samples.size.toLong(), SAMPLE_RATE)
+                require(startUs <= Long.MAX_VALUE - durationUs)
+                BeatTrackingResult(null, emptyList(), null, false, "Analysis window is too short",
+                    beatRegions(AnalysisWindow(startUs, startUs + durationUs), emptyList()))
+            }
         val count = 1 + (samples.size - FFT_SIZE) / HOP
         val flux = DoubleArray(count)
         val chroma = DoubleArray(12)
