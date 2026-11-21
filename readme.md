@@ -1,6 +1,6 @@
-# Plug v2.0.0-preview — Next-Gen AutoMix & DSP Engine
+# Plug v2.0.1-preview — Next-Gen AutoMix & DSP Engine
 
-**Plug v2.0.0-preview** introduces a major architectural overhaul to the local audio playback and **AutoMix** engine (Phases A–E). This preview release brings intelligent transition curves, BS.1770 loudness normalization, automatic gain control, bass boost, and energy-aware overlap scaling—all backed by a deterministic parameter arbitration system and transparent UI explanations.
+**Plug v2.0.1-preview** introduces a major architectural overhaul to the local audio playback and **AutoMix** engine (Phases A–E). This preview release brings intelligent transition curves, BS.1770 loudness normalization, automatic gain control, bass boost, and energy-aware overlap scaling—all backed by a deterministic parameter arbitration system and transparent UI explanations.
 
 > **⚠️ Preview Notice:** All 358 unit tests pass across synthetic and real-PCM signals. However, this build is currently in a **partially implemented** state awaiting final on-device acoustic tuning and verification.
 
