@@ -334,7 +334,7 @@ class FullBottomSheet
         bottomSheetPlaylistButton = findViewById(R.id.playlist)
         bottomSheetLyricButton = findViewById(R.id.lyrics)
         bottomSheetFullQualityDetails = findViewById(R.id.quality_details)
-        findViewById<MaterialButton>(R.id.transition_info).setOnClickListener {
+        findViewById<MaterialButton?>(R.id.transition_info)?.setOnClickListener {
             transitionInfoSheet?.dismiss()
             transitionInfoSheet = AudioQualityInfoBottomSheet(wrappedContext ?: context, { instance }).also { sheet ->
                 sheet.show()
