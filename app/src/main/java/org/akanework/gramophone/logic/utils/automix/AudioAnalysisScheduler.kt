@@ -212,6 +212,8 @@ class AudioAnalysisScheduler(
                                     currentCoroutineContext().ensureActive()
                                     cache.store(next.key, result)
                                 }
+                                if (analyze == null) measureLoudnessIfMissing(next.item, next.key)
+                                if (analyze == null) measureEnergyIfMissing(next.item, next.key)
                                 failures.remove(next.key)
                             }
                         } catch (e: CancellationException) {
@@ -424,6 +426,45 @@ class AudioAnalysisScheduler(
         beatOwnerRequests.values.any { it.key == key }
     }
 
+    /**
+     * Loudness comes from a full-band 60 s window of the middle of the track, not the whole track. Failure is
+     * non-fatal: playback then treats loudness as unavailable.
+     */
+    private suspend fun measureLoudnessIfMissing(item: MediaItem, key: AnalysisKey) {
+        try {
+            if (cache.loadLoudness(key) != null) return
+            val uri = checkNotNull(item.localConfiguration).uri
+            val window = decoder.decodeFullBand(uri)
+            val measured = LoudnessMeter.measure(window.samples, window.sampleRate, window.channels)
+            currentCoroutineContext().ensureActive()
+            cache.storeLoudness(key, measured ?: MeasuredLoudness(
+                null, null, null, window.samples.size / window.channels / window.sampleRate.toFloat(),
+                window.sampleRate / 2f))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("AudioAnalysis", "Loudness measurement failed for ${key.mediaId}", e)
+        }
+    }
+
+    private suspend fun measureEnergyIfMissing(item: MediaItem, key: AnalysisKey) {
+        try {
+            if (cache.loadEnergy(key) != null) return
+            val uri = checkNotNull(item.localConfiguration).uri
+            val start = decoder.decode(uri, TrackPcmDecoder.Region.START)
+            val end = decoder.decode(uri, TrackPcmDecoder.Region.END)
+            currentCoroutineContext().ensureActive()
+            cache.storeEnergy(key, TrackEnergy(
+                EnergyAnalyzer.analyze(start.samples, TrackDspAnalyzer.SAMPLE_RATE, start.startMs),
+                EnergyAnalyzer.analyze(end.samples, TrackDspAnalyzer.SAMPLE_RATE, end.startMs),
+                end.durationMs,
+            ))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("AudioAnalysis", "Energy analysis failed for ${key.mediaId}", e)
+        }
+    }
     private suspend fun analyzeBeatGrid(item: MediaItem, key: AnalysisKey): BeatGridCacheRecord {
         val uri = checkNotNull(item.localConfiguration).uri
         val decoded = decoder.decode(uri)

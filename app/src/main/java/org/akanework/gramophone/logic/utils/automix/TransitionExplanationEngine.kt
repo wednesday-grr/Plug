@@ -32,9 +32,16 @@ internal enum class EffectDecisionReason {
     BPM_CANDIDATE_OUT_OF_RANGE,
     LOOP_GRID_UNAVAILABLE,
     LOOP_FALLBACK_CROSSFADE,
+    LOUDNESS_MATCH_APPLIED,
+    LOUDNESS_DATA_UNAVAILABLE,
+    LOUDNESS_WITHIN_DEADBAND,
+    LOUDNESS_SOURCES_NOT_COMPARABLE,
     LOOP_TRANSITION_READY,
     BEAT_JUMP_REJECTED,
     BEAT_LOOP_REJECTED,
+    ENERGY_MATCH_APPLIED,
+    ENERGY_WITHIN_THRESHOLD,
+    ENERGY_DATA_UNAVAILABLE,
 }
 
 internal enum class EffectSelectionStatus { SELECTED, SKIPPED }
@@ -172,8 +179,12 @@ internal object TransitionExplanationEngine {
         additionalEffects: Set<String>,
     ): List<EffectSelectionExplanation> =
         (if (style != "vinyl_brake") listOf(EffectSelectionExplanation(
-            "crossfade", EffectSelectionStatus.SELECTED,
-            listOf(EffectDecisionReason.CROSSFADE_BASE_TRANSITION), EffectExecutionStatus.PLANNED
+            if (style == "exponential_fade" || style == "s_curve_fade") style else "crossfade",
+            EffectSelectionStatus.SELECTED,
+            listOf(
+                if (style == "exponential_fade" || style == "s_curve_fade")
+                    EffectDecisionReason.USER_PRESET else EffectDecisionReason.CROSSFADE_BASE_TRANSITION
+            ), EffectExecutionStatus.PLANNED
         )) else emptyList()) + plan.effects.map { scheduled ->
             val effect = scheduled.effect
             val reasons = if (effect.id == style) {

@@ -57,6 +57,8 @@ class PlugRenderFactory(
     }
     val replayGainAudioProcessor = ReplayGainAudioProcessor()
     val djTransitionAudioProcessor = DjTransitionAudioProcessor(forcePcm16Output = pcmMixing)
+    val agcAudioProcessor = org.akanework.gramophone.logic.utils.automix.AgcAudioProcessor()
+    val bassBoostAudioProcessor = org.akanework.gramophone.logic.utils.automix.BassBoostAudioProcessor()
     private var audioSinkCreated = false
 
     override fun buildTextRenderers(
@@ -127,6 +129,7 @@ class PlugRenderFactory(
         val rgAp = replayGainAudioProcessor
         val sonic = if (pcmMixing) SonicAudioProcessor() else null
         val pcmTap = onPcmTransient?.let(::PcmTransientAudioProcessor)
+        val declick = org.akanework.gramophone.logic.utils.automix.SeekDeclickAudioProcessor()
         val builder = DefaultAudioSink.Builder(context)
         val aop = PostAmpAudioOutputProvider(
             ExtendedAudioOutputProvider(AudioTrackAudioOutputProvider.Builder(context)
@@ -140,8 +143,8 @@ class PlugRenderFactory(
                 rgAp.setRootFormat(inputFormat)
                 return when {
                     sonic == null -> arrayOf(rgAp)
-                    pcmTap == null -> arrayOf(rgAp, djTransitionAudioProcessor, sonic)
-                    else -> arrayOf(pcmTap, rgAp, djTransitionAudioProcessor, sonic)
+                    pcmTap == null -> arrayOf(rgAp, agcAudioProcessor, bassBoostAudioProcessor, djTransitionAudioProcessor, declick, sonic)
+                    else -> arrayOf(pcmTap, rgAp, agcAudioProcessor, bassBoostAudioProcessor, djTransitionAudioProcessor, declick, sonic)
                 }
             }
 

@@ -1033,13 +1033,20 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         } else if (key == "automix_beatmatch_enabled" || key == "automix_duration_sec" ||
             key == "automix_transition_style" || key == "automix_duration_auto" ||
             key == "automix_max_skip_sec" || key == "automix_additional_effects" ||
-            key == "automix_effect_intensity"
+            key == "automix_effect_intensity" || key == "automix_loop_transition_beats" ||
+            key == "automix_fade_curve_intensity" || key == "automix_loudness_matching" ||
+            key == "automix_agc" || key == "automix_bass_boost" ||
+            key == "automix_bass_boost_gain_db" || key == "automix_bass_boost_frequency_hz" ||
+            key == "automix_energy_matching"
         ) {
             automixSettings.settings.value.let { settings ->
                 automixPlayer?.updateAutomixConfig(
                     settings.enabled, settings.beatmatchEnabled, settings.durationSeconds,
                     settings.transitionStyle, settings.automaticDuration, settings.maxSkipSeconds,
-                    settings.additionalEffects, settings.effectIntensityPercent
+                    settings.additionalEffects, settings.effectIntensityPercent,
+                    settings.loopTransitionBeats, settings.fadeCurveIntensityPercent,
+                    settings.loudnessMatchingEnabled, settings.agcEnabled, settings.bassBoost,
+                    settings.energyMatchingEnabled
                 )
             }
         } else if (key == "offload") {
@@ -1217,7 +1224,8 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 newAutomix.updateAutomixConfig(
                     it.enabled, it.beatmatchEnabled, it.durationSeconds, it.transitionStyle,
                     it.automaticDuration, it.maxSkipSeconds, it.additionalEffects,
-                    it.effectIntensityPercent
+                    it.effectIntensityPercent, it.loopTransitionBeats, it.fadeCurveIntensityPercent,
+                    it.loudnessMatchingEnabled, it.agcEnabled, it.bassBoost, it.energyMatchingEnabled
                 )
             }
             newAutomix.onActiveDeckChanged = { outgoing, incoming ->

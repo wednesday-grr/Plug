@@ -129,6 +129,37 @@ class AutomixSettingsTest {
         assertEquals(100, store.settings.value.effectIntensityPercent)
     }
 
+    @Test
+    fun loopTransitionBeatsDefaultsPersistsAndRejectsUnsupportedValues() {
+        val prefs = preferences()
+        val store = AutomixSettingsStore(prefs)
+        assertEquals(4, store.settings.value.loopTransitionBeats)
+        for (beats in listOf(1, 2, 4, 8, 16)) {
+            prefs.edit().putString("automix_loop_transition_beats", beats.toString()).commit()
+            store.onPreferenceChanged("automix_loop_transition_beats")
+            assertEquals(beats, store.settings.value.loopTransitionBeats)
+        }
+        for (bad in listOf("3", "0", "32", "abc")) {
+            prefs.edit().putString("automix_loop_transition_beats", bad).commit()
+            store.onPreferenceChanged("automix_loop_transition_beats")
+            assertEquals(4, store.settings.value.loopTransitionBeats)
+        }
+    }
+
+    @Test
+    fun loudnessMatchingAndAgcDefaultOffAndPersist() {
+        val prefs = preferences()
+        val store = AutomixSettingsStore(prefs)
+        assertEquals(false, store.settings.value.loudnessMatchingEnabled)
+        assertEquals(false, store.settings.value.agcEnabled)
+        prefs.edit().putBoolean("automix_loudness_matching", true).putBoolean("automix_agc", true).commit()
+        store.onPreferenceChanged("automix_loudness_matching")
+        assertEquals(true, store.settings.value.loudnessMatchingEnabled)
+        store.onPreferenceChanged("automix_agc")
+        assertEquals(true, store.settings.value.agcEnabled)
+        assertEquals(store.settings.value, AutomixSettingsStore(prefs).settings.value)
+    }
+
     private fun preferences(): SharedPreferences =
         RuntimeEnvironment.getApplication().getSharedPreferences(
             "automix-test", Context.MODE_PRIVATE

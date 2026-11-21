@@ -261,6 +261,8 @@ class AutomixPlayer private constructor(
     private var activeTransitionStyle = "auto"
     private var additionalEffects: Set<String> = emptySet()
     private var effectIntensity = 100
+    private var loopTransitionBeats = LOOP_TRANSITION_BEATS
+    private var fadeCurveIntensity = FadeCurveSettings.DEFAULT_INTENSITY_PERCENT
     private var activeEffectPlan = TransitionEffectPlan.create("smooth", emptySet())
     private var lastEffectIds: List<String> = emptyList()
     private val mutableTransitionExplanation = MutableStateFlow<TransitionAnalysisSnapshot?>(null)
@@ -286,6 +288,14 @@ class AutomixPlayer private constructor(
     private var echoDelayMs = DEFAULT_ECHO_DELAY_MS
     private var activeFadeDurationMs = 0L
     private var transitionProgress = 0f
+    private var loudnessMatchingEnabled = false
+    private var agcEnabled = false
+    private var bassBoost = BassBoostSettings.OFF
+    private var energyMatchingEnabled = false
+    private var energyPlanKey: Pair<String, String>? = null
+    private var energyPlan: EnergyMatchPlan? = null
+    private var loudnessPlan: LoudnessMatchPlan? = null
+    private var loudnessPlanOutgoingIsDeckA = true
     private var transitionStartActiveFrames = 0L
     private var transitionStartStandbyFrames = 0L
     private var durationMs = 5000L
@@ -337,6 +347,7 @@ class AutomixPlayer private constructor(
         assertThread()
         val first = decks.factoryA.replayGainAudioProcessor.applySettings(settings)
         val second = decks.factoryB.replayGainAudioProcessor.applySettings(settings)
+        applyVolumes()
         return first && second
     }
 
@@ -344,6 +355,7 @@ class AutomixPlayer private constructor(
         assertThread()
         val first = decks.factoryA.replayGainAudioProcessor.setMode(mode, doNotNotifyListener)
         val second = decks.factoryB.replayGainAudioProcessor.setMode(mode, doNotNotifyListener)
+        applyVolumes()
         return first && second
     }
 
@@ -645,21 +657,41 @@ class AutomixPlayer private constructor(
         maxSkipSeconds: Int = 15,
         additionalEffects: Set<String> = emptySet(),
         effectIntensityPercent: Int = 100,
+        loopTransitionBeats: Int = LOOP_TRANSITION_BEATS,
+        fadeCurveIntensityPercent: Int = FadeCurveSettings.DEFAULT_INTENSITY_PERCENT,
+        loudnessMatchingEnabled: Boolean = false,
+        agcEnabled: Boolean = false,
+        bassBoost: BassBoostSettings = BassBoostSettings.OFF,
+        energyMatchingEnabled: Boolean = false,
     ) {
         assertThread()
+        require(fadeCurveIntensityPercent in 0..100)
+        require(loopTransitionBeats in BeatLoopIntervals.supported)
         require(durationSec in 1..30)
         require(maxSkipSeconds in 0..30)
         require(additionalEffects.all { it in TransitionEffectPlan.selectableIds })
         require(effectIntensityPercent in 0..100)
         require(transitionStyle in setOf(
             "auto", "smooth", "vinyl_brake", "bass_swap", "filter_sweep", "echo_out",
-            "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise", "loop_transition"
+            "high_pass_intro", "reverb_tail", "tremolo_fade", "fade", "rise", "loop_transition",
+            "exponential_fade", "s_curve_fade"
         ))
         if (this.enabled != enabled || this.beatmatchEnabled != beatmatchEnabled ||
             durationMs != durationSec * 1000L || this.transitionStyle != transitionStyle ||
             this.automaticDuration != automaticDuration || maxSkipMs != maxSkipSeconds * 1000L ||
-            this.additionalEffects != additionalEffects || effectIntensity != effectIntensityPercent
-        ) cancelTransition()
+            this.additionalEffects !=             additionalEffects || effectIntensity != effectIntensityPercent ||
+                        this.loopTransitionBeats != loopTransitionBeats ||
+                        fadeCurveIntensity != fadeCurveIntensityPercent ||
+                        this.loudnessMatchingEnabled != loudnessMatchingEnabled ||
+                        this.agcEnabled != agcEnabled ||
+                        this.energyMatchingEnabled != energyMatchingEnabled
+                    ) cancelTransition()
+                    this.loudnessMatchingEnabled = loudnessMatchingEnabled
+                    this.agcEnabled = agcEnabled
+                    this.bassBoost = bassBoost
+                    this.energyMatchingEnabled = energyMatchingEnabled
+                    this.fadeCurveIntensity = fadeCurveIntensityPercent
+                    this.loopTransitionBeats = loopTransitionBeats
         this.enabled = enabled
         this.beatmatchEnabled = beatmatchEnabled
         durationMs = durationSec * 1000L
@@ -668,6 +700,7 @@ class AutomixPlayer private constructor(
         maxSkipMs = maxSkipSeconds * 1000L
         this.additionalEffects = additionalEffects.toSet()
         effectIntensity = effectIntensityPercent
+        applyVolumes()
     }
 
     override fun setAudioAttributes(audioAttributes: AudioAttributes, handleAudioFocus: Boolean) {
@@ -908,14 +941,52 @@ class AutomixPlayer private constructor(
         super.setPlaybackSpeed(speed)
     }
 
+    /** Bass Boost is share-weighted by deck gain during overlap so two boosted tracks never stack their lows. */
+    private fun applyBassBoost() {
+        val activeIsA = transition.activeDeck == DeckTransition.Deck.A
+        val fading = transition.phase == DeckTransition.Phase.FADING
+        val total = activeGain + standbyGain
+        val activeMix = when {
+            !enabled || !bassBoost.enabled -> 0f
+            fading && total > 1e-4f -> (activeGain / total).coerceIn(0f, 1f)
+            else -> 1f
+        }
+        val standbyMix = if (!enabled || !bassBoost.enabled) 0f
+        else if (fading && total > 1e-4f) (standbyGain / total).coerceIn(0f, 1f) else 0f
+        for (factory in listOf(decks.factoryA, decks.factoryB)) {
+            factory.bassBoostAudioProcessor.configureBoost(bassBoost.gainDb, bassBoost.frequencyHz)
+        }
+        val activeFactory = if (activeIsA) decks.factoryA else decks.factoryB
+        val standbyFactory = if (activeIsA) decks.factoryB else decks.factoryA
+        activeFactory.bassBoostAudioProcessor.setMix(activeMix)
+        standbyFactory.bassBoostAudioProcessor.setMix(standbyMix)
+    }
+
     private fun applyVolumes() {
+        for (factory in listOf(decks.factoryA, decks.factoryB)) {
+            factory.agcAudioProcessor.setEnabled(
+                enabled && agcEnabled && !loudnessMatchingEnabled &&
+                    factory.replayGainAudioProcessor.mode == ReplayGainUtil.Mode.None
+            )
+        }
+        applyBassBoost()
         val outputGain = if (transition.phase == DeckTransition.Phase.FADING) {
             AutomixMath.overlapHeadroom(transitionProgress)
         } else 1f
         decks.factoryA.djTransitionAudioProcessor.setOutputGain(outputGain)
         decks.factoryB.djTransitionAudioProcessor.setOutputGain(outputGain)
-        active.volume = userVolume * focusVolume * activeGain
-        standby.volume = userVolume * focusVolume * standbyGain
+        var activeTrim = 1f
+        var standbyTrim = 1f
+        val plan = loudnessPlan
+        if (plan != null && transition.phase == DeckTransition.Phase.FADING) {
+            val activeIsOutgoing = (transition.activeDeck == DeckTransition.Deck.A) == loudnessPlanOutgoingIsDeckA
+            val outgoingTrim = LoudnessMatcher.outgoingTrim(plan.outgoingGain, transitionProgress)
+            val incomingTrim = LoudnessMatcher.incomingTrim(plan.incomingGain, transitionProgress)
+            activeTrim = if (activeIsOutgoing) outgoingTrim else incomingTrim
+            standbyTrim = if (activeIsOutgoing) incomingTrim else outgoingTrim
+        }
+        active.volume = userVolume * focusVolume * activeGain * activeTrim
+        standby.volume = userVolume * focusVolume * standbyGain * standbyTrim
     }
 
     private fun recordTransient(isA: Boolean, event: PcmTransientAudioProcessor.Transient) {
@@ -966,6 +1037,7 @@ class AutomixPlayer private constructor(
             clearBeatLoop("Playback operation cancelled the Beat Loop.")
         }
         releaseGainOwnership()
+        loudnessPlan = null
         observedExecutionEffects.clear()
         mutableRuntimeTelemetry.value = null
         decks.factoryA.djTransitionAudioProcessor.bypass()
@@ -1175,6 +1247,14 @@ class AutomixPlayer private constructor(
             } else {
                 val gains = when (activeTransitionStyle) {
                     "fade" -> AutomixMath.Volumes(1f - progress, progress)
+                    "exponential_fade" -> complementaryFadeGains(
+                        VolumeCurve.Exponential(FadeCurveSettings.exponentialStrength(fadeCurveIntensity)),
+                        progress
+                    )
+                    "s_curve_fade" -> complementaryFadeGains(
+                        VolumeCurve.SCurve(FadeCurveSettings.sCurveSteepness(fadeCurveIntensity)),
+                        progress
+                    )
                     "rise" -> AutomixMath.equalPower(progress * progress)
                     else -> AutomixMath.equalPower(progress)
                 }
@@ -1253,7 +1333,7 @@ class AutomixPlayer private constructor(
         if (activeTransitionStyle == "loop_transition") {
             if (loopTransitionRegion == null && !loopTransitionReplayed) {
                 loopTransitionRegion = beatGrid(outgoing, active)?.loopRegionEndingBefore(
-                    active.currentPosition, plannedEnd, LOOP_TRANSITION_BEATS, active.duration
+                    active.currentPosition, plannedEnd, loopTransitionBeats, active.duration
                 )
                 if (loopTransitionRegion == null) {
                     loopTransitionFallbackReason = EffectDecisionReason.LOOP_GRID_UNAVAILABLE
@@ -1275,7 +1355,7 @@ class AutomixPlayer private constructor(
                             beatIndex = loopTransitionRegion?.startBeatIndex,
                             loopStartMs = loopTransitionRegion?.startMs,
                             loopEndMs = loopTransitionRegion?.endMs,
-                            reason = "Prepared a ${LOOP_TRANSITION_BEATS}-beat outgoing loop.",
+                            reason = "Prepared a ${loopTransitionBeats}-beat outgoing loop.",
                             timingLimitation = LoopBoundaryScheduler.TIMING_LIMITATION,
                         )
                     )
@@ -1304,6 +1384,9 @@ class AutomixPlayer private constructor(
         var requestedFadeDuration = if (automaticDuration) {
             AutomixMath.automaticDurationMs(outBpm)
         } else durationMs
+        if (activeTransitionStyle != "loop_transition") {
+            requestedFadeDuration = (requestedFadeDuration * currentEnergyScale()).toLong()
+        }
         if (activeTransitionStyle == "loop_transition") {
             requestedFadeDuration = requestedFadeDuration.coerceAtMost(
                 checkNotNull(loopTransitionRegion).durationMs
@@ -1380,6 +1463,8 @@ class AutomixPlayer private constructor(
         if (activeTransitionStyle == "tremolo_fade") {
             tremoloBpm = outBpm?.takeIf { it.isFinite() && it in 30f..300f } ?: 120f
         }
+        val loudnessExplanation = planLoudnessMatching()
+        val energyExplanation = energyExplanation()
         applyEffectPlan(0f)
         activeFadeDurationMs = fadeDuration
         transitionProgress = 0f
@@ -1421,12 +1506,18 @@ class AutomixPlayer private constructor(
                 effects = TransitionExplanationEngine.explain(activeEffectPlan, activeTransitionStyle,
                     automaticDecision?.reasons, additionalEffects) +
                     listOfNotNull(pendingBeatmatchExplanation) +
-                    listOfNotNull(loopTransitionExplanation()),
+                    listOfNotNull(loopTransitionExplanation(), loudnessExplanation, energyExplanation),
             )
             gainOwnershipRegistry.beginGeneration(generation)
             gainOwnershipGeneration = generation
             if (activeTransitionStyle != "vinyl_brake") {
-                gainOwnershipRegistry.claim(AutoMixEffect.CROSSFADE, generation)
+                gainOwnershipRegistry.claim(
+                    when (activeTransitionStyle) {
+                        "exponential_fade" -> AutoMixEffect.EXPONENTIAL_FADE
+                        "s_curve_fade" -> AutoMixEffect.S_CURVE_FADE
+                        else -> AutoMixEffect.CROSSFADE
+                    }, generation
+                )
             } else {
                 gainOwnershipRegistry.claim(AutoMixEffect.VINYL_BRAKE, generation)
             }
@@ -1447,6 +1538,9 @@ class AutomixPlayer private constructor(
                     "Loop Transition is incompatible with the active crossfade."
                 }
                 gainOwnershipRegistry.claim(AutoMixEffect.LOOP_TRANSITION, generation)
+            }
+            if (loudnessPlan?.applied == true) {
+                gainOwnershipRegistry.claim(AutoMixEffect.LOUDNESS_MATCHING, generation)
             }
             activeEffectPlan.effects.forEach { scheduled ->
                 gainOwnershipRegistry.claim(
@@ -1558,6 +1652,7 @@ class AutomixPlayer private constructor(
         loopTransitionReplayed = false
         loopTransitionFallbackReason = null
         bpmMatchEvaluation = null
+        loudnessPlan = null
         applyVolumes()
         onActiveDeckChanged?.invoke(outgoing, incoming)
         forwarding.handoff(incoming)
@@ -1594,6 +1689,9 @@ class AutomixPlayer private constructor(
                         AutomixMath.rampSpeed(matchedSpeed, transitionProgress)
                 ) < 0.0001f
             val envelopeEffect = effect.effectId == "crossfade" ||
+                (effect.effectId == AutoMixEffect.LOUDNESS_MATCHING.id && loudnessPlan?.applied == true) ||
+                (effect.effectId == activeTransitionStyle &&
+                    effect.effectId in setOf("exponential_fade", "s_curve_fade")) ||
                 (effect.effectId == AutoMixEffect.LOOP_TRANSITION.id &&
                     activeTransitionStyle == "loop_transition") ||
                 (effect.effectId == "rise" && activeTransitionStyle == "rise")
@@ -1654,6 +1752,94 @@ class AutomixPlayer private constructor(
         "echo_out" -> setOf(TransitionProcessorEffect.ECHO)
         "reverb_tail" -> setOf(TransitionProcessorEffect.REVERB)
         else -> emptySet()
+    }
+
+    private fun trackLoudness(player: ExoPlayer, deckIsA: Boolean): TrackLoudness {
+        val key = player.currentMediaItem?.let(AnalysisKey::from)
+        val measured = key?.let { decks.analysisCache?.peekLoudness(it) }
+        val processor = if (deckIsA) decks.factoryA.replayGainAudioProcessor
+            else decks.factoryB.replayGainAudioProcessor
+        return TrackLoudness(measured = measured, replayGainAppliedDb = processor.appliedGainDb)
+    }
+
+    /** Plans loudness matching for the transition that is starting; returns its explanation entry. */
+    private fun planLoudnessMatching(): EffectSelectionExplanation? {
+        loudnessPlan = null
+        if (!loudnessMatchingEnabled) return null
+        val outgoingIsA = transition.activeDeck == DeckTransition.Deck.A
+        val plan = LoudnessMatcher.plan(
+            trackLoudness(active, outgoingIsA), trackLoudness(standby, !outgoingIsA),
+            LoudnessMatchConfig(allowMetadataFallback = false)
+        )
+        val format = java.text.DecimalFormat("0.0")
+        val detail = if (plan.outgoingEffectiveLufs != null && plan.incomingEffectiveLufs != null) {
+            "Outgoing " + format.format(plan.outgoingEffectiveLufs) + " LUFS, incoming " +
+                format.format(plan.incomingEffectiveLufs) + " LUFS (60 s middle window, after applied ReplayGain); " +
+                "attenuation " + format.format(plan.appliedCorrectionDb) + " dB"
+        } else null
+        val reason = when (plan.reason) {
+            LoudnessMatchReason.APPLIED, LoudnessMatchReason.CLAMPED_TO_MAX_CORRECTION ->
+                EffectDecisionReason.LOUDNESS_MATCH_APPLIED
+            LoudnessMatchReason.WITHIN_DEADBAND -> EffectDecisionReason.LOUDNESS_WITHIN_DEADBAND
+            LoudnessMatchReason.SOURCES_NOT_COMPARABLE -> EffectDecisionReason.LOUDNESS_SOURCES_NOT_COMPARABLE
+            LoudnessMatchReason.OUTGOING_UNAVAILABLE, LoudnessMatchReason.INCOMING_UNAVAILABLE ->
+                EffectDecisionReason.LOUDNESS_DATA_UNAVAILABLE
+        }
+        if (plan.applied) {
+            loudnessPlan = plan
+            loudnessPlanOutgoingIsDeckA = outgoingIsA
+        }
+        return EffectSelectionExplanation(
+            AutoMixEffect.LOUDNESS_MATCHING.id,
+            if (plan.applied) EffectSelectionStatus.SELECTED else EffectSelectionStatus.SKIPPED,
+            listOf(reason),
+            if (plan.applied) EffectExecutionStatus.PLANNED else null,
+            executionDetail = detail,
+        )
+    }
+
+    /** Energy plan for the current outgoing/incoming pair; memoised so the 25 ms tick stays cheap. */
+    private fun energyPlanFor(): EnergyMatchPlan? {
+        if (!energyMatchingEnabled) return null
+        val outKey = active.currentMediaItem?.let(AnalysisKey::from)
+        val inKey = standby.currentMediaItem?.let(AnalysisKey::from)
+        if (outKey == null || inKey == null) return null
+        val pair = outKey.mediaId to inKey.mediaId
+        val cached = energyPlan
+        if (energyPlanKey == pair && cached != null && cached.reason != EnergyMatchReason.OUTGOING_UNAVAILABLE &&
+            cached.reason != EnergyMatchReason.INCOMING_UNAVAILABLE) return cached
+        val cache = decks.analysisCache ?: return null
+        val plan = EnergyMatcher.plan(cache.peekEnergy(outKey), cache.peekEnergy(inKey))
+        energyPlanKey = pair
+        energyPlan = plan
+        return plan
+    }
+
+    private fun currentEnergyScale(): Float = energyPlanFor()?.durationScale ?: 1f
+
+    private fun energyExplanation(): EffectSelectionExplanation? {
+        if (!energyMatchingEnabled) return null
+        val plan = energyPlanFor() ?: return null
+        val reason = when (plan.reason) {
+            EnergyMatchReason.EXTENDED_FOR_RISE, EnergyMatchReason.EXTENDED_FOR_DROP ->
+                EffectDecisionReason.ENERGY_MATCH_APPLIED
+            EnergyMatchReason.WITHIN_THRESHOLD -> EffectDecisionReason.ENERGY_WITHIN_THRESHOLD
+            EnergyMatchReason.LOW_CONFIDENCE, EnergyMatchReason.SOURCES_NOT_COMPARABLE,
+            EnergyMatchReason.OUTGOING_UNAVAILABLE, EnergyMatchReason.INCOMING_UNAVAILABLE ->
+                EffectDecisionReason.ENERGY_DATA_UNAVAILABLE
+        }
+        val format = java.text.DecimalFormat("0.0")
+        val detail = plan.differenceDb?.let {
+            "Incoming minus outgoing unweighted RMS: " + format.format(it) + " dB (not perceived loudness); " +
+                "transition length x" + format.format(plan.durationScale)
+        }
+        return EffectSelectionExplanation(
+            AutoMixEffect.ENERGY_MATCHING.id,
+            if (plan.applied) EffectSelectionStatus.SELECTED else EffectSelectionStatus.SKIPPED,
+            listOf(reason),
+            if (plan.applied) EffectExecutionStatus.PLANNED else null,
+            executionDetail = detail,
+        )
     }
 
     private fun loopTransitionExplanation(): EffectSelectionExplanation? {

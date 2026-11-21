@@ -96,6 +96,12 @@ enum class EffectGainParameter {
     INCOMING_INSTRUMENTAL_STEM_GAIN,
     OUTGOING_SEEK,
     OUTGOING_LOOP_REGION,
+    OUTGOING_LEVEL_TRIM,
+    INCOMING_LEVEL_TRIM,
+    AGC_OUTPUT_GAIN,
+    OUTGOING_BASS_BOOST,
+    INCOMING_BASS_BOOST,
+    TRANSITION_DURATION,
 }
 
 data class AutoMixEffectCapability(
@@ -147,6 +153,12 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.BEAT_LOOP,
             AutoMixEffect.HALF_TIME_DOUBLE_TIME,
             AutoMixEffect.LOOP_TRANSITION,
+            AutoMixEffect.EXPONENTIAL_FADE,
+            AutoMixEffect.S_CURVE_FADE,
+            AutoMixEffect.LOUDNESS_MATCHING,
+            AutoMixEffect.AUTOMATIC_GAIN_CONTROL,
+            AutoMixEffect.BASS_BOOST,
+            AutoMixEffect.ENERGY_MATCHING,
         )
         val gainParameters = when (effect) {
             AutoMixEffect.CROSSFADE, AutoMixEffect.LINEAR_FADE, AutoMixEffect.SMOOTH_CROSSFADE,
@@ -192,10 +204,14 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.REPLAY_GAIN -> setOf(
                 EffectGainParameter.OUTGOING_REPLAY_GAIN, EffectGainParameter.INCOMING_REPLAY_GAIN
             )
-            AutoMixEffect.LOUDNESS_MATCHING, AutoMixEffect.AUTOMATIC_GAIN_CONTROL,
-            AutoMixEffect.ENERGY_MATCHING -> setOf(
-                EffectGainParameter.OUTGOING_DECK_GAIN, EffectGainParameter.INCOMING_DECK_GAIN
+            AutoMixEffect.LOUDNESS_MATCHING -> setOf(
+                EffectGainParameter.OUTGOING_LEVEL_TRIM, EffectGainParameter.INCOMING_LEVEL_TRIM
             )
+            AutoMixEffect.AUTOMATIC_GAIN_CONTROL -> setOf(EffectGainParameter.AGC_OUTPUT_GAIN)
+            AutoMixEffect.BASS_BOOST -> setOf(
+                EffectGainParameter.OUTGOING_BASS_BOOST, EffectGainParameter.INCOMING_BASS_BOOST
+            )
+            AutoMixEffect.ENERGY_MATCHING -> setOf(EffectGainParameter.TRANSITION_DURATION)
             AutoMixEffect.INSTRUMENTAL_DROP, AutoMixEffect.INSTRUMENTAL_FADE ->
                 setOf(EffectGainParameter.OUTGOING_INSTRUMENTAL_STEM_GAIN,
                     EffectGainParameter.INCOMING_INSTRUMENTAL_STEM_GAIN)
@@ -231,7 +247,7 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.BASS_SWAP, AutoMixEffect.VOCAL_SWAP, AutoMixEffect.EQ_TRANSITION,
             AutoMixEffect.FILTER_SWEEP, AutoMixEffect.RISE, AutoMixEffect.REPLAY_GAIN,
             AutoMixEffect.LOUDNESS_MATCHING, AutoMixEffect.AUTOMATIC_GAIN_CONTROL,
-            AutoMixEffect.ENERGY_MATCHING, AutoMixEffect.INSTRUMENTAL_DROP,
+            AutoMixEffect.BASS_BOOST, AutoMixEffect.ENERGY_MATCHING, AutoMixEffect.INSTRUMENTAL_DROP,
             AutoMixEffect.INSTRUMENTAL_FADE, AutoMixEffect.VOCAL_TO_INSTRUMENTAL,
             AutoMixEffect.INSTRUMENTAL_TO_VOCAL, AutoMixEffect.INDEPENDENT_STEM_GAIN,
             AutoMixEffect.STEM_AUTOMIX, AutoMixEffect.HALF_TIME_DOUBLE_TIME,
@@ -328,6 +344,10 @@ object AutoMixEffectCompatibilityEvaluator {
         AutoMixEffect.FILTER_SWEEP, AutoMixEffect.HIGH_PASS_INTRO, AutoMixEffect.RISE
     )
 
+    private val baseFadeEffects = setOf(
+        AutoMixEffect.CROSSFADE, AutoMixEffect.EXPONENTIAL_FADE, AutoMixEffect.S_CURVE_FADE
+    )
+
     fun evaluate(first: AutoMixEffect, second: AutoMixEffect): EffectCompatibilityResult {
         if (!AutoMixEffectCapabilityRegistry.capability(first).runtimeAvailable ||
             !AutoMixEffectCapabilityRegistry.capability(second).runtimeAvailable
@@ -342,7 +362,8 @@ object AutoMixEffectCompatibilityEvaluator {
             setOf(first, second) == setOf(AutoMixEffect.VOCAL_SWAP, AutoMixEffect.EQ_TRANSITION)
         ) return result(first, second, EffectCompatibility.COMPATIBLE,
             "The transition processor coordinates band ownership.")
-        if (setOf(first, second) == setOf(AutoMixEffect.CROSSFADE, AutoMixEffect.RISE) ||
+        if ((first in baseFadeEffects && second == AutoMixEffect.RISE) ||
+            (second in baseFadeEffects && first == AutoMixEffect.RISE) ||
             setOf(first, second) == setOf(AutoMixEffect.CROSSFADE, AutoMixEffect.TREMOLO_FADE)
         ) return result(first, second, EffectCompatibility.COMPATIBLE,
             "The transition envelope coordinates deck gain with the style-specific automation.")
@@ -350,7 +371,9 @@ object AutoMixEffectCompatibilityEvaluator {
             return result(first, second, EffectCompatibility.COMPATIBLE,
                 "The tempo ramp can consume BPM matching as its starting playback speed.")
         }
-        if (setOf(first, second) == setOf(AutoMixEffect.CROSSFADE, AutoMixEffect.REPLAY_GAIN)) {
+        if ((first in baseFadeEffects && second == AutoMixEffect.REPLAY_GAIN) ||
+            (second in baseFadeEffects && first == AutoMixEffect.REPLAY_GAIN)
+        ) {
             return result(first, second, EffectCompatibility.COMPATIBLE,
                 "Per-deck ReplayGain is applied before the independent crossfade envelope.")
         }
@@ -366,9 +389,26 @@ object AutoMixEffectCompatibilityEvaluator {
         ) return result(first, second, EffectCompatibility.MUTUALLY_EXCLUSIVE,
             "The effects require exclusive ownership of a deck seek, loop, or tempo operation.")
 
+        if (setOf(first, second) == setOf(AutoMixEffect.LOUDNESS_MATCHING, AutoMixEffect.REPLAY_GAIN)) {
+            return result(first, second, EffectCompatibility.CONDITIONALLY_COMPATIBLE,
+                "Loudness Matching plans from loudness after the applied ReplayGain, so it never re-applies it.")
+        }
+        if ((first == AutoMixEffect.LOUDNESS_MATCHING && second in baseFadeEffects) ||
+            (second == AutoMixEffect.LOUDNESS_MATCHING && first in baseFadeEffects)
+        ) {
+            return result(first, second, EffectCompatibility.COMPATIBLE,
+                "Loudness Matching is a per-deck attenuation factor multiplied into the fade envelope.")
+        }
+        if (setOf(first, second) == setOf(AutoMixEffect.BASS_BOOST, AutoMixEffect.BASS_SWAP)) {
+            return result(first, second, EffectCompatibility.CONDITIONALLY_COMPATIBLE,
+                "Bass Boost runs before the transition processor and is share-weighted per deck during overlap, so Bass Swap keeps ownership of the swap bands.")
+        }
+        if (setOf(first, second) == setOf(AutoMixEffect.BASS_BOOST, AutoMixEffect.LOUDNESS_MATCHING)) {
+            return result(first, second, EffectCompatibility.CONDITIONALLY_COMPATIBLE,
+                "Loudness Matching plans from measured loudness without the boost; the Bass Boost peak limiter bounds the added level.")
+        }
         if (setOf(first, second) == setOf(AutoMixEffect.AUTOMATIC_GAIN_CONTROL, AutoMixEffect.REPLAY_GAIN) ||
             setOf(first, second) == setOf(AutoMixEffect.AUTOMATIC_GAIN_CONTROL, AutoMixEffect.LOUDNESS_MATCHING) ||
-            setOf(first, second) == setOf(AutoMixEffect.LOUDNESS_MATCHING, AutoMixEffect.REPLAY_GAIN) ||
             setOf(first, second) == setOf(AutoMixEffect.STEM_AUTOMIX, AutoMixEffect.INDEPENDENT_STEM_GAIN)
         ) return result(first, second, EffectCompatibility.CONFLICTING,
             "Both effects can control overlapping gain and no shared controller is defined.")

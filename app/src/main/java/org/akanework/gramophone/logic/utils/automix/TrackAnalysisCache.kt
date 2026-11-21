@@ -48,9 +48,11 @@ data class AnalysisKey(
     }
 }
 
-class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 6) {
+class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_analysis.db", null, 8) {
     private val memory = ConcurrentHashMap<AnalysisKey, TrackAnalysis>()
+    private val loudnessMemory = ConcurrentHashMap<AnalysisKey, MeasuredLoudness>()
     private val beatGridMemory = ConcurrentHashMap<AnalysisKey, BeatGridCacheRecord>()
+    private val energyMemory = ConcurrentHashMap<AnalysisKey, TrackEnergy>()
     @Volatile
     var selectedAnalyzer: String = "existing"
         set(value) {
@@ -66,8 +68,24 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
         createVersionFour(db)
         addEvidenceColumns(db)
         createBeatGridTable(db)
+        createLoudnessTable(db)
+        createEnergyTable(db)
     }
 
+    private fun createLoudnessTable(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS loudness (
+            media_id TEXT NOT NULL, modified INTEGER NOT NULL, uri TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL, integrated_lufs REAL, short_term_lufs REAL,
+            sample_peak_dbfs REAL, measured_seconds REAL NOT NULL, bandwidth_hz REAL NOT NULL,
+            PRIMARY KEY(media_id, modified, uri))""")
+    }
+    private fun createEnergyTable(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS energy (
+            media_id TEXT NOT NULL, modified INTEGER NOT NULL, uri TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+            start_profile BLOB, end_profile BLOB,
+            PRIMARY KEY(media_id, modified, uri))""")
+    }
     private fun createVersionFour(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE analysis (
             media_id TEXT NOT NULL, modified INTEGER NOT NULL, uri TEXT NOT NULL,
@@ -135,6 +153,109 @@ class TrackAnalysisCache(context: Context) : SQLiteOpenHelper(context, "track_an
         }
         if (oldVersion < 5 && newVersion >= 5) addEvidenceColumns(db)
         if (oldVersion < 6 && newVersion >= 6) createBeatGridTable(db)
+        if (oldVersion < 7 && newVersion >= 7) createLoudnessTable(db)
+        if (oldVersion < 8 && newVersion >= 8) createEnergyTable(db)
+    }
+
+    fun peekEnergy(key: AnalysisKey): TrackEnergy? = energyMemory[key.copy(analyzer = "existing")]
+
+    /** Call on a background dispatcher. Null means never measured (or stale/corrupt), not "zero energy". */
+    @Synchronized
+    fun loadEnergy(key: AnalysisKey): TrackEnergy? {
+        val k = key.copy(analyzer = "existing")
+        energyMemory[k]?.let { return it }
+        readableDatabase.query(
+            "energy", arrayOf("duration_ms", "start_profile", "end_profile"),
+            "media_id=? AND modified=? AND uri=? AND algorithm_version=?",
+            arrayOf(k.mediaId, k.modified.toString(), k.uri, EnergyAnalyzer.ALGORITHM_VERSION),
+            null, null, null
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val start = if (cursor.isNull(1)) null else EnergyProfile.fromBytes(cursor.getBlob(1))
+            val end = if (cursor.isNull(2)) null else EnergyProfile.fromBytes(cursor.getBlob(2))
+            val result = TrackEnergy(start, end, cursor.getLong(0))
+            energyMemory[k] = result
+            return result
+        }
+    }
+
+    /** Call on a background dispatcher. A null profile records that the window could not be analysed. */
+    @Synchronized
+    fun storeEnergy(key: AnalysisKey, result: TrackEnergy) {
+        val k = key.copy(analyzer = "existing")
+        val values = ContentValues().apply {
+            put("media_id", k.mediaId); put("modified", k.modified); put("uri", k.uri)
+            put("algorithm_version", EnergyAnalyzer.ALGORITHM_VERSION)
+            put("duration_ms", result.durationMs)
+            put("start_profile", result.start?.toBytes())
+            put("end_profile", result.end?.toBytes())
+        }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("energy", "media_id=? AND uri=? AND modified<>?",
+                arrayOf(k.mediaId, k.uri, k.modified.toString()))
+            check(db.insertWithOnConflict("energy", null, values, SQLiteDatabase.CONFLICT_REPLACE) != -1L) {
+                "Unable to persist energy"
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        energyMemory.keys.removeAll { it.mediaId == k.mediaId && it.uri == k.uri && it.modified != k.modified }
+        energyMemory[k] = result
+    }
+    fun peekLoudness(key: AnalysisKey): MeasuredLoudness? = loudnessMemory[key.copy(analyzer = "existing")]
+
+    /** Call on a background dispatcher. Returns null when the track was never measured. */
+    @Synchronized
+    fun loadLoudness(key: AnalysisKey): MeasuredLoudness? {
+        val k = key.copy(analyzer = "existing")
+        loudnessMemory[k]?.let { return it }
+        readableDatabase.query(
+            "loudness",
+            arrayOf("integrated_lufs", "short_term_lufs", "sample_peak_dbfs", "measured_seconds", "bandwidth_hz"),
+            "media_id=? AND modified=? AND uri=? AND algorithm_version=?",
+            arrayOf(k.mediaId, k.modified.toString(), k.uri, LoudnessMeter.ALGORITHM_VERSION),
+            null, null, null
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val result = MeasuredLoudness(
+                cursor.optionalFloat(0), cursor.optionalFloat(1), cursor.optionalFloat(2),
+                cursor.getFloat(3), cursor.getFloat(4)
+            )
+            loudnessMemory[k] = result
+            return result
+        }
+    }
+
+    /** Call on a background dispatcher. A null integrated value means "measured, but all gated out". */
+    @Synchronized
+    fun storeLoudness(key: AnalysisKey, result: MeasuredLoudness) {
+        val k = key.copy(analyzer = "existing")
+        val values = ContentValues().apply {
+            put("media_id", k.mediaId); put("modified", k.modified); put("uri", k.uri)
+            put("algorithm_version", LoudnessMeter.ALGORITHM_VERSION)
+            put("integrated_lufs", result.integratedLufs)
+            put("short_term_lufs", result.maxShortTermLufs)
+            put("sample_peak_dbfs", result.samplePeakDbfs)
+            put("measured_seconds", result.measuredSeconds)
+            put("bandwidth_hz", result.bandwidthHz)
+        }
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("loudness", "media_id=? AND uri=? AND modified<>?",
+                arrayOf(k.mediaId, k.uri, k.modified.toString()))
+            check(db.insertWithOnConflict("loudness", null, values, SQLiteDatabase.CONFLICT_REPLACE) != -1L) {
+                "Unable to persist loudness"
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        loudnessMemory.keys.removeAll { it.mediaId == k.mediaId && it.uri == k.uri && it.modified != k.modified }
+        loudnessMemory[k] = result
     }
 
     fun peek(key: AnalysisKey): TrackAnalysis? = memory[key]?.takeIf { isCurrent(key, it) }

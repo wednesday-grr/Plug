@@ -62,7 +62,7 @@ class TrackAnalysisCacheTest {
         val analysis = TrackAnalysis(120f, "8A", 125.0, 0.9f, 0, 5000,
             pulseProvenance = BeatEvidenceAdapter.spectralFluxProvenance)
         TrackAnalysisCache(context).also {
-            assertEquals(6, it.writableDatabase.version)
+            assertEquals(8, it.writableDatabase.version)
             it.store(key, analysis)
             it.store(newerKey, analysis.copy(pulseProvenance =
                 BeatEvidenceAdapter.spectralFluxProvenance.copy(algorithmVersion = "future-v2")))
@@ -105,7 +105,7 @@ class TrackAnalysisCacheTest {
             it.close()
         }
         TrackAnalysisCache(context).also {
-            assertEquals(6, it.writableDatabase.version)
+            assertEquals(8, it.writableDatabase.version)
             val loaded = it.load(key)!!
             assertEquals(121f, loaded.bpm!!, 0f)
             assertEquals("8A", loaded.camelotKey)
@@ -352,7 +352,7 @@ class TrackAnalysisCacheTest {
             it.close()
         }
         TrackAnalysisCache(context).also {
-            assertEquals(6, it.writableDatabase.version)
+            assertEquals(8, it.writableDatabase.version)
             assertEquals(BeatGridCacheRead.Available(record), it.loadBeatGrid(key))
             assertEquals(BeatGridCacheRead.Invalidated, it.loadBeatGrid(
                 key, configurationVersion = "future-config"))
@@ -404,7 +404,7 @@ class TrackAnalysisCacheTest {
             it.close()
         }
         TrackAnalysisCache(context).also {
-            assertEquals(6, it.writableDatabase.version)
+            assertEquals(8, it.writableDatabase.version)
             assertEquals(BeatGridCacheRead.Available(withRegions), it.loadBeatGrid(key))
             assertEquals(BeatGridCacheRead.Available(unavailable), it.loadBeatGrid(unavailableKey))
             it.close()
@@ -476,7 +476,7 @@ class TrackAnalysisCacheTest {
             cache.close()
         }
         TrackAnalysisCache(context).also { cache ->
-            assertEquals(6, cache.writableDatabase.version)
+            assertEquals(8, cache.writableDatabase.version)
             assertEquals(121f, cache.load(key)!!.bpm!!, 0f)
             assertEquals("8A", cache.load(key)!!.camelotKey)
             assertEquals(125.0, cache.load(key)!!.beatOffsetMs!!, 0.0)

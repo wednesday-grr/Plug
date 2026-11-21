@@ -62,6 +62,93 @@
             android:title="@string/settings_automix_transition_style"
             app:iconSpaceReserved="true" />
 
+        <ListPreference
+            android:defaultValue="4"
+            android:dependency="automix_enabled"
+            android:entries="@array/automix_loop_beat_entries"
+            android:entryValues="@array/automix_loop_beat_values"
+            android:key="automix_loop_transition_beats"
+            android:layout="@layout/preference_basic"
+            android:title="@string/settings_automix_loop_transition_beats"
+            android:summary="%s"
+            app:iconSpaceReserved="true" />
+
+        <SeekBarPreference
+            android:defaultValue="50"
+            android:dependency="automix_enabled"
+            android:key="automix_fade_curve_intensity"
+            android:layout="@layout/preference_seekbar"
+            android:max="100"
+            android:title="@string/settings_automix_fade_curve_intensity"
+            android:summary="@string/settings_automix_fade_curve_intensity_summary"
+            app:min="0"
+            app:showSeekBarValue="true"
+            app:updatesContinuously="true"
+            app:iconSpaceReserved="true" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:dependency="automix_enabled"
+            android:key="automix_loudness_matching"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_automix_loudness_matching_summary"
+            android:title="@string/settings_automix_loudness_matching"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="true" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:dependency="automix_enabled"
+            android:key="automix_agc"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_automix_agc_summary"
+            android:title="@string/settings_automix_agc"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="true" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:dependency="automix_enabled"
+            android:key="automix_energy_matching"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_automix_energy_matching_summary"
+            android:title="@string/settings_automix_energy_matching"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="true" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:dependency="automix_enabled"
+            android:key="automix_bass_boost"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_automix_bass_boost_summary"
+            android:title="@string/settings_automix_bass_boost"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="true" />
+
+        <SeekBarPreference
+            android:defaultValue="4"
+            android:dependency="automix_bass_boost"
+            android:key="automix_bass_boost_gain_db"
+            android:layout="@layout/preference_seekbar"
+            android:max="12"
+            android:title="@string/settings_automix_bass_boost_gain"
+            app:min="0"
+            app:showSeekBarValue="true"
+            app:updatesContinuously="true"
+            app:iconSpaceReserved="true" />
+
+        <SeekBarPreference
+            android:defaultValue="100"
+            android:dependency="automix_bass_boost"
+            android:key="automix_bass_boost_frequency_hz"
+            android:layout="@layout/preference_seekbar"
+            android:max="250"
+            android:title="@string/settings_automix_bass_boost_frequency"
+            app:min="40"
+            app:showSeekBarValue="true"
+            app:updatesContinuously="true"
+            app:iconSpaceReserved="true" />
         <MultiSelectListPreference
             android:dependency="automix_enabled"
             android:entries="@array/automix_additional_effects"

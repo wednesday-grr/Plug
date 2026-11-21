@@ -1261,6 +1261,44 @@
     <string name="settings_automix_max_skip">Maximum intro and outro skip (seconds)</string>
     <string name="settings_automix_max_skip_summary">Maximum per end, also limited to 10% of the track. Set to 0 to disable skipping.</string>
     <string name="settings_automix_transition_style">Transition style</string>
+    <string name="settings_automix_loop_transition_beats">Loop transition length</string>
+    <string name="automix_transition_exponential_fade">Exponential fade</string>
+    <string name="automix_transition_s_curve_fade">S-curve fade</string>
+    <string name="settings_automix_fade_curve_intensity">Fade curve intensity (%)</string>
+    <string name="settings_automix_fade_curve_intensity_summary">Shapes Exponential and S-curve fades; 0 is a plain linear fade.</string>
+    <string name="settings_automix_loudness_matching">Loudness matching</string>
+    <string name="dj_loudness_matching">Loudness matching</string>
+    <string name="transition_reason_loudness_applied">Measured loudness differed between the tracks, so the louder one is attenuated during the overlap.</string>
+    <string name="transition_reason_loudness_unavailable">Loudness has not been measured for both tracks yet, so no correction was applied.</string>
+    <string name="transition_reason_loudness_deadband">The loudness difference is within the dead band, so no correction was applied.</string>
+    <string name="transition_reason_loudness_not_comparable">The tracks\' loudness values come from different sources and cannot be compared.</string>
+    <string name="settings_automix_loudness_matching_summary">During a transition, gently lowers the louder track toward the quieter one using measured loudness. Never boosts; skipped when loudness is unknown.</string>
+    <string name="dj_energy_matching">Energy matching</string>
+    <string name="settings_automix_energy_matching">Energy matching</string>
+    <string name="settings_automix_energy_matching_summary">Lengthens the overlap when the incoming track\'s opening energy differs a lot from the outgoing track\'s ending. Uses unweighted RMS and band levels, not perceived loudness. Needs both tracks analysed.</string>
+    <string name="transition_reason_energy_applied">The incoming opening differs substantially in energy from the outgoing ending, so the overlap was lengthened for a gradual progression.</string>
+    <string name="transition_reason_energy_threshold">The energy difference is within the configured threshold, so the transition length was not changed.</string>
+    <string name="transition_reason_energy_unavailable">Energy has not been measured reliably for both tracks (missing, mostly silent or not comparable), so nothing was changed.</string>
+    <string name="settings_automix_bass_boost">Bass boost</string>
+    <string name="settings_automix_bass_boost_summary">Low-shelf bass enhancement with peak protection. Weighted per track during overlaps so bass never stacks.</string>
+    <string name="settings_automix_bass_boost_gain">Bass boost gain (dB)</string>
+    <string name="settings_automix_bass_boost_frequency">Bass boost corner frequency (Hz)</string>
+    <string name="settings_automix_agc">Automatic gain control</string>
+    <string name="settings_automix_agc_summary">Adaptive level control during AutoMix playback. Unavailable while ReplayGain or loudness matching is active.</string>
+    <string-array name="automix_loop_beat_entries">
+        <item>1 beat</item>
+        <item>2 beats</item>
+        <item>4 beats</item>
+        <item>8 beats</item>
+        <item>16 beats</item>
+    </string-array>
+    <string-array name="automix_loop_beat_values">
+        <item>1</item>
+        <item>2</item>
+        <item>4</item>
+        <item>8</item>
+        <item>16</item>
+    </string-array>
     <string name="settings_automix_additional_effects">Additional simultaneous effects</string>
     <string name="settings_automix_effect_intensity">Transition effect intensity (%)</string>
     <string name="settings_automix_effect_intensity_summary">Controls scheduled EQ, filter, bass, vocal, echo and reverb effects; does not change crossfade, beatmatching, Vinyl Brake or Tremolo Fade.</string>
@@ -1311,6 +1349,8 @@
         <item>@string/automix_transition_fade</item>
         <item>@string/automix_transition_rise</item>
         <item>@string/automix_transition_loop</item>
+        <item>@string/automix_transition_exponential_fade</item>
+        <item>@string/automix_transition_s_curve_fade</item>
     </string-array>
     <string-array name="automix_transition_style_values">
         <item>auto</item>
@@ -1325,6 +1365,8 @@
         <item>fade</item>
         <item>rise</item>
         <item>loop_transition</item>
+        <item>exponential_fade</item>
+        <item>s_curve_fade</item>
     </string-array>
     <string name="sort_for_automix">Sort for Automix</string>
     <string name="sort_for_automix_failed">Could not sort the queue. Check that Automix is enabled and try again after any transition.</string>

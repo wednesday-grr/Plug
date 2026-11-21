@@ -58,6 +58,12 @@ class ReplayGainAudioProcessor : BaseAudioProcessor() {
     var offloadEnabledChangedListener: (() -> Unit)? = null
     private val toFloatPcmAudioProcessor = ToFloatPcmAudioProcessor()
     private var gain = 1f
+
+    /** Static gain currently applied to the stream in dB; excludes any dynamic range compression. */
+    @Volatile
+    var appliedGainDb = 0f
+        private set
+
     private var kneeThresholdDb: Float? = null
     private var outputFloat: Boolean? = null
     private var pendingOutputFloat: Boolean? = null
@@ -267,6 +273,7 @@ class ReplayGainAudioProcessor : BaseAudioProcessor() {
             return false
         }
         this.gain = gain?.first ?: ReplayGainUtil.dbToAmpl(nonRgGain.toFloat())
+        appliedGainDb = if (this.gain > 0f) 20f * kotlin.math.log10(this.gain) else 0f
         this.kneeThresholdDb = gain?.second
         if (kneeThresholdDb != null) {
             if (compressor == null)

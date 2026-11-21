@@ -205,7 +205,108 @@ class TrackPcmDecoder(private val context: Context) {
         }
     }
 
+    /** Full-band interleaved PCM (1 or 2 channels) at the source sample rate, for loudness measurement. */
+    class FullBandWindow(val samples: FloatArray, val sampleRate: Int, val channels: Int)
+
+    /**
+     * Decodes the middle [LOUDNESS_WINDOW_US] without downmixing or resampling. Channels beyond the first two
+     * are dropped, so multichannel loudness is approximate.
+     */
+    suspend fun decodeFullBand(uri: Uri): FullBandWindow {
+        require(uri.scheme == "content" || uri.scheme == "file") { "Only local audio is supported" }
+        val extractor = MediaExtractor()
+        var codec: MediaCodec? = null
+        try {
+            extractor.setDataSource(context, uri, null)
+            val track = (0 until extractor.trackCount).firstOrNull {
+                extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+            } ?: error("No audio track in $uri")
+            extractor.selectTrack(track)
+            val inputFormat = extractor.getTrackFormat(track)
+            val durationUs = if (inputFormat.containsKey(MediaFormat.KEY_DURATION))
+                inputFormat.getLong(MediaFormat.KEY_DURATION) else 0L
+            val startUs = ((durationUs - LOUDNESS_WINDOW_US) / 2).coerceAtLeast(0L)
+            val endUs = startUs + LOUDNESS_WINDOW_US
+            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            val decoder = MediaCodec.createDecoderByType(checkNotNull(inputFormat.getString(MediaFormat.KEY_MIME)))
+            codec = decoder
+            decoder.configure(inputFormat, null, null, 0)
+            decoder.start()
+            var rate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var channels = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var encoding = AudioFormat.ENCODING_PCM_16BIT
+            var out = FloatArray(0)
+            var size = 0
+            var inputEnded = false
+            var outputEnded = false
+            var idle = 0
+            val info = MediaCodec.BufferInfo()
+            while (!outputEnded) {
+                currentCoroutineContext().ensureActive()
+                var progressed = false
+                if (!inputEnded) {
+                    val index = decoder.dequeueInputBuffer(10_000)
+                    if (index >= 0) {
+                        progressed = true
+                        val buffer = checkNotNull(decoder.getInputBuffer(index))
+                        val n = extractor.readSampleData(buffer, 0)
+                        val time = extractor.sampleTime
+                        if (n < 0 || time < 0 || time >= endUs) {
+                            decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputEnded = true
+                        } else {
+                            decoder.queueInputBuffer(index, 0, n, time, 0)
+                            extractor.advance()
+                        }
+                    }
+                }
+                val index = decoder.dequeueOutputBuffer(info, 10_000)
+                if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val format = decoder.outputFormat
+                    rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    encoding = if (format.containsKey(MediaFormat.KEY_PCM_ENCODING))
+                        format.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
+                    require(rate in 8_000..192_000 && channels > 0) { "Unsupported PCM format" }
+                    require(encoding == AudioFormat.ENCODING_PCM_16BIT || encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+                        "Unsupported PCM encoding $encoding"
+                    }
+                    out = FloatArray(rate * 2 * (LOUDNESS_WINDOW_US / 1_000_000L).toInt())
+                    progressed = true
+                } else if (index >= 0) {
+                    progressed = true
+                    check(out.isNotEmpty()) { "Decoder produced output before its format" }
+                    val buffer = checkNotNull(decoder.getOutputBuffer(index)).order(ByteOrder.nativeOrder())
+                    buffer.position(info.offset)
+                    buffer.limit(info.offset + info.size)
+                    val bytes = if (encoding == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+                    val kept = minOf(channels, 2)
+                    var frame = 0L
+                    while (buffer.remaining() >= bytes * channels && size + kept <= out.size) {
+                        val timeUs = info.presentationTimeUs + frame * 1_000_000L / rate
+                        frame++
+                        for (ch in 0 until channels) {
+                            val value = if (bytes == 4) buffer.float else buffer.short / 32768f
+                            if (ch < kept && timeUs in startUs until endUs) out[size++] = value
+                        }
+                    }
+                    decoder.releaseOutputBuffer(index, false)
+                    outputEnded = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                }
+                idle = if (progressed) 0 else idle + 1
+                check(idle < 1000) { "Audio decoder stalled for $uri" }
+            }
+            val kept = minOf(channels, 2)
+            check(size >= kept) { "No decodable PCM in $uri" }
+            return FullBandWindow(out.copyOf(size - size % kept), rate, kept)
+        } finally {
+            codec?.release()
+            extractor.release()
+        }
+    }
+
     companion object {
+        private const val LOUDNESS_WINDOW_US = 60_000_000L
         private const val WINDOW_US = 60_000_000L
         private const val EDGE_WINDOW_US = 30_000_000L
     }

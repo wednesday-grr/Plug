@@ -161,6 +161,10 @@ internal fun djTransitionEffectLabelResource(effect: String?): Int = when (effec
     "fade" -> R.string.automix_transition_fade
     "rise" -> R.string.automix_transition_rise
     "loop_transition" -> R.string.automix_transition_loop
+    "exponential_fade" -> R.string.automix_transition_exponential_fade
+    "s_curve_fade" -> R.string.automix_transition_s_curve_fade
+    "loudness_matching" -> R.string.dj_loudness_matching
+    "energy_matching" -> R.string.dj_energy_matching
     "smooth" -> R.string.dj_crossfade
     else -> R.string.dj_crossfade
 }

@@ -553,9 +553,16 @@ internal class AudioQualityInfoBottomSheet(
         EffectDecisionReason.BPM_CANDIDATE_OUT_OF_RANGE -> R.string.transition_reason_speed_limit
         EffectDecisionReason.LOOP_GRID_UNAVAILABLE -> R.string.transition_reason_loop_grid
         EffectDecisionReason.LOOP_FALLBACK_CROSSFADE -> R.string.transition_reason_loop_fallback
+        EffectDecisionReason.LOUDNESS_MATCH_APPLIED -> R.string.transition_reason_loudness_applied
+        EffectDecisionReason.LOUDNESS_DATA_UNAVAILABLE -> R.string.transition_reason_loudness_unavailable
+        EffectDecisionReason.LOUDNESS_WITHIN_DEADBAND -> R.string.transition_reason_loudness_deadband
+        EffectDecisionReason.LOUDNESS_SOURCES_NOT_COMPARABLE -> R.string.transition_reason_loudness_not_comparable
         EffectDecisionReason.LOOP_TRANSITION_READY -> R.string.transition_reason_loop_ready
         EffectDecisionReason.BEAT_JUMP_REJECTED -> R.string.transition_reason_jump_rejected
         EffectDecisionReason.BEAT_LOOP_REJECTED -> R.string.transition_reason_loop_rejected
+        EffectDecisionReason.ENERGY_MATCH_APPLIED -> R.string.transition_reason_energy_applied
+        EffectDecisionReason.ENERGY_WITHIN_THRESHOLD -> R.string.transition_reason_energy_threshold
+        EffectDecisionReason.ENERGY_DATA_UNAVAILABLE -> R.string.transition_reason_energy_unavailable
     })
 
     private fun renderBeatEffect(effect: DisplayBeatEffect) {
