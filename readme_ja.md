@@ -1,47 +1,47 @@
 # Plug
 
-スムーズなトランジション、決定論的なオーディオ処理、そして透明性の高い再生診断機能を備えたローカルAndroid音楽プレイヤーです。
+Local Android music player focused on smooth transitions, deterministic audio processing, and transparent playback diagnostics.
 
-> **現在のステータス (`v2.0.0-preview`):** AutoMix の **フェーズ A〜E** が実装され、**358件のユニットテストすべてに合格**しています（失敗 0件、スキップ 2件）。フェーズ **F〜H** は今後の実装予定であり、実機での最終的な音響チューニングは未実施です。
-
----
-
-## ✨ 主な機能・ハイライト
-
-* **インテリジェント AutoMix (フェーズ A〜E):**
-  * **トランジションカーブとフェード:** カーブの強度を調整可能な指数関数的（Exponential）および S字（S-curve）フェードプロファイルに対応。
-  * **ラウドネスマッチングと AGC:** データベース（`DB v7+`）にキャッシュされた BS.1770 ラウドネス測定値と、デッキチェーン内の自動ゲイン制御（AGC）プロセッサを統合。
-  * **バスブースト (Bass Boost):** 設定からオン/オフを切り替え可能な専用の低音強化 DSP ブロックを実装。
-  * **エネルギーマッチング (Energy Matching):** 開始・終了の30秒ウィンドウ（22,050 Hz）における重み付けなし RMS および低/中/高周波数帯域を1秒フレーム単位で解析し、`energy` テーブル（`DB v8`）に保存。エネルギーが **6 dB 以上上昇** または **9 dB 以上低下** した場合、トラックのゲインを変更せずにオーバーラップ時間を最大 **1.5倍** に延長します（`TRANSITION_DURATION` アービトレーション）。
-  * **ビートマッチと位相アライメント (Beatmatch):** `BeatPhaseAligner` を用いて再生速度を前の曲の BPM に同期（デフォルトで `automix_beatmatch_enabled` が有効）。速度制限内でのハーフタイム/ダブルタイム判定に対応し、信頼度が低い場合は通常のクロスフェードへ安全にフォールバックし、Vinyl Brake トランジション時はスキップします。
-* **アービトレーションと診断機能:** パラメータ所有権の集中管理レジストリと、有効な判断理由やデータ欠損・無音時の `unavailable` 状態を表示する **Audio Quality Info** 解説シート（`FullBottomSheet`）を搭載。
-* **ローカルキャッシュとバックグラウンド解析:** スキーマ **v8** のデータベースによるスケジュール済みバックグラウンドデコードとラウンドトリップキャッシュテストに対応。
+> **Current Status (`v2.0.0-preview`):** AutoMix **Phases A–E** are implemented and verified with **358 passing unit tests** (0 failures, 2 skipped). Phases **F–H** are upcoming, and final acoustic tuning on a physical device is still pending.
 
 ---
 
-## 🗺️ ロードマップと進捗状況
+## ✨ Key Highlights
 
-| フェーズ / 領域 | 概要 | ステータス |
+* **Intelligent AutoMix (Phases A–E):**
+  * **Transition Curves & Fades:** Exponential and S-curve fade profiles with configurable curve intensity.
+  * **Loudness Matching & AGC:** BS.1770 loudness measurement cached in the database (`DB v7+`) alongside a deck-chain Automatic Gain Control (AGC) processor.
+  * **Bass Boost:** Dedicated Bass Boost DSP block with user-facing settings toggles.
+  * **Energy Matching:** 1-second frame analysis of unweighted RMS and low/mid/high frequency bands over 30-second start/end windows (22,050 Hz), stored in the `energy` table (`DB v8`). Lengthens overlap up to **1.5×** when energy rises by **> 6 dB** or drops by **> 9 dB** (`TRANSITION_DURATION` arbitration) without altering track gain.
+  * **Beatmatch & Phase Alignment:** Matches incoming BPM with `BeatPhaseAligner` (`automix_beatmatch_enabled` on by default), supports half-time/double-time checks within speed limits, falls back cleanly to a standard crossfade when confidence is low, and skips Vinyl Brake transitions.
+* **Arbitration & Diagnostics:** Centralized parameter ownership registry and an **Audio Quality Info** explanation sheet (`FullBottomSheet`) showing active decisions and `unavailable` states when data is missing or too quiet.
+* **Local Cache & Background Analysis:** Scheduled background decoding with database schema **v8**, round-trip cache tests, and diagnostic explanations.
+
+---
+
+## 🗺️ Roadmap & Progress
+
+| Phase / Area | Scope | Status |
 | :--- | :--- | :--- |
-| **コア Beatmatch** | BPM/位相アライメント、ハーフ/ダブルタイム判定、Vinyl Brake バイパス、クロスフェードフォールバック | 実装済み（既存ベースライン） |
-| **フェーズ A〜B** | カーブフレームワーク、Exponential/S-curve フェード、アービトレーションレジストリ、DSP テストユーティリティ | 実装・ユニットテスト完了 |
-| **フェーズ C** | BS.1770 ラウドネスキャッシュ（`DB v7+`）、デッキチェーン AGC プロセッサ、設定および UI 連携 | 実装・ユニットテスト完了 |
-| **フェーズ D** | Bass Boost DSP モジュールおよび設定の統合 | 実装・ユニットテスト完了 |
-| **フェーズ E** | RMS/帯域エネルギー解析、`energy` キャッシュ（`DB v8`）、オーバーラップ延長（`TRANSITION_DURATION`） | 実装・ユニットテスト完了 |
-| **実機 QA テスト** | Android 実機ハードウェアでのエンドツーエンド音響検証 | 未実施（保留中） |
-| **フェーズ F〜H** | 次期 AutoMix および再生機能の拡張 | 計画中 |
+| **Core Beatmatch** | BPM/phase alignment, half/double-time checks, Vinyl Brake bypass, crossfade fallback | Implemented (legacy baseline) |
+| **Phases A–B** | Curve framework, Exponential/S-curve fades, arbitration registry, DSP test helpers | Implemented & unit-tested |
+| **Phase C** | BS.1770 loudness caching (`DB v7+`), deck-chain AGC processor, settings & UI | Implemented & unit-tested |
+| **Phase D** | Bass Boost DSP module & settings integration | Implemented & unit-tested |
+| **Phase E** | RMS/band energy analyzer, `energy` cache (`DB v8`), overlap scaling (`TRANSITION_DURATION`) | Implemented & unit-tested |
+| **Device QA** | End-to-end acoustic testing on physical Android hardware | Pending |
+| **Phases F–H** | Next-stage AutoMix & playback enhancements | Planned |
 
 ---
 
-## ⚠️ 既知の制限事項・注意点
+## ⚠️ Known Notes & Limitations
 
-* **実機での聴感テスト未実施:** フェード、ループ境界のデクリック動作、ラウドネストリム、AGC、Bass Boost、エネルギーマッチングによるオーバーラップ延長、および Beatmatch はユニットテストを通過していますが、実機ハードウェアでの聴感確認はまだ行われていません。
-* **エネルギーマッチングの適用範囲:** 知覚ラウドネスやボーカル活動・ビートグリッドではなく重み付けなし RMS/帯域を評価し、事前再生またはバックグラウンド解析済みのトラックにのみ適用されます（ゲイン調整は行わずオーバーラップ時間のみを変更します）。
-* **クリーンアップメモ:** 現在 `EnergyProfile.kt` に未使用のインポート（`cos`, `sin`）が2つ残っています。
+* **Device verification pending:** Fades, loop declick behavior, loudness trims, AGC, Bass Boost, Energy Matching overlap scaling, and Beatmatch have passed unit tests but have not yet been verified by ear on a physical device.
+* **Energy matching scope:** Evaluates unweighted RMS/bands (not perceived loudness or vocal activity/beat grid), requires prior playback or background analysis, and scales overlap duration only rather than adjusting gain.
+* **Cleanup note:** `EnergyProfile.kt` currently contains two unused imports (`cos`, `sin`).
 
 ---
 
-## 📚 ドキュメント
+## 📚 Documentation
 
-* **アーキテクチャと AutoMix の詳細:** [`docs/automix.md`](docs/automix.md)（または公開中の GitHub Pages サイト）を参照してください。
-* **リリースノート:** [`CHANGELOG.md`](CHANGELOG.md) または `v2.0.0-preview` の GitHub Release を参照してください。
+* **Architecture & AutoMix Deep Dive (GitHub Pages):** See [`docs/automix.md`](docs/automix.md) (or your published GitHub Pages site).
+* **Release Notes:** See [`CHANGELOG.md`](CHANGELOG.md) or the `v2.0.0-preview` GitHub Release.
