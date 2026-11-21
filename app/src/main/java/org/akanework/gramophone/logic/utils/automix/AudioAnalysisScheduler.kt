@@ -45,6 +45,7 @@ class AudioAnalysisScheduler(
     private val analyze: (suspend (MediaItem) -> TrackAnalysis)? = null,
 ) {
     enum class DisplayStatus { ANALYZING, READY, FAILED, PENDING }
+    enum class BeatAnalysisStatus { MISSING, PENDING, ANALYZING, FAILED, UNAVAILABLE, EMPTY, DETECTED, INVALIDATED }
 
     private data class BeatOwnerRequest(val key: AnalysisKey, val generation: Long)
     private data class ScheduledWork(
@@ -290,6 +291,29 @@ class AudioAnalysisScheduler(
     fun analysisFailed(key: AnalysisKey): Boolean = failures.containsKey(cache.selectedKey(key))
 
     fun beatAnalysisFailed(key: AnalysisKey): Boolean = beatFailures.containsKey(key)
+
+    fun beatAnalysisStatus(key: AnalysisKey): BeatAnalysisStatus {
+        when (val cached = cache.peekBeatGrid(key)) {
+            is BeatGridCacheRead.Available -> return when (cached.record.state) {
+                BeatGridCacheState.UNAVAILABLE -> BeatAnalysisStatus.UNAVAILABLE
+                BeatGridCacheState.EMPTY -> BeatAnalysisStatus.EMPTY
+                BeatGridCacheState.DETECTED -> BeatAnalysisStatus.DETECTED
+                BeatGridCacheState.INVALIDATED -> BeatAnalysisStatus.INVALIDATED
+            }
+            BeatGridCacheRead.Invalidated -> return BeatAnalysisStatus.INVALIDATED
+            BeatGridCacheRead.Missing -> Unit
+        }
+        return synchronized(lock) {
+            when {
+                beatFailures.containsKey(key) -> BeatAnalysisStatus.FAILED
+                currentIsBeat && currentBeatKey == key && currentJob?.isActive == true ->
+                    BeatAnalysisStatus.ANALYZING
+                pendingBeatRequests.containsKey(key) || beatOwnerRequests.values.any { it.key == key } ->
+                    BeatAnalysisStatus.PENDING
+                else -> BeatAnalysisStatus.MISSING
+            }
+        }
+    }
 
     /** Requests one offline beat analysis for an owner; duplicate source requests are coalesced. */
     fun requestBeatAnalysis(item: MediaItem, ownerId: String): Boolean {

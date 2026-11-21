@@ -57,6 +57,13 @@
 
         <Preference
             android:layout="@layout/preference_basic"
+            android:selectable="false"
+            android:summary="@string/settings_language_support_summary"
+            android:title="@string/settings_language_support_title"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:layout="@layout/preference_basic"
             android:summary="@string/upstream_credit"
             android:selectable="false"
             app:iconSpaceReserved="false" />

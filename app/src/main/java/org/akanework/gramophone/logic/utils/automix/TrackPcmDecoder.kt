@@ -27,6 +27,10 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.nio.ByteOrder
 
+/**
+ * Decodes local audio through Android's extractor/codec registry. Supported containers and
+ * codecs depend on the Android build; callers must handle decoder failures for unsupported media.
+ */
 class TrackPcmDecoder(private val context: Context) {
     data class Window(val samples: FloatArray, val startMs: Long, val durationMs: Long)
     enum class Region { MIDDLE, START, END }

@@ -273,6 +273,15 @@
     <string name="dialog_mime">MIME type</string>
     <!-- Shown next to song's duration (like "5:37") in detail UI -->
     <string name="dialog_duration">Duration</string>
+    <string name="beat_analysis_start">Analyze beats</string>
+    <string name="beat_analysis_cancel">Cancel beat analysis</string>
+    <string name="beat_analysis_running">Analyzing beats offline…</string>
+    <string name="beat_analysis_pending">Beat analysis queued</string>
+    <string name="beat_analysis_ready">%1$d beats detected</string>
+    <string name="beat_analysis_unavailable">No reliable beat grid detected</string>
+    <string name="beat_analysis_empty">No beat events detected</string>
+    <string name="beat_analysis_failed">Beat analysis failed. Try again.</string>
+    <string name="beat_analysis_error">Could not start offline beat analysis.</string>
     <!-- In player UI settings, change between centered title and left-aligned title. Title -->
     <string name="settings_title_center">Centered title</string>
     <!-- In player UI settings, change between centered title and left-aligned title. Subtext -->
@@ -1358,6 +1367,8 @@
     <string name="settings_replaygain_no_rg_amp_desc">Reduce volume for loud songs that do not have ReplayGain tags</string>
     <!-- Detailed explanation for "Pre amp" feature in ReplayGain settings -->
     <string name="settings_replaygain_preamp_desc">Increase or decrease the volume of songs with ReplayGain tags. Higher values may cause loss of dynamics due to clipping prevention.</string>
+    <string name="settings_language_support_title">Language support</string>
+    <string name="settings_language_support_summary">Only English is currently available. Additional languages are being translated.</string>
     <!-- Detailed explanation for "Smart" mode in ReplayGain settings -->
     <string name="settings_replaygain_mode_desc">\"Smart\" automatically preserves album dynamics only when playing songs from an album consecutively.</string>
     <!-- Sort songs by the artist, and then the song's release year -->

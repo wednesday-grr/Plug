@@ -75,6 +75,26 @@ class MusicalBeatTrackerTest {
     }
 
     @Test
+    fun gradualTempoChangeFollowsLocalIntervalsWithoutInventingBeats() = runBlocking {
+        val intervals = listOf(500_000L, 480_000L, 460_000L, 440_000L, 420_000L, 400_000L)
+        val times = intervals.scan(100_000L) { previous, interval -> previous + interval }
+        val result = MusicalBeatTracker.track(
+            times.map { OnsetCandidate(it, 1f) },
+            120f,
+            window,
+            timeline,
+        )
+        val grid = result.grid ?: error("${result.reason}; hypotheses=${result.hypotheses}")
+
+        assertEquals(times, grid.events.map { it.sourceTimeUs })
+        assertEquals(intervals, grid.events.zipWithNext().map { (a, b) ->
+            b.sourceTimeUs - a.sourceTimeUs
+        })
+        assertEquals(BeatTempoInterpretation.PRIMARY, result.selected)
+        assertTrue(grid.events.zipWithNext().all { (a, b) -> b.index == a.index + 1 })
+    }
+
+    @Test
     fun windowBoundsAndLeadingSilenceDoNotInventEvents() = runBlocking {
         val flux = DoubleArray(100)
         flux[10] = 4.0

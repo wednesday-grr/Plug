@@ -44,7 +44,7 @@ data class TrackBeatAnalysis(val analysis: TrackAnalysis, val tracking: BeatTrac
 /** Offline analysis; beat grids describe only the analyzed window, not a bar or a whole song. */
 object TrackDspAnalyzer {
     const val SAMPLE_RATE = 11025
-    const val BEAT_ANALYSIS_CONFIG_VERSION = "track-dsp-beat-config-v1"
+    const val BEAT_ANALYSIS_CONFIG_VERSION = "track-dsp-beat-config-v2-local-interval"
     private const val FFT_SIZE = 2048
     private const val HOP = 256
     private val major = doubleArrayOf(6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)

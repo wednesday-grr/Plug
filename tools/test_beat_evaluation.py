@@ -1,6 +1,8 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from beat_evaluation import match_beats, metrics, reference_interpretation
+from beat_evaluation import match_beats, metrics, read_reference, reference_interpretation
 
 
 class BeatEvaluationTest(unittest.TestCase):
@@ -23,6 +25,14 @@ class BeatEvaluationTest(unittest.TestCase):
         self.assertEqual("DOUBLE_TIME", reference_interpretation(120, 240))
         self.assertIsNone(reference_interpretation(120, 150))
         self.assertIsNone(reference_interpretation(None, 120))
+
+    def test_rwc_r_csv_uses_seconds_and_crops_to_audio_window(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "reference.csv"
+            path.write_text("t;beat\n0.150;1\n0.650;2\n60.150;1\n", encoding="utf-8")
+            track = {"id": "RWC_R001", "beats": str(path), "reference_format": "rwc-r"}
+
+            self.assertEqual([150_000, 650_000], read_reference(track, 60_000_000))
 
 
 if __name__ == "__main__":

@@ -90,15 +90,17 @@ class LyricPlaybackStyleTest {
         val word = prepared[1]
         assertEquals(1f, activeWordScale(word, 999uL, true), 0.001f)
         assertEquals(1f, activeWordScale(word, 1000uL, true), 0.001f)
-        assertEquals(1.06f, activeWordScale(word, 1100uL, true), 0.001f)
+        val firstHalf = activeWordScale(word, 1100uL, true)
+        assertTrue(firstHalf > 1f && firstHalf < 1.12f)
         assertEquals(1.12f, activeWordScale(word, 1200uL, true), 0.001f)
-        assertEquals(1.06f, activeWordScale(word, 3900uL, true), 0.001f)
+        assertEquals(firstHalf, activeWordScale(word, 3900uL, true), 0.001f)
         assertEquals(1f, activeWordScale(word, 4000uL, true), 0.001f)
         assertEquals(1f, activeWordScale(word, 4001uL, true), 0.001f)
-        assertEquals(1.06f, activeWordScale(prepared[2], 4100uL, true), 0.001f)
+        assertEquals(firstHalf, activeWordScale(prepared[2], 4100uL, true), 0.001f)
         assertEquals(1.12f, activeWordScale(word, 1000uL, false), 0.001f)
         assertEquals(1f, activeWordScale(null, 2200uL, true), 0.001f)
-        assertEquals(1.06f, activeWordScale(word, 1200uL, true, 400), 0.001f)
+        val slower = activeWordScale(word, 1200uL, true, 400)
+        assertTrue(slower > 1f && slower < 1.12f)
         assertTrue(prepareLongLyricWords(words, "abc defg hijk lmn", 0uL..1000uL).isEmpty())
     }
 
@@ -235,8 +237,10 @@ class LyricPlaybackStyleTest {
             view.updateAutomixLyrics(event)
             val incomingContainer = view.getChildAt(view.childCount - 1) as FrameLayout
             val second = incomingContainer.findViewById<NewLyricsView>(org.akanework.gramophone.R.id.lyric_view)
-            assertEquals(400, main.layoutParams.height)
-            assertEquals(400, incomingContainer.layoutParams.height)
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, main.layoutParams.height)
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, incomingContainer.layoutParams.height)
+            assertEquals(android.graphics.Rect(0, 0, 800, 400), main.clipBounds)
+            assertEquals(android.graphics.Rect(0, 400, 800, 800), incomingContainer.clipBounds)
             assertEquals(4000uL, main.instance.getCurrentPosition())
             assertEquals(1200uL, second.instance.getCurrentPosition())
             view.updateAutomixLyrics(Bundle().apply {
@@ -246,7 +250,10 @@ class LyricPlaybackStyleTest {
             assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, main.layoutParams.height)
             val lyricsField = NewLyricsView::class.java.getDeclaredField("lyrics").apply { isAccessible = true }
             assertEquals(incoming, lyricsField.get(main))
-            assertEquals(4, view.childCount)
+            assertNull(
+                LyricsView::class.java.getDeclaredField("incomingContainer")
+                    .apply { isAccessible = true }.get(view)
+            )
         } finally {
             prefs.edit().putBoolean("lyric_no_animation", oldAnimation)
                 .putBoolean("lyric_ui_v2", oldRenderer).commit()
@@ -277,14 +284,18 @@ class LyricPlaybackStyleTest {
             view.updateAutomixLyrics(event)
             (animatorField.get(view) as ValueAnimator).end()
             val incoming = view.getChildAt(view.childCount - 1) as FrameLayout
-            assertEquals(400, main.layoutParams.height)
-            assertEquals(400, (incoming.layoutParams as FrameLayout.LayoutParams).topMargin)
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, main.layoutParams.height)
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, incoming.layoutParams.height)
+            assertEquals(android.graphics.Rect(0, 0, 800, 400), main.clipBounds)
+            assertEquals(android.graphics.Rect(0, 400, 800, 800), incoming.clipBounds)
+            val incomingContent = incoming.findViewById<View>(org.akanework.gramophone.R.id.lyric_view)
+            assertEquals(400f, incomingContent.translationY)
             view.updateAutomixLyrics(Bundle().apply { putBoolean("handoff", true) })
-            assertEquals(0, (main.layoutParams as FrameLayout.LayoutParams).topMargin)
-            assertEquals(400, (incoming.layoutParams as FrameLayout.LayoutParams).topMargin)
+            assertEquals(0f, main.translationY)
+            assertEquals(400f, incomingContent.translationY)
             (animatorField.get(view) as ValueAnimator).currentPlayTime = 200
-            assertTrue((main.layoutParams as FrameLayout.LayoutParams).topMargin < 0)
-            assertTrue((incoming.layoutParams as FrameLayout.LayoutParams).topMargin in 1..399)
+            assertTrue(main.translationY < 0f)
+            assertTrue(incomingContent.translationY in 1f..399f)
             view.updateAutomixLyrics(event)
             (animatorField.get(view) as ValueAnimator).end()
             view.updateAutomixLyrics(Bundle().apply { putBoolean("handoff", false) })
@@ -328,8 +339,11 @@ class LyricPlaybackStyleTest {
             val secondary = container.findViewById<MyRecyclerView>(org.akanework.gramophone.R.id.recycler_view)
             val primaryAdapter = main.adapter as LegacyLyricsAdapter
             val secondaryAdapter = secondary.adapter as LegacyLyricsAdapter
-            assertEquals(400, main.layoutParams.height)
-            assertEquals(400, container.layoutParams.height)
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, main.layoutParams.height)
+            assertEquals(ViewGroup.LayoutParams.MATCH_PARENT, container.layoutParams.height)
+            assertEquals(android.graphics.Rect(0, 0, 800, 400), main.clipBounds)
+            assertEquals(android.graphics.Rect(0, 400, 800, 800), container.clipBounds)
+            assertEquals(400f, secondary.translationY)
             assertEquals(4000uL, primaryAdapter.callback!!.getCurrentPosition())
             assertEquals(1200uL, secondaryAdapter.callback!!.getCurrentPosition())
             val holder = secondaryAdapter.onCreateViewHolder(container, 0)

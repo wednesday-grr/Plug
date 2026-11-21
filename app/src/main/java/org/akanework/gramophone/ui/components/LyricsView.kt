@@ -1038,13 +1038,9 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
         val animator = ValueAnimator.ofFloat(0f, 1f)
         splitAnimator = animator
         val spring = lyricSpringSpec(prefs, "primary")
-        val startTime = android.os.SystemClock.uptimeMillis()
         animator.duration = spring.durationMs.toLong()
         animator.addUpdateListener {
-            val elapsed = android.os.SystemClock.uptimeMillis() - startTime
-            val progress = lyricSpringProgress(
-                elapsed.toFloat() / spring.durationMs.coerceAtLeast(1), spring
-            )
+            val progress = lyricSpringProgress(it.animatedFraction, spring)
             splitAmount = startAmount + (target - startAmount) * progress
             layoutSplit(handoff)
         }
@@ -1052,6 +1048,8 @@ class LyricsView(context: Context, attrs: AttributeSet?) : FrameLayout(context, 
             override fun onAnimationEnd(animation: android.animation.Animator) {
                 if (splitAnimator !== animator) return
                 splitAnimator = null
+                splitAmount = target
+                layoutSplit(handoff)
                 if (target == 0f) finishSplit(handoff)
             }
         })

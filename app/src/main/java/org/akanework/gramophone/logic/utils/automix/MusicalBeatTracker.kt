@@ -43,10 +43,12 @@ data class BeatTrackingResult(
  * results are research evidence, not a validated beat detector or a playback synchronization input.
  */
 object MusicalBeatTracker {
-    const val ALGORITHM_VERSION = "spectral-onset-tracker-v2"
+    const val ALGORITHM_VERSION = "spectral-onset-tracker-v3-local-interval"
     private const val MIN_ONSETS = 4
     private const val MIN_SEPARATION_US = 90_000L
     private const val MAX_LOG_INTERVAL_ERROR = 0.36
+    private const val MAX_LOG_TEMPO_CHANGE = 0.25
+    private const val AMBIGUITY_SUPPORT_MARGIN = 0.02
 
     suspend fun onsetCandidates(
         flux: DoubleArray,
@@ -99,8 +101,14 @@ object MusicalBeatTracker {
         if (bpmPrior == null || !bpmPrior.isFinite() || bpmPrior <= 0f || onsets.size < MIN_ONSETS)
             return BeatTrackingResult(null, emptyList(), null, false, "Insufficient onset or tempo evidence")
 
-        data class Path(val interpretation: BeatTempoInterpretation, val bpm: Double,
-            val indexes: List<Int>, val support: Double)
+        data class Path(
+            val interpretation: BeatTempoInterpretation,
+            val bpm: Double,
+            val indexes: List<Int>,
+            val beatSteps: IntArray,
+            val localPeriods: DoubleArray,
+            val support: Double,
+        )
         val paths = listOf(
             BeatTempoInterpretation.PRIMARY to 1.0,
             BeatTempoInterpretation.HALF_TIME to 0.5,
@@ -108,25 +116,44 @@ object MusicalBeatTracker {
         ).mapNotNull { (interpretation, multiplier) ->
             val bpm = bpmPrior * multiplier
             if (bpm !in 30.0..300.0) return@mapNotNull null
-            val period = 60_000_000.0 / bpm
+            val initialPeriod = 60_000_000.0 / bpm
             val scores = DoubleArray(onsets.size)
             val previous = IntArray(onsets.size) { -1 }
+            val beatSteps = IntArray(onsets.size) { 1 }
+            val localPeriods = DoubleArray(onsets.size) { initialPeriod }
             for (i in onsets.indices) {
                 if (i % 128 == 0) currentCoroutineContext().ensureActive()
                 scores[i] = onsets[i].strength.toDouble()
+                var bestPrevious = -1
+                var bestBeatSteps = 1
+                var bestPeriod = initialPeriod
                 for (j in i - 1 downTo 0) {
                     if ((i - j) % 256 == 0) currentCoroutineContext().ensureActive()
                     val delta = (onsets[i].sourceTimeUs - onsets[j].sourceTimeUs).toDouble()
-                    if (delta > period * 2.25) break
-                    val beats = if (delta > period * 1.5) 2 else 1
-                    val error = abs(ln(delta / (period * beats)))
-                    if (error > MAX_LOG_INTERVAL_ERROR) continue
+                    if (delta > 4_500_000.0) break
+                    val expectedPeriod = localPeriods[j]
+                    val ratio = delta / expectedPeriod
+                    val beats = if (ratio > 1.5) 2 else 1
+                    val observedPeriod = delta / beats
+                    if (observedPeriod !in 200_000.0..2_000_000.0) continue
+                    val error = abs(ln(observedPeriod / expectedPeriod))
+                    if (error > MAX_LOG_INTERVAL_ERROR || error > MAX_LOG_TEMPO_CHANGE) continue
                     val score = scores[j] + onsets[i].strength + 0.6 - error * 2.0 -
                         if (beats == 2) 0.6 else 0.0
                     if (score > scores[i]) {
                         scores[i] = score
                         previous[i] = j
+                        beatSteps[i] = beats
+                        bestPrevious = j
+                        bestBeatSteps = beats
+                        bestPeriod = kotlin.math.exp(
+                            (ln(expectedPeriod) + ln(observedPeriod)) * 0.5,
+                        )
                     }
+                }
+                if (bestPrevious >= 0) {
+                    beatSteps[i] = bestBeatSteps
+                    localPeriods[i] = bestPeriod
                 }
             }
             val best = scores.indices.maxByOrNull { scores[it] } ?: return@mapNotNull null
@@ -139,39 +166,51 @@ object MusicalBeatTracker {
             indices.reverse()
             if (indices.size < MIN_ONSETS) return@mapNotNull null
             val selected = indices.map(onsets::get)
-            val timing = selected.zipWithNext().map { (a, b) ->
-                val ratio = (b.sourceTimeUs - a.sourceTimeUs) / period
-                val count = if (ratio > 1.5) 2 else 1
-                (1.0 - abs(ln(ratio / count)) / MAX_LOG_INTERVAL_ERROR).coerceIn(0.0, 1.0) / count
+            val timing = indices.drop(1).map { index ->
+                val parent = previous[index]
+                val expectedPeriod = localPeriods[parent]
+                val observedPeriod = (onsets[index].sourceTimeUs -
+                    onsets[parent].sourceTimeUs).toDouble() / beatSteps[index]
+                (1.0 - abs(ln(observedPeriod / expectedPeriod)) /
+                    MAX_LOG_TEMPO_CHANGE).coerceIn(0.0, 1.0)
             }.average()
             val coverage = indices.size.toDouble() / onsets.size
             val meanStrength = selected.map { it.strength.toDouble() }.average()
-            Path(interpretation, bpm, indices,
-                (0.45 * timing + 0.3 * coverage + 0.25 * meanStrength).coerceIn(0.0, 1.0))
+            val observedStepFraction = indices.drop(1).map { 1.0 / beatSteps[it] }.average()
+            val observedPeriods = indices.map { localPeriods[it] }.sorted()
+            val medianPeriod = observedPeriods[observedPeriods.size / 2]
+            Path(interpretation, 60_000_000.0 / medianPeriod, indices, beatSteps, localPeriods,
+                (0.4 * timing + 0.25 * coverage + 0.2 * meanStrength +
+                    0.15 * observedStepFraction).coerceIn(0.0, 1.0))
         }.sortedByDescending { it.support }
         val hypotheses = paths.map { BeatTempoHypothesis(it.interpretation, it.bpm, it.support.toFloat()) }
         val best = paths.firstOrNull() ?: return BeatTrackingResult(null, hypotheses, null, false,
             "No sufficiently supported observed onset sequence")
-        val ambiguous = paths.size > 1 && best.support - paths[1].support < 0.08
+        val ambiguous = paths.size > 1 &&
+            best.support - paths[1].support < AMBIGUITY_SUPPORT_MARGIN
         if (ambiguous) return BeatTrackingResult(null, hypotheses, null, true,
             "Tempo interpretations have similar uncalibrated support")
-        val period = 60_000_000.0 / best.bpm
-        var beatIndex = 0L
+        var nextBeatIndex = 0L
         val events = best.indexes.mapIndexed { index, onsetIndex ->
+            if (index > 0) nextBeatIndex += best.beatSteps[onsetIndex] - 1
             val onset = onsets[onsetIndex]
-            val previousTime = if (index > 0) onsets[best.indexes[index - 1]].sourceTimeUs else null
-            if (previousTime != null && onset.sourceTimeUs - previousTime > period * 1.5) beatIndex++
             val localIntervals = listOfNotNull(
-                previousTime?.let { onset.sourceTimeUs - it },
-                best.indexes.getOrNull(index + 1)?.let { onsets[it].sourceTimeUs - onset.sourceTimeUs },
+                best.indexes.getOrNull(index - 1)?.let { previousIndex ->
+                    val delta = onset.sourceTimeUs - onsets[previousIndex].sourceTimeUs
+                    val observed = delta.toDouble() / best.beatSteps[onsetIndex]
+                    abs(ln(observed / best.localPeriods[previousIndex]))
+                },
+                best.indexes.getOrNull(index + 1)?.let { nextIndex ->
+                    val delta = onsets[nextIndex].sourceTimeUs - onset.sourceTimeUs
+                    val observed = delta.toDouble() / best.beatSteps[nextIndex]
+                    abs(ln(observed / best.localPeriods[onsetIndex]))
+                },
             )
-            val localSupport = localIntervals.map { delta ->
-                val count = if (delta > period * 1.5) 2 else 1
-                (1.0 - abs(ln(delta / (period * count))) / MAX_LOG_INTERVAL_ERROR)
-                    .coerceIn(0.0, 1.0) / count
+            val localSupport = localIntervals.map {
+                (1.0 - it / MAX_LOG_TEMPO_CHANGE).coerceIn(0.0, 1.0)
             }.average()
             val score = sqrt(onset.strength * localSupport * best.support).toFloat()
-            DetectedBeatEvent(beatIndex++, onset.sourceTimeUs,
+            DetectedBeatEvent(nextBeatIndex++, onset.sourceTimeUs,
                 musicalBeatConfidence = score, onsetStrength = onset.strength)
         }
         return BeatTrackingResult(

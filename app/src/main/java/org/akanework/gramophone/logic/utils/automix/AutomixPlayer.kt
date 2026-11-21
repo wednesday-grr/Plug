@@ -678,7 +678,7 @@ class AutomixPlayer private constructor(
         }
         abandonFocus()
         handleFocus = handleAudioFocus
-        focusRequest = if (handleAudioFocus) AudioFocusRequestCompat.Builder(AudioManager.AUDIOFOCUS_GAIN)
+        focusRequest = if (handleAudioFocus) AudioFocusRequestCompat.Builder(AudioManagerCompat.AUDIOFOCUS_GAIN)
             .setAudioAttributes(audioAttributes)
             .setOnAudioFocusChangeListener(focusListener, handler)
             .setWillPauseWhenDucked(false)

@@ -804,7 +804,9 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
                     if (scale > 1f) character to scale else null
                 }
                 if (activeCharacters.isNotEmpty()) {
-                    node?.discardDisplayList()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        node?.discardDisplayList()
+                    }
                     canvas.save()
                     activeCharacters.forEach { (character, _) ->
                         @Suppress("DEPRECATION")
@@ -912,7 +914,7 @@ class NewLyricsView(context: Context, attrs: AttributeSet?) : ScrollingView2(con
     }
 
     private fun invalidateDeeply() {
-        if (hasRenderNodes()) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             cachedNodes!!.forEach { _, it ->
                 it.discardDisplayList()
             }

@@ -2,6 +2,7 @@
 """Evaluate the production Kotlin tracker on explicitly supplied annotated PCM WAV fixtures."""
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -52,6 +53,28 @@ def reference_interpretation(prior, reference_bpm):
     return name if error <= TEMPO_RELATIVE_TOLERANCE else None
 
 
+def read_reference(track, duration_us):
+    reference_path = Path(track["beats"])
+    reference_format = track.get("reference_format", "seconds")
+    if reference_format == "seconds":
+        timestamps = [round(float(line.strip()) * 1_000_000)
+                     for line in reference_path.read_text(encoding="utf-8").splitlines()
+                     if line.strip() and not line.lstrip().startswith("#")]
+    elif reference_format == "rwc-r":
+        with reference_path.open(encoding="utf-8", newline="") as source:
+            reader = csv.DictReader(source, delimiter=";")
+            if not reader.fieldnames or not {"t", "beat"}.issubset(reader.fieldnames):
+                raise ValueError(f"{track['id']}: RWC-R CSV must have t and beat columns")
+            timestamps = [round(float(row["t"]) * 1_000_000) for row in reader]
+    else:
+        raise ValueError(f"{track['id']}: unsupported reference format {reference_format!r}")
+
+    if (timestamps != sorted(timestamps) or len(timestamps) != len(set(timestamps)) or
+            any(timestamp < 0 for timestamp in timestamps)):
+        raise ValueError(f"{track['id']}: reference timestamps must be nonnegative, unique and sorted")
+    return [timestamp for timestamp in timestamps if timestamp <= duration_us]
+
+
 def evaluate(manifest_path, output_path):
     manifest_path = Path(manifest_path).resolve()
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -92,15 +115,10 @@ def evaluate(manifest_path, output_path):
     all_errors = []
     totals = [0, 0]
     for index, (track, row) in enumerate(zip(tracks, rows)):
-        if len(row) != 9 or int(row[0]) != index:
+        if len(row) not in (9, 10, 11) or int(row[0]) != index:
             raise ValueError("Evaluation runner returned a malformed or unordered result")
         duration_us = int(row[1]) * 1000000 // RATE
-        reference = [round(float(line.strip()) * 1000000)
-                     for line in Path(track["beats"]).read_text(encoding="utf-8").splitlines()
-                     if line.strip() and not line.lstrip().startswith("#")]
-        if (reference != sorted(reference) or len(reference) != len(set(reference)) or
-                any(t < 0 or t > duration_us for t in reference)):
-            raise ValueError(f"{track['id']}: reference timestamps must be unique, sorted and in the WAV window")
+        reference = read_reference(track, duration_us)
         unavailable = row[7] == "unavailable"
         detected = [] if unavailable or not row[7] else [int(t) for t in row[7].split(",")]
         errors = match_beats(detected, reference)
@@ -110,13 +128,23 @@ def evaluate(manifest_path, output_path):
         prior = float(row[3]) if row[3] else None
         selected = row[4] or None
         expected = reference_interpretation(prior, track.get("reference_bpm"))
+        hypotheses = []
+        if len(row) >= 10 and row[9]:
+            for hypothesis in row[9].split(";"):
+                interpretation, bpm, support = hypothesis.split(",")
+                hypotheses.append({"interpretation": interpretation,
+                                   "bpm": float(bpm), "support": float(support)})
         results.append({"id": track["id"], "duration_us": duration_us,
                         "processing_time_ms": float(row[2]), "bpm_prior": prior,
+                        "reference_format": track.get("reference_format", "seconds"),
                         "selected": selected, "selected_bpm": float(row[6]) if row[6] else None,
+                        "tempo_hypotheses": hypotheses,
                         "reference_bpm": track.get("reference_bpm"), "expected_interpretation": expected,
                         "interpretation_correct": selected == expected if expected else None,
                         "ambiguous": row[5] == "true", "unavailable": unavailable,
-                        "algorithm_version": row[8], **metrics(len(detected), len(reference), errors)})
+                        "algorithm_version": row[8],
+                        "configuration_version": row[10] if len(row) == 11 else None,
+                        **metrics(len(detected), len(reference), errors)})
     def accuracy(subset):
         return sum(r["interpretation_correct"] for r in subset) / len(subset) if subset else None
     classified = [r for r in results if r["expected_interpretation"]]
@@ -133,6 +161,9 @@ def evaluate(manifest_path, output_path):
     report = {"configuration": {"sample_rate_hz": RATE, "tolerance_us": TOLERANCE_US,
                                  "tempo_relative_tolerance": TEMPO_RELATIVE_TOLERANCE,
                                  "matching": "sorted earliest compatible one-to-one",
+                                 "algorithm_version": results[0]["algorithm_version"],
+                                 "analysis_configuration_version":
+                                     results[0]["configuration_version"],
                                  "dataset": data.get("dataset"), "license": data.get("license")},
               "tracks": results, "aggregate_micro": aggregate}
     Path(output_path).write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")

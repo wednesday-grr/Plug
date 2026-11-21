@@ -188,6 +188,39 @@ class AudioAnalysisSchedulerTest {
     }
 
     @Test
+    fun beatAnalysisStatusTracksRunningAndPersistedResults() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val track = item("beat-status")
+        val key = checkNotNull(AnalysisKey.from(track))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val scheduler = AudioAnalysisScheduler(context, TrackAnalysisCache(context), analyzeBeat = {
+            started.complete(Unit)
+            release.await()
+            beatRecord(it)
+        })
+        try {
+            assertEquals(AudioAnalysisScheduler.BeatAnalysisStatus.MISSING, scheduler.beatAnalysisStatus(key))
+            scheduler.requestBeatAnalysis(track, "details-screen")
+            withTimeout(10_000) { started.await() }
+            assertEquals(
+                AudioAnalysisScheduler.BeatAnalysisStatus.ANALYZING,
+                scheduler.beatAnalysisStatus(key),
+            )
+            release.complete(Unit)
+            withTimeout(10_000) {
+                while (scheduler.cache.peekBeatGrid(key) !is BeatGridCacheRead.Available) yield()
+            }
+            assertEquals(
+                AudioAnalysisScheduler.BeatAnalysisStatus.DETECTED,
+                scheduler.beatAnalysisStatus(key),
+            )
+        } finally {
+            scheduler.close()
+        }
+    }
+
+    @Test
     fun persistedBeatGridHitDoesNotRunDetectorAgain() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
         val track = item("persisted-beat-cache-hit")

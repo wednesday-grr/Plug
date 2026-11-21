@@ -147,6 +147,7 @@ import org.akanework.gramophone.logic.utils.automix.AutomixSettingsStore
 import org.akanework.gramophone.logic.utils.automix.AudioAnalysisScheduler
 import org.akanework.gramophone.logic.utils.automix.TrackAnalysisCache
 import org.akanework.gramophone.logic.utils.automix.AnalysisKey
+import org.akanework.gramophone.logic.utils.automix.BeatGridCacheRead
 import org.akanework.gramophone.logic.utils.automix.SmartQueueSorter
 import org.akanework.gramophone.logic.utils.automix.TrackAudioMetadataResolver
 
@@ -201,6 +202,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         const val SERVICE_BEAT_JUMP = "automix_beat_jump"
         const val SERVICE_BEAT_LOOP = "automix_beat_loop"
         const val SERVICE_CLEAR_BEAT_LOOP = "automix_clear_beat_loop"
+        const val SERVICE_BEAT_ANALYSIS = "offline_beat_analysis"
         const val SERVICE_GET_LYRICS = "get_lyrics"
         const val LYRICS_CACHE_PREFERENCES = "lyrics_response_cache"
         const val CLIENT_AUTOMIX_LYRICS = "automix_lyrics"
@@ -811,19 +813,19 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
     ): ListenableFuture<SessionResult> {
         if (rating !is HeartRating) {
             return Futures.immediateFuture(SessionResult(
-                SessionResult.RESULT_ERROR_BAD_VALUE))
+                SessionError.ERROR_BAD_VALUE))
         }
         val completion = SettableFuture.create<SessionResult>()
         lifecycleScope.launch(Dispatchers.Default) {
             val item = plugApplication.reader.songListFlow.map {
                 it.find { s -> s.mediaId == mediaId } }.first()
             if (item == null) {
-                completion.set(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                completion.set(SessionResult(SessionError.ERROR_BAD_VALUE))
                 return@launch
             }
             val song = Entry.ofMediaItem(item)
             if (song == null) {
-                completion.set(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                completion.set(SessionResult(SessionError.ERROR_BAD_VALUE))
                 return@launch
             }
             val uriIn = plugApplication.reader.playlistListFlow.map { it.find { p ->
@@ -994,6 +996,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         availableSessionCommands.add(SessionCommand(SERVICE_BEAT_JUMP, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_BEAT_LOOP, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_CLEAR_BEAT_LOOP, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_BEAT_ANALYSIS, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_PIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_UNPIN_QUEUE, Bundle.EMPTY))
         availableSessionCommands.add(SessionCommand(SERVICE_QB_RENAME_QUEUE, Bundle.EMPTY))
@@ -1360,6 +1363,45 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         customCommand: SessionCommand,
         args: Bundle
     ): ListenableFuture<SessionResult> {
+        if (customCommand.customAction == SERVICE_BEAT_ANALYSIS) {
+            val operation = args.getString("operation")
+            val ownerId = args.getString("owner_id").orEmpty()
+            val item = args.getBinder("item")?.let { binder ->
+                MediaItemList.getList(binder).singleOrNull()
+            }
+            val key = item?.let(AnalysisKey::from)
+            val status = when (operation) {
+                "request" -> {
+                    if (ownerId.isBlank() || item == null || key == null) {
+                        return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                    }
+                    audioAnalysis.requestBeatAnalysis(item, ownerId)
+                    audioAnalysis.beatAnalysisStatus(key).name
+                }
+                "status" -> {
+                    if (key == null) return Futures.immediateFuture(
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
+                    )
+                    audioAnalysis.beatAnalysisStatus(key).name
+                }
+                "cancel" -> {
+                    if (ownerId.isBlank()) return Futures.immediateFuture(
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
+                    )
+                    audioAnalysis.cancelBeatAnalysis(ownerId)
+                    item?.let { key?.let(audioAnalysis::beatAnalysisStatus) }?.name ?: "MISSING"
+                }
+                else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS).also { result ->
+                result.extras.putString("beat_analysis_status", status)
+                val cached = key?.let(audioAnalysis.cache::peekBeatGrid) as? BeatGridCacheRead.Available
+                cached?.record?.result?.grid?.events?.size?.let {
+                    result.extras.putInt("beat_analysis_count", it)
+                }
+            })
+        }
+
         if (customCommand.customAction == SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY
             || customCommand.customAction == SERVICE_SET_MEDIA_ITEMS_ATOMIC) {
             val songList = MediaItemList.getList(
@@ -1546,10 +1588,10 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         if (customCommand.customAction == SERVICE_GET_DJ_METRICS) {
             return lifecycleScope.future {
                 val wrapper = endedWorkaroundPlayer
-                    ?: return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                    ?: return@future SessionResult(SessionError.ERROR_INVALID_STATE)
                 val player = wrapper.exoPlayer
                 val item = player.currentMediaItem
-                    ?: return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                    ?: return@future SessionResult(SessionError.ERROR_INVALID_STATE)
                 val index = player.currentMediaItemIndex
                 val engine = wrapper.playbackEngine as? AutomixPlayer
                 val nextItem = engine?.upcomingMediaItem
@@ -1562,7 +1604,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                     player.currentMediaItemIndex != index || player.currentMediaItem != item ||
                     (wrapper.playbackEngine as? AutomixPlayer) !== engine ||
                     engine?.upcomingMediaItem != nextItem || audioAnalysis.cache.selectedAnalyzer != selectedAnalyzer
-                ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                ) return@future SessionResult(SessionError.ERROR_INVALID_STATE)
                 val metadata = TrackAudioMetadataResolver.resolvePlayer(
                     player, key?.let(audioAnalysis.cache::peekSelected)
                 )
@@ -1625,7 +1667,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                 val index = engine?.currentMediaItemIndex ?: C.INDEX_UNSET
                 if (wrapper == null || engine == null || !automixSettings.settings.value.enabled ||
                     index !in 0 until engine.mediaItemCount || engine.isCrossfading
-                ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                ) return@future SessionResult(SessionError.ERROR_INVALID_STATE)
 
                 val timeline = engine.currentTimeline
                 val shuffle = engine.shuffleModeEnabled
@@ -1687,7 +1729,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                     now.windowCount != ids.size ||
                     ids.indices.any { now.getWindow(it, window).uid != ids[it] } ||
                     items.indices.any { engine.getMediaItemAt(it) != items[it] }
-                ) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                ) return@future SessionResult(SessionError.ERROR_INVALID_STATE)
 
                 wrapper.sortQueueForAutomix(order)
                 for (connected in session.connectedControllers) {
@@ -1805,7 +1847,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                             res.extras.putBinder("allQueues", binder)
                         }
                     } catch (e: IllegalStateException) {
-                        SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
                     }
                 }
 
@@ -1828,7 +1870,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                         }
                         SessionResult(SessionResult.RESULT_SUCCESS)
                     } else {
-                        SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
                     }
                 }
 

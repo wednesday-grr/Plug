@@ -67,7 +67,7 @@ android {
     }
 
     androidResources {
-        generateLocaleConfig = true
+        generateLocaleConfig = false
     }
 
     buildFeatures {
@@ -123,6 +123,7 @@ android {
     defaultConfig {
         applicationId = appIdOverride ?: "org.plug.player"
         minSdk = 23
+        resourceConfigurations += listOf("en")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "HAS_ESSENTIA", useEssentia.toString())
         if (useEssentia) {

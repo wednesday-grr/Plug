@@ -182,14 +182,20 @@ internal data class LongLyricCharacter(val timing: LongLyricWord, val charRange:
 
 private fun splitIntoLyricWordRanges(text: String): List<IntRange> {
     val iterator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        android.icu.text.BreakIterator.getWordInstance().apply { setText(text) }
+        splitWordsWithIcu(text)
     } else null
     return if (iterator != null) {
-        collectWordRanges(text, iterator.first()) { iterator.next() }
+        iterator
     } else {
         val fallback = BreakIterator.getWordInstance().apply { setText(text) }
         collectWordRanges(text, fallback.first()) { fallback.next() }
     }
+}
+
+@android.annotation.TargetApi(Build.VERSION_CODES.N)
+private fun splitWordsWithIcu(text: String): List<IntRange> {
+    val iterator = android.icu.text.BreakIterator.getWordInstance().apply { setText(text) }
+    return collectWordRanges(text, iterator.first()) { iterator.next() }
 }
 
 private fun splitIntoCharacterRanges(text: String, range: IntRange): List<IntRange> {
@@ -198,15 +204,21 @@ private fun splitIntoCharacterRanges(text: String, range: IntRange): List<IntRan
     if (boundedStart >= boundedEnd) return emptyList()
     val substring = text.substring(boundedStart, boundedEnd)
     val iterator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        android.icu.text.BreakIterator.getCharacterInstance().apply { setText(substring) }
+        splitCharactersWithIcu(substring)
     } else null
     val localRanges = if (iterator != null) {
-        collectCharacterRanges(substring, iterator.first()) { iterator.next() }
+        iterator
     } else {
         val fallback = BreakIterator.getCharacterInstance().apply { setText(substring) }
         collectCharacterRanges(substring, fallback.first()) { fallback.next() }
     }
     return localRanges.map { (boundedStart + it.first)..(boundedStart + it.last) }
+}
+
+@android.annotation.TargetApi(Build.VERSION_CODES.N)
+private fun splitCharactersWithIcu(text: String): List<IntRange> {
+    val iterator = android.icu.text.BreakIterator.getCharacterInstance().apply { setText(text) }
+    return collectCharacterRanges(text, iterator.first()) { iterator.next() }
 }
 
 private fun collectCharacterRanges(text: String, first: Int, next: () -> Int): List<IntRange> {

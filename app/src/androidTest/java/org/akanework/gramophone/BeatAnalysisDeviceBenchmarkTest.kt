@@ -9,6 +9,7 @@
 package org.akanework.gramophone
 
 import android.content.Context
+import android.content.ComponentName
 import android.media.MediaCodecList
 import android.os.Bundle
 import android.os.Debug
@@ -19,13 +20,22 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionToken
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
+import org.akanework.gramophone.logic.PlugPlaybackService
+import org.akanework.gramophone.logic.utils.MediaItemList
 import org.akanework.gramophone.logic.utils.automix.AnalysisKey
 import org.akanework.gramophone.logic.utils.automix.AnalysisWindow
 import org.akanework.gramophone.logic.utils.automix.AudioAnalysisScheduler
@@ -41,10 +51,14 @@ import org.akanework.gramophone.logic.utils.automix.TrackBeatAnalysis
 import org.akanework.gramophone.logic.utils.automix.TrackDspAnalyzer
 import org.akanework.gramophone.logic.utils.automix.TrackPcmDecoder
 import org.junit.Assume.assumeTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import uk.akane.libphonograph.items.EXTRA_MODIFIED_DATE
 import java.io.File
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONArray
 import org.json.JSONObject
@@ -57,9 +71,15 @@ class BeatAnalysisDeviceBenchmarkTest {
     @Test
     fun benchmarkLocalAudioFixtures() {
         runBlocking {
-            val directory = File(context.filesDir, "beat-benchmark")
+            val directories = listOfNotNull(
+                File(context.filesDir, "beat-benchmark"),
+                context.getExternalFilesDir("beat-benchmark"),
+            )
+            val directory = directories.firstOrNull { candidate ->
+                candidate.listFiles()?.any { it.isAudioFixture() } == true
+            } ?: directories.first()
             val fixtures = directory.listFiles()
-                ?.filter { it.isFile && it.name != "benchmark-results.json" }
+                ?.filter { it.isAudioFixture() }
                 ?.sortedBy { it.name }
                 .orEmpty()
             assumeTrue("Provide local audio fixtures in ${directory.path}", fixtures.isNotEmpty())
@@ -83,9 +103,71 @@ class BeatAnalysisDeviceBenchmarkTest {
                 .put("fixtures", results)
                 .put("cancellation_response_ms", cancellation)
                 .put("cancellation_fixture", cancellationIndex?.let { "fixture-${it + 1}" })
+            val reportJson = report.toString()
             File(directory, "benchmark-results.json").writeText(report.toString(2))
-            Log.i(TAG, report.toString())
+            reportJson.chunked(2_000).forEachIndexed { index, chunk ->
+                Log.i(TAG, "report[$index]:$chunk")
+            }
         }
+    }
+
+    @Test
+    fun mediaSessionCommandRunsOfflineBeatAnalysisAndReturnsStatus() = runBlocking {
+        val directories = listOfNotNull(
+            File(context.filesDir, "beat-benchmark"),
+            context.getExternalFilesDir("beat-benchmark"),
+        )
+        val directory = directories.firstOrNull { candidate ->
+            candidate.listFiles()?.any { it.isAudioFixture() } == true
+        } ?: directories.first()
+        val fixture = directory.listFiles()?.firstOrNull { it.isAudioFixture() }
+        assumeTrue("Provide a local audio fixture in ${directory.path}", fixture != null)
+        val file = checkNotNull(fixture)
+        val item = mediaItem(file, Uri.fromFile(file), "session-test-${UUID.randomUUID()}")
+        val ownerId = "session-test-${UUID.randomUUID()}"
+        val token = SessionToken(context, ComponentName(context, PlugPlaybackService::class.java))
+        val controller = MediaController.Builder(context, token).buildAsync()
+            .get(30, TimeUnit.SECONDS)
+        try {
+            val requested = sendBeatAnalysisCommand(controller, "request", ownerId, item)
+            assertEquals(SessionResult.RESULT_SUCCESS, requested.resultCode)
+            var status = requested.extras.getString("beat_analysis_status")
+                ?: error("Beat analysis response omitted status")
+            withTimeout(120_000) {
+                while (status == "PENDING" || status == "ANALYZING") {
+                    kotlinx.coroutines.delay(100)
+                    val response = sendBeatAnalysisCommand(controller, "status", ownerId, item)
+                    assertEquals(SessionResult.RESULT_SUCCESS, response.resultCode)
+                    status = response.extras.getString("beat_analysis_status")
+                        ?: error("Beat analysis response omitted status")
+                }
+            }
+            assertTrue("Unexpected terminal beat-analysis status: $status",
+                status in setOf("DETECTED", "EMPTY", "UNAVAILABLE"))
+        } finally {
+            sendBeatAnalysisCommand(controller, "cancel", ownerId, item)
+            withContext(Dispatchers.Main.immediate) { controller.release() }
+        }
+    }
+
+    private suspend fun sendBeatAnalysisCommand(
+        controller: MediaController,
+        operation: String,
+        ownerId: String,
+        item: MediaItem,
+    ): SessionResult {
+        val args = Bundle().apply {
+            putString("operation", operation)
+            putString("owner_id", ownerId)
+            putBinder("item", MediaItemList(listOf(item)))
+        }
+        val result = withContext(Dispatchers.Main.immediate) {
+            controller.sendCustomCommand(
+                SessionCommand(PlugPlaybackService.SERVICE_BEAT_ANALYSIS, Bundle.EMPTY),
+                args,
+            )
+        }
+        return result.await()
     }
 
     private suspend fun benchmark(id: String, file: File): JSONObject {
@@ -160,7 +242,7 @@ class BeatAnalysisDeviceBenchmarkTest {
         return JSONObject()
             .put("id", id)
             .put("format_hint", file.extension.lowercase())
-            .put("audio_mime_types", JSONArray(sourceMimes))
+            .put("extractor_audio_mime_types", JSONArray(sourceMimes))
             .put("status", "decoded")
             .put("file_size_bytes", file.length())
             .put("track_duration_ms", durationMs)
@@ -257,6 +339,9 @@ class BeatAnalysisDeviceBenchmarkTest {
             putLong(EXTRA_MODIFIED_DATE, file.lastModified())
         }).build())
         .build()
+
+    private fun File.isAudioFixture(): Boolean =
+        isFile && extension.lowercase() in setOf("mp3", "flac", "wav")
 
     private fun timeline(key: AnalysisKey) = SourceTimeline(
         key.uri,
