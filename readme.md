@@ -1,163 +1,50 @@
-# Plug
+# Plug v2.0.0-preview — Next-Gen AutoMix & DSP Engine
 
-**Plug** is an offline-first Android music player forked from
-[Gramophone](https://github.com/FoedusProgramme/Gramophone). It plays music
-stored on your device and adds a real-time DJ Automix engine, beatmatching,
-offline BPM and musical-key analysis, and harmonic smart queue sorting.
+**Plug v2.0.0-preview** introduces a major architectural overhaul to the local audio playback and **AutoMix** engine (Phases A–E). This preview release brings intelligent transition curves, BS.1770 loudness normalization, automatic gain control, bass boost, and energy-aware overlap scaling—all backed by a deterministic parameter arbitration system and transparent UI explanations.
 
-[日本語](./readme_ja.md)
+> **⚠️ Preview Notice:** All 358 unit tests pass across synthetic and real-PCM signals. However, this build is currently in a **partially implemented** state awaiting final on-device acoustic tuning and verification.
 
-## Features
+---
 
-- Local music library with search, playlists, folder browsing, and natural sorting
-- Media3 playback with playlists, media-session controls, audio previews, and
-  support for Android's available decoders plus bundled ALAC and MIDI decoders
-- Dual-deck Automix with tempo matching, beat-phase alignment, and independent
-  audio rendering for each deck
-- Configurable transitions: Smart Auto, Smooth Crossfade, Club Bass-Swap,
-  Filter Sweep, BPM-Synced Echo Out, and Vinyl Brake
-- Offline BPM, beat-grid, and musical-key analysis, cached in a local SQLite
-  database; embedded BPM and key tags take precedence over cached analysis
-- Harmonic queue sorting using tempo and Camelot-key compatibility
-- Synchronized lyrics (LRC, TTML, and SRT), including word- and syllable-level
-  karaoke synchronization, plus a lyric widget
-- Optional online lyrics lookup through Spicy Lyrics. This is disabled by
-  default, requires your own API key, and sends the track's ISRC or title,
-  artist, and duration to the service when a lookup is made
-- ReplayGain 2.0, dynamic-range compression, and support for system or
-  third-party equalizers
-- Material 3 design, dynamic colors, Android 12+ Monet-themed icons, and
-  Android Auto-compatible media integration
+## ✨ What's New in AutoMix (Phases A–E)
 
-## Usage
+### 1. Transition Curves & Fades (Phases A–B)
+* **Selectable Fade Profiles:** Added **Exponential** and **S-curve** transition styles alongside classic crossfades.
+* **Fade Curve Intensity:** Fine-tune the steepness and smoothness of transition curves directly from settings.
 
-Enable Automix under **Settings > Audio**. Beatmatching is enabled by default;
-choose a transition style and crossfade duration there. With Automix enabled,
-use **Sort for Automix** in the queue to reorder tracks after the current song.
-Online lyrics lookup can be enabled in lyric settings and requires your own
-Spicy Lyrics API key.
+### 2. Loudness Matching & Automatic Gain Control (Phase C)
+* **BS.1770 Loudness Normalization:** Measures perceived track loudness during background analysis and caches results in the local database (`DB v7+`) to prevent volume jumps between tracks.
+* **Deck-Chain AGC:** Integrated a real-time Automatic Gain Control (AGC) processor into the playback deck chain for consistent output levels.
 
-Plug is an Android app and does not provide a public server API or a separate
-application CLI. The Gradle commands below are for building and testing.
+### 3. Bass Boost DSP (Phase D)
+* **Dedicated Low-End Enhancement:** Implemented a custom Bass Boost DSP block with user-configurable toggles in the audio settings.
 
-Automix analysis is an estimate, not a guaranteed beat grid. Tracks may be
-skipped if they lack stable file metadata or cannot be decoded by a supported
-decoder. Queue sorting reorders tracks after the current song and is unavailable
-while a transition is in progress.
+### 4. Energy Matching & Dynamic Overlap Scaling (Phase E)
+* **Spectral & RMS Analysis:** Measures unweighted RMS and low/mid/high band energy in 1-second frames across 30-second start/end windows (22,050 Hz) and stores profiles in the new `energy` table (`DB v8`).
+* **Smart Overlap Scaling:** Compares the final 10 seconds of the outgoing track with the opening 10 seconds of the incoming track. If energy rises by **> 6 dB** or drops by **> 9 dB**, the transition overlap automatically lengthens by up to **1.5×** (`TRANSITION_DURATION` arbitration) without altering track gain.
+* **Opt-In Control:** Controlled via the `automix_energy_matching` toggle (off by default). Silent or unanalyzed tracks gracefully report as `unavailable` rather than zeroing out.
 
-## Installation
+### 5. Beatmatch & Phase Alignment (Core Engine)
+* **BPM & Phase Sync:** Matches incoming deck playback speed to the outgoing track's BPM with phase alignment via `BeatPhaseAligner` (`automix_beatmatch_enabled` on by default).
+* **Half-Time / Double-Time Support:** Evaluates tempo multiples within safe playback speed limits.
+* **Safe Fallbacks:** Automatically falls back to a standard crossfade if BPM or beat-grid confidence is insufficient, and bypasses beatmatching during **Vinyl Brake** transitions.
 
-Plug's application ID is `org.plug.player` (`org.plug.player.debug` for the
-debug build). It installs separately from Gramophone, so Gramophone's
-app-private settings, queues, analysis cache, and permissions are not
-transferred automatically.
+### 6. Parameter Arbitration & Audio Quality Info
+* **Deterministic Ownership:** Centralized arbitration registry managing parameter control (`BEATMATCH`, `BPM_MATCHING`, `TRANSITION_DURATION`, and gain trims) to prevent DSP conflicts.
+* **Explanation Engine:** Updated the **Audio Quality Info** sheet to surface real-time explanations of active AutoMix decisions, loudness trims, and energy states.
 
-Download the latest Plug build from
-[GitHub Releases](https://github.com/FoedusProgramme/Gramophone/releases/latest).
-The F-Droid and IzzyOnDroid listings for `org.akanework.gramophone` are for
-upstream Gramophone, not Plug.
+---
 
-## Building
+## 🛠️ Architecture & Components Overview
 
-Install Android Studio with JDK 21, Android SDK Platform 37, Android NDK, and
-CMake 3.22.1. Clone the repository with its submodules:
+* **Audio Playback & DSP Pipeline:** Custom multi-deck chain supporting real-time PCM processing, curve-based fading, AGC, Bass Boost, and phase-aligned speed adjustment.
+* **Background Analysis & Caching:** Local SQLite/Room database (**v8**) with dedicated `energy` and loudness caches, scheduled background decoding (11 kHz / 22.05 kHz windows), and Robolectric-verified cache round-trips.
+* **UI & Settings:** Material Design 3 bottom sheets (`FullBottomSheet`), granular AutoMix toggles, and live Audio Quality Info diagnostics.
 
-```sh
-git clone --recurse-submodules https://github.com/FoedusProgramme/Gramophone.git
-cd Gramophone
-git submodule update --init --recursive
-```
+---
 
-The tracked `package.properties` already sets the required `releaseType` to
-`SelfBuilt`. Build and install the debug APK with:
+## ⚠️ Known Limitations & Pending Verification
 
-```sh
-./gradlew :app:assembleDebug
-```
-
-On Windows, use `.\gradlew.bat :app:assembleDebug`. The debug application ID
-has the `.debug` suffix.
-
-Run the JVM unit tests with:
-
-```sh
-./gradlew test
-```
-
-On Windows, use `.\gradlew.bat test`. The app's tests are in
-`app/src/test`; generating the Android baseline profile additionally requires
-a configured emulator or connected device:
-
-```sh
-./gradlew :app:generateBaselineProfile
-```
-
-There is no `.env` file or Python `requirements.txt`; build configuration is
-provided through Gradle properties and `package.properties`. The optional
-`appIdOverride` and `versionNameSuffixOverride` properties can also be set in
-`package.properties`. Release signing values should be kept outside the
-repository in Gradle user properties: `AKANE_RELEASE_STORE_FILE`,
-`AKANE_RELEASE_STORE_PASSWORD`, `AKANE_RELEASE_KEY_ALIAS`, and
-`AKANE_RELEASE_KEY_PASSWORD`. The Google Play release variant uses the
-corresponding `AKANE2_RELEASE_*` properties.
-
-Plug is primarily a local music player and does not stream music. It requests
-Internet access for the opt-in Spicy Lyrics lookup described above; local
-playback and music-library browsing do not require a network connection.
-
-## Project structure
-
-```text
-.
-├── app/                 Android app, UI, playback, Automix, lyrics, and tests
-├── baselineprofile/     Macrobenchmark and baseline-profile generator
-├── hificore/            Native C++ audio-output and HiFi integration
-├── media3/              Media3 source submodule used by the build
-├── misc/
-│   ├── alacdecoder/     Bundled ALAC decoder
-│   └── audiofx*/        Audio-effect forwarding and SDK stubs
-├── fastlane/            Android release automation and store metadata
-├── .github/workflows/   CI workflows
-├── gradle/              Gradle wrapper configuration
-├── build.gradle.kts     Root plugin and build configuration
-├── settings.gradle.kts  Gradle modules and local Media3 substitutions
-└── package.properties   Local build identity (releaseType)
-```
-
-The main app source is under `app/src/main/java`: `org.akanework.gramophone`
-contains playback logic, Automix, analysis, and UI code; `uk.akane.libphonograph`
-contains media-library readers and item utilities. App resources are in
-`app/src/main/res`.
-
-## Tech stack
-
-- Kotlin 2.3.0 and Java 21
-- Gradle 9.4.1 wrapper and Android Gradle Plugin 9.2.1
-- AndroidX Compose and Material 3 (Compose BOM 2025.05.00), AndroidX Media3
-  (app dependency coordinates 1.10.1, substituted with the local source
-  submodule), Kotlin coroutines-guava 1.11.0, and Coil 3.4.0
-- Native C++ built with CMake 3.22.1
-- Android minimum SDK 23; app compile and target SDK 37
-- Current app version in Gradle: 1.1.2 (version code 24)
-
-The app's Media3 dependencies are substituted with projects from the checked-out
-`media3` submodule. Use the Gradle wrapper and recursively initialized
-submodules when building.
-
-## License and attribution
-
-Plug is distributed under the GNU General Public License, version 3 or (at your
-option) any later version. The original Gramophone copyright notices and
-attribution are retained; see [LICENSE](./LICENSE) and
-[FoedusProgramme/Gramophone](https://github.com/FoedusProgramme/Gramophone).
-
-## Maintainer
-
-- [wednesday-grr](https://github.com/wednesday-grr) ·
-  [Email](mailto:wednesdayfortiktok@gmail.com)
-
-## Contributing
-
-Please open an issue before starting substantial work so scope and implementation
-can be discussed. Preserve Plug's local-first playback behavior; online lyrics
-lookup is an opt-in feature and is disabled by default.
+* **On-Device Listening Pending:** Fades, loop boundary declick behavior, loudness trims, AGC, Bass Boost, and Energy Matching overlap scaling have passed automated unit tests (358 passed, 0 failed) but still require real-world acoustic verification on physical hardware.
+* **Analysis Scope:** Energy matching does not yet factor in vocal activity or beat-grid alignment, and only takes effect after tracks have been played or analyzed by the background scheduler.
+* **Upcoming Roadmap:** Phases **F–H** are planned for subsequent preview builds.
