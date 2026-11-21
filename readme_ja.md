@@ -2,7 +2,7 @@
 
 Local Android music player focused on smooth transitions, deterministic audio processing, and transparent playback diagnostics.
 
-> **Current Status (`v2.0.0-preview`):** AutoMix **Phases A–E** are implemented and verified with **358 passing unit tests** (0 failures, 2 skipped). Phases **F–H** are upcoming, and final acoustic tuning on a physical device is still pending.
+> **Current Status (`v2.0.1-preview`):** AutoMix **Phases A–E** are implemented and verified with **358 passing unit tests** (0 failures, 2 skipped). Phases **F–H** are upcoming, and final acoustic tuning on a physical device is still pending.
 
 ---
 
@@ -44,4 +44,4 @@ Local Android music player focused on smooth transitions, deterministic audio pr
 ## 📚 Documentation
 
 * **Architecture & AutoMix Deep Dive (GitHub Pages):** See [`docs/automix.md`](docs/automix.md) (or your published GitHub Pages site).
-* **Release Notes:** See [`CHANGELOG.md`](CHANGELOG.md) or the `v2.0.0-preview` GitHub Release.
+* **Release Notes:** See [`CHANGELOG.md`](CHANGELOG.md) or the `v2.0.1-preview` GitHub Release.
