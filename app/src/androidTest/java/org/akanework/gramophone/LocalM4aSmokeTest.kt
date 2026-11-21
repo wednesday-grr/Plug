@@ -17,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.akanework.gramophone.logic.utils.automix.*
 import org.junit.Assert.assertEquals
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID
@@ -27,8 +28,10 @@ class LocalM4aSmokeTest {
     @Test
     fun localM4aDecodeAnalysisAndCache() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val expected = InstrumentationRegistry.getArguments().getString("expected_m4a_count")?.toInt()
-            ?: error("Pass expected_m4a_count to opt in to local M4A testing")
+        val expectedArgument = InstrumentationRegistry.getArguments().getString("expected_m4a_count")
+        assumeTrue("Pass expected_m4a_count to opt in to local M4A testing", expectedArgument != null)
+        val expected = checkNotNull(expectedArgument).toInt()
+        require(expected > 0) { "expected_m4a_count must be positive" }
         val root = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
         val files = root.walkTopDown().onFail { _, exception -> throw exception }
             .filter { it.isFile && it.extension.equals("m4a", ignoreCase = true) }

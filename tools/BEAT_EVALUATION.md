@@ -131,8 +131,8 @@ and clips reference timestamps to the analyzed window. Reference BPM is the medi
 tempo in that window. These recordings represent percussion ensembles, not general music.
 
 The 1992 and 1995 sessions (21 recordings) were used for development; all 14 2014 session
-recordings were held out until the unchanged v3 tracker was fixed. Session separation does not
-guarantee performer independence. The results are **not confidence calibration**:
+recordings were held out until the unchanged v3 tracker was selected for evaluation. Session
+separation does not guarantee performer independence. The results are **not confidence calibration**:
 
 | Split | Tracks | Detections / references | Matches | Precision | Recall | F1 | Ambiguous / unavailable |
 |---|---:|---:|---:|---:|---:|---:|---:|
