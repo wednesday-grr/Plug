@@ -37,9 +37,12 @@
 
 ## 🛠️ Architecture & Components Overview
 
-* **Audio Playback & DSP Pipeline:** Custom multi-deck chain supporting real-time PCM processing, curve-based fading, AGC, Bass Boost, and phase-aligned speed adjustment.
-* **Background Analysis & Caching:** Local SQLite/Room database (**v8**) with dedicated `energy` and loudness caches, scheduled background decoding (11 kHz / 22.05 kHz windows), and Robolectric-verified cache round-trips.
-* **UI & Settings:** Material Design 3 bottom sheets (`FullBottomSheet`), granular AutoMix toggles, and live Audio Quality Info diagnostics.
+* **Playback engine:** Media3 ExoPlayer 1.10.1 with a single `MediaSession`. AutoMix runs **two ExoPlayer decks** that decode independently; Android's audio output mixes them. There is no shared master PCM bus, master limiter, custom audio sink or native mixer, and no ONNX/TFLite runtime. Each deck's `AudioProcessor` chain is: optional PCM tap → ReplayGain → AGC → Bass Boost → DJ transition processor (EQ/filter/echo/reverb) → seek declick → Media3 Sonic (speed).
+* **Native/DSP components:** `hificore` (C++ audio/USB library), `misc/alacdecoder`, and an opt-in Essentia JNI analyzer (AGPL; off by default, see [`app/AUTOMIX.md`](app/AUTOMIX.md)). AutoMix DSP (fades, BS.1770 loudness, AGC, Bass Boost biquad, energy bands) is pure Kotlin.
+* **Background analysis & caching:** `AudioAnalysisScheduler` decodes PCM with `MediaCodec` off the main thread. Results are stored by `TrackAnalysisCache`, a plain `SQLiteOpenHelper` database (**`track_analysis.db`, v8**) with `analysis`, `beat_grid`, `loudness` (v7) and `energy` (v8) tables. Room is not used. Edge analysis uses 30 s start/end windows decoded to mono at 22,050 Hz.
+* **UI & settings:** Views and Jetpack Compose (Material 3) with `PreferenceFragment` settings, Coil for artwork, and a Now Playing **Audio Quality Info** bottom sheet driven by `TransitionExplanationEngine`.
+* **AutoMix settings and defaults:** `automix_enabled` (off), `automix_beatmatch_enabled` (on), `automix_loudness_matching` (off), `automix_agc` (off), `automix_bass_boost` (off; gain 0–12 dB, default 4; corner 40–250 Hz, default 100), `automix_energy_matching` (off), `automix_fade_curve_intensity`, `automix_loop_transition_beats` (default 4). Bass Boost has no Q control in the UI.
+* **Arbitration:** `AutoMixEffectArbitration.kt` declares each effect's capability (runtime-available or not), the gain/transition parameters it owns and pairwise compatibility. Energy Matching owns only `TRANSITION_DURATION`; Bass Boost owns separate per-deck boost parameters. Stem effects, Vocal/Instrumental separation and Stem AutoMix are registered but **not runtime-available**.
 
 ---
 
@@ -47,4 +50,6 @@
 
 * **On-Device Listening Pending:** Fades, loop boundary declick behavior, loudness trims, AGC, Bass Boost, and Energy Matching overlap scaling have passed automated unit tests (358 passed, 0 failed) but still require real-world acoustic verification on physical hardware.
 * **Analysis Scope:** Energy matching does not yet factor in vocal activity or beat-grid alignment, and only takes effect after tracks have been played or analyzed by the background scheduler.
-* **Upcoming Roadmap:** Phases **F–H** are planned for subsequent preview builds.
+* **Loop boundaries:** Beat Loop and Loop Transition are implemented with Media3 `seekTo` on a ~25 ms tick, so loop boundaries are not sample-accurate; a short declick is applied but a boundary click can remain.
+* **Lint/build:** Lint and instrumentation tests have not been run for Phases A–E.
+* **Upcoming Roadmap:** **Phase F** (offline Spleeter 2-stem separation via ONNX Runtime: pinned/SHA-256-verified model downloader, stem cache, state machine) is code-complete and unit-tested with a fake network, but it is **not wired to settings/UI/playback and the real model has not been run on a device**. Phases **G–H** (four-source stem mixer / Stem AutoMix, and final UI/quality integration) are **planned and not implemented**. Four simultaneous stem sources cannot be mixed on the current two-deck architecture without a new mixing layer.

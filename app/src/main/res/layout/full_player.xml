@@ -54,7 +54,7 @@
         android:layout_width="52dp"
         android:layout_height="52dp"
         android:background="@drawable/rp_buttons"
-        android:contentDescription="@string/transition_info_title"
+        android:contentDescription="Audio quality info"
         app:icon="@drawable/ic_info"
         app:iconGravity="textStart"
         app:iconPadding="0dp"
@@ -62,11 +62,11 @@
         app:iconTint="?attr/colorOnSurface"
         app:layout_constraintBottom_toTopOf="@id/album_cover_frame"
         app:layout_constraintEnd_toStartOf="@id/timer"
-        app:layout_constraintHorizontal_bias="1.0"
+        app:layout_constraintHorizontal_bias="0.5"
         app:layout_constraintStart_toEndOf="@id/slide_down"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintVertical_bias="0.0"
-        app:tooltipText="@string/transition_info_title" />
+        app:tooltipText="Audio quality info" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/timer"

@@ -3,8 +3,10 @@
 ## Playback and effects
 
 AutoMix uses two Media3 ExoPlayer decks and the existing MediaSession. Each deck
-decodes independently and passes stereo PCM through the existing ReplayGain and
-DJ processors, followed by Media3 Sonic for playback-speed changes. Android's
+decodes independently and passes PCM through the deck processor chain
+(optional PCM tap, ReplayGain, AGC, Bass Boost, the DJ transition processor,
+a seek declick stage), followed by Media3 Sonic for playback-speed changes.
+Android's
 audio output mixes the two decks; this application does not currently have a
 shared master PCM bus or master limiter.
 
@@ -57,9 +59,44 @@ Echo and reverb are processed in series on the outgoing deck. Their tails end
 when the outgoing deck is stopped; they are not rendered past handoff. Filter
 and parameter updates are control-rate, not sample-accurate. There is no
 configurable band frequencies, simultaneous high-pass and low-pass on one deck,
-bar/downbeat alignment, beat loop, room/hall/plate selector, or independent
-time-based tail bus. No full-device performance or listening measurements have
+bar/downbeat alignment, room/hall/plate selector, or independent
+time-based tail bus. Beat Jump, Beat Loop and Loop Transition exist but use
+Media3 `seekTo` on the ~25 ms tick, so boundaries are not sample-accurate. No
+full-device performance or listening measurements have
 been made. Mono and unsupported PCM formats cannot use this stereo processor.
+
+## Phases A–E additions
+
+Status: implemented and unit-tested (358 unit tests passing, 2 skipped).
+Lint, instrumentation tests, device listening checks and benchmarks have not
+been run. Phases F–H (stem separation, four-source stem mixer / Stem AutoMix,
+final UI integration) are planned and **not implemented**: the repository has no
+separation model, inference runtime, stem cache or PCM mixer, and two decks
+cannot provide four independently mixed stem sources.
+
+| Feature | Implementation | Setting (default) |
+| --- | --- | --- |
+| Exponential / S-curve fades | `VolumeCurve` models with independent outgoing/incoming envelopes | Transition style; `automix_fade_curve_intensity` |
+| Loudness Matching | `LoudnessMeter` (ITU-R BS.1770 integrated/short-term LUFS and sample peak, 60 s middle window) cached in `loudness` table (DB v7); `LoudnessMatcher` attenuates the louder deck during the overlap, after applied ReplayGain; missing data is "unavailable" | `automix_loudness_matching` (off) |
+| AGC | `AutomaticGainController` + `AgcAudioProcessor` in each deck chain; disabled while loudness matching is on | `automix_agc` (off) |
+| Bass Boost | `BassBoostFilter` low-shelf biquad (0–12 dB, 40–250 Hz, Q fixed at 0.707) with peak limiter; per-deck mix weighted by the fade so bass does not stack | `automix_bass_boost` (off), `_gain_db` (4), `_frequency_hz` (100) |
+| Energy Matching | `EnergyAnalyzer`: unweighted RMS and low (<250 Hz) / mid / high (>4 kHz) band levels in 1 s frames, 0.5 s hop, over the existing 30 s start/end windows (mono, 22,050 Hz, band-limited ~11 kHz), stored in the `energy` table (DB v8). `EnergyMatcher` compares the last 10 s of the outgoing track with the first 10 s of the incoming one and lengthens the overlap up to 1.5x when energy rises by more than 6 dB or drops by more than 9 dB. It never changes gain. Missing, mostly silent or non-comparable data is unavailable | `automix_energy_matching` (off) |
+| Beatmatch | Pre-existing: incoming speed matched to outgoing BPM with `BeatPhaseAligner`; half/double-time candidates checked against speed limits; falls back to normal crossfade without a reliable beat grid; bypassed for Vinyl Brake | `automix_beatmatch_enabled` (on) |
+
+RMS values are unweighted and are not perceived loudness. Energy Matching does
+not use vocal activity or beat-grid information.
+
+### Arbitration and Audio Quality Info
+
+`AutoMixEffectArbitration.kt` lists every effect with whether it is
+runtime-available, the parameters it owns (deck gain, level trim, bass boost,
+`TRANSITION_DURATION`, playback speed, filters, loop region and so on) and
+pairwise compatibility. Two effects that need the same parameter are not run
+together; e.g. Energy Matching owns only `TRANSITION_DURATION`, so it coexists
+with the fades, while AGC and Loudness Matching are mutually exclusive. The
+Audio Quality Info sheet shows loudness and energy decisions (applied, within
+threshold, data unavailable) with the measured values captured when the
+transition started. Bass Boost and AGC are not yet reported there.
 
 ## Analysis and Essentia
 

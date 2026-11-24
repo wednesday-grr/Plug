@@ -389,6 +389,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-midi:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
     implementation("androidx.media3:media3-inspector:$media3Version")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0") // MIT; Phase F stem separation (offline, off the audio thread)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.11.0")
     //implementation("androidx.paging:paging-runtime-ktx:3.2.1") TODO paged, partial, flow based library loading
     //implementation("androidx.paging:paging-guava:3.2.1") TODO do we have guava? do we need this?

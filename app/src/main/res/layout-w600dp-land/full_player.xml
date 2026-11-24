@@ -67,6 +67,26 @@
         app:layout_constraintVertical_bias="0.0"
         app:tooltipText="@string/timer" />
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/transition_info"
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:layout_marginStart="24dp"
+        android:background="@drawable/rp_buttons"
+        android:contentDescription="Audio quality info"
+        android:saveEnabled="false"
+        android:checkable="true"
+        app:icon="@drawable/ic_info"
+        app:iconGravity="textStart"
+        app:iconPadding="0dp"
+        app:iconSize="24dp"
+        app:iconTint="?attr/colorOnSurface"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.0"
+        app:layout_constraintTop_toBottomOf="@id/timer"
+        app:layout_constraintVertical_bias="0.0"
+        app:tooltipText="Audio quality info" />
+
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/album_cover_frame"
         android:layout_width="0dp"

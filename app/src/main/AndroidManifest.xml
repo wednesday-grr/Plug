@@ -3,6 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.siw.plug">
 
+    <!-- onnxruntime-android needs API 24; it is only loaded on devices that pass StemSeparation.isDeviceEligible (SDK_INT >= 24). -->
+    <uses-sdk tools:overrideLibrary="ai.onnxruntime" />
+
     <uses-feature android:name="android.hardware.audio.output" android:required="false"/>
     <uses-feature android:name="android.hardware.audio.pro" android:required="false"/>
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>

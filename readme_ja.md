@@ -2,7 +2,7 @@
 
 Local Android music player focused on smooth transitions, deterministic audio processing, and transparent playback diagnostics.
 
-> **Current Status (`v2.0.1-preview`):** AutoMix **Phases A–E** are implemented and verified with **358 passing unit tests** (0 failures, 2 skipped). Phases **F–H** are upcoming, and final acoustic tuning on a physical device is still pending.
+> **Current Status (`v2.0.1-preview`):** AutoMix **Phases A–E** are implemented and unit-tested (**358 passing unit tests**, 0 failures, 2 skipped); they have not been verified on a physical device, and lint and instrumentation tests have not been run. Phases **F–H** are upcoming, and final acoustic tuning on a physical device is still pending.
 
 ---
 
@@ -29,7 +29,7 @@ Local Android music player focused on smooth transitions, deterministic audio pr
 | **Phase D** | Bass Boost DSP module & settings integration | Implemented & unit-tested |
 | **Phase E** | RMS/band energy analyzer, `energy` cache (`DB v8`), overlap scaling (`TRANSITION_DURATION`) | Implemented & unit-tested |
 | **Device QA** | End-to-end acoustic testing on physical Android hardware | Pending |
-| **Phases F–H** | Next-stage AutoMix & playback enhancements | Planned |
+| **Phases F–H** | Stem separation, four-source stem mixer / Stem AutoMix, final UI and quality integration (not started; blocked on a model/runtime decision and a mixer architecture) | Planned |
 
 ---
 
@@ -43,5 +43,5 @@ Local Android music player focused on smooth transitions, deterministic audio pr
 
 ## 📚 Documentation
 
-* **Architecture & AutoMix Deep Dive (GitHub Pages):** See [`docs/automix.md`](docs/automix.md) (or your published GitHub Pages site).
-* **Release Notes:** See [`CHANGELOG.md`](CHANGELOG.md) or the `v2.0.1-preview` GitHub Release.
+* **Architecture & AutoMix details:** See [`app/AUTOMIX.md`](app/AUTOMIX.md). There is no `docs/` directory or GitHub Pages site in this repository.
+* **Release Notes:** No `CHANGELOG.md` exists; see the GitHub Release page.
