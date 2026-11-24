@@ -233,9 +233,10 @@ class StemCache(
         entry
     }.getOrNull()
 
-    private companion object {
+    companion object {
+        /** In-flight write directories; display/cleanup code outside the cache must leave these alone. */
         const val STAGING_PREFIX = "tmp-"
-        const val META_FILE = "meta.properties"
-        const val SCHEMA = 1
+        private const val META_FILE = "meta.properties"
+        private const val SCHEMA = 1
     }
 }

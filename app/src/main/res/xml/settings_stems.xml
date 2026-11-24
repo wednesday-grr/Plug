@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+  ~     Copyright (C) 2024 Akane Foundation
+  ~
+  ~     Gramophone is free software: you can redistribute it and/or modify
+  ~     it under the terms of the GNU General Public License as published by
+  ~     the Free Software Foundation, either version 3 of the License, or
+  ~     (at your option) any later version.
+  ~
+  ~     Gramophone is distributed in the hope that it will be useful,
+  ~     but WITHOUT ANY WARRANTY; without even the implied warranty of
+  ~     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  ~     GNU General Public License for more details.
+  ~
+  ~     You should have received a copy of the GNU General Public License
+  ~     along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  -->
+
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        android:layout="@layout/preference_category_md"
+        android:title="@string/settings_stem_cat_transitions">
+
+        <!-- Enabled state follows automix_enabled in StemSettingsFragment (android:dependency cannot cross screens). -->
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="automix_stem_transitions"
+            android:layout="@layout/preference_switch"
+            android:summary="@string/settings_stem_transitions_summary"
+            android:title="@string/settings_stem_transitions"
+            android:widgetLayout="@layout/preference_switch_widget"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:layout="@layout/preference_category_md"
+        android:title="@string/settings_stem_cat_storage">
+
+        <Preference
+            android:key="stem_model"
+            android:layout="@layout/preference_basic"
+            android:title="@string/settings_stem_model"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="stem_cache"
+            android:layout="@layout/preference_basic"
+            android:title="@string/settings_stem_cache"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

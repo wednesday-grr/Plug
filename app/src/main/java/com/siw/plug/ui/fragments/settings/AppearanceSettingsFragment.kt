@@ -21,6 +21,7 @@ import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.preference.Preference
+import com.google.android.material.color.DynamicColors
 import com.siw.plug.R
 import com.siw.plug.ui.components.TabOrderPreference
 import com.siw.plug.ui.fragments.BasePreferenceFragment
@@ -33,6 +34,8 @@ class AppearanceSettingsActivity : BaseSettingsActivity(
 class AppearanceSettingsFragment : BasePreferenceFragment() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_appearance, rootKey)
+        findPreference<Preference>("content_based_color")?.isVisible =
+            DynamicColors.isDynamicColorAvailable()
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {

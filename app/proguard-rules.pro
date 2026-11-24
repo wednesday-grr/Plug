@@ -45,3 +45,8 @@
     onMoreData(...);
     onCanWriteMoreData(...);
 }
+
+# ONNX Runtime's native library looks up these Java classes, fields and constructors by name via JNI.
+# Renaming or stripping them aborts the process ("JNI DETECTED ERROR: mid == null") on the first inference.
+-keep class ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**

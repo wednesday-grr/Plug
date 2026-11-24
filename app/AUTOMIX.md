@@ -69,10 +69,7 @@ been made. Mono and unsupported PCM formats cannot use this stereo processor.
 
 Status: implemented and unit-tested (358 unit tests passing, 2 skipped).
 Lint, instrumentation tests, device listening checks and benchmarks have not
-been run. Phases F–H (stem separation, four-source stem mixer / Stem AutoMix,
-final UI integration) are planned and **not implemented**: the repository has no
-separation model, inference runtime, stem cache or PCM mixer, and two decks
-cannot provide four independently mixed stem sources.
+been run. Phases F–H are described in the next section.
 
 | Feature | Implementation | Setting (default) |
 | --- | --- | --- |
@@ -97,6 +94,35 @@ with the fades, while AGC and Loudness Matching are mutually exclusive. The
 Audio Quality Info sheet shows loudness and energy decisions (applied, within
 threshold, data unavailable) with the measured values captured when the
 transition started. Bass Boost and AGC are not yet reported there.
+
+## Phases F–H: stems
+
+Status: code complete and unit-tested (403 unit tests, lint clean) but **not
+verified by listening on a device**: the real Spleeter model has never been
+downloaded or run, and stem-player/deck sync is unmeasured. No benchmarks exist.
+
+- **Model.** Spleeter 2-stem fp32 ONNX (upstream MIT; sherpa-onnx conversion,
+  Apache-2.0, pinned HF commit `7001ba3…`), run with ONNX Runtime 1.22.0 off the
+  audio thread. It is not bundled: Settings → AI Stem Separation downloads ~78.6 MB
+  after an explicit tap and verifies size and SHA-256 per file. Removing the
+  model and clearing the stem cache are in the same screen; the cache size shown
+  is the real size of completed entries on disk.
+- **Separation.** `StemSeparationManager` queues the current and next track
+  (single worker, LRU cache limit 1 GB, cancellation, integrity checks).
+  Stems are ~11 kHz band-limited 44.1 kHz stereo.
+- **Playback.** When `automix_stem_transitions` (default **off**) is on and both
+  tracks have verified stems, `StemPlayer` renders four sources (A vocal, A
+  instrumental, B vocal, B instrumental) to its own `AudioTrack` for
+  Instrumental Drop / Instrumental Fade / Vocal-to-Instrumental /
+  Instrumental-to-Vocal. The decks stay silent-ready underneath; any unmet
+  condition (stems missing or still processing, AGC/Bass Boost/additional
+  effects on, non-smooth style, tempo change over 1 %, failure or pause mid
+  transition) uses the ordinary crossfade instead.
+- **Audio Quality Info** shows measured BS.1770 LUFS, per-track stem status
+  (disabled / ready / separating / not cached / failed) and the exact
+  skip/fallback reason.
+- **Not implemented:** a Now Playing visualizer (none exists in the app), and
+  user-facing independent stem gain, Vocal/Instrumental "effects" on their own.
 
 ## Analysis and Essentia
 

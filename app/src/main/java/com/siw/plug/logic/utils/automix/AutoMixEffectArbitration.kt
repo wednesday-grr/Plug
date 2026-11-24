@@ -119,6 +119,14 @@ data class AutoMixEffectCapability(
     }
 }
 
+/** Stem transitions: exactly one of these renders the audible overlap through the four-source stem player. */
+val stemTransitionEffects: Set<AutoMixEffect> = setOf(
+    AutoMixEffect.INSTRUMENTAL_DROP,
+    AutoMixEffect.INSTRUMENTAL_FADE,
+    AutoMixEffect.VOCAL_TO_INSTRUMENTAL,
+    AutoMixEffect.INSTRUMENTAL_TO_VOCAL,
+)
+
 object AutoMixEffectCapabilityRegistry {
     private val capabilities = AutoMixEffect.entries.associateWith(::capabilityFor)
 
@@ -159,6 +167,11 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.AUTOMATIC_GAIN_CONTROL,
             AutoMixEffect.BASS_BOOST,
             AutoMixEffect.ENERGY_MATCHING,
+            AutoMixEffect.INSTRUMENTAL_DROP,
+            AutoMixEffect.INSTRUMENTAL_FADE,
+            AutoMixEffect.VOCAL_TO_INSTRUMENTAL,
+            AutoMixEffect.INSTRUMENTAL_TO_VOCAL,
+            AutoMixEffect.STEM_AUTOMIX,
         )
         val gainParameters = when (effect) {
             AutoMixEffect.CROSSFADE, AutoMixEffect.LINEAR_FADE, AutoMixEffect.SMOOTH_CROSSFADE,
@@ -247,11 +260,10 @@ object AutoMixEffectCapabilityRegistry {
             AutoMixEffect.BASS_SWAP, AutoMixEffect.VOCAL_SWAP, AutoMixEffect.EQ_TRANSITION,
             AutoMixEffect.FILTER_SWEEP, AutoMixEffect.RISE, AutoMixEffect.REPLAY_GAIN,
             AutoMixEffect.LOUDNESS_MATCHING, AutoMixEffect.AUTOMATIC_GAIN_CONTROL,
-            AutoMixEffect.BASS_BOOST, AutoMixEffect.ENERGY_MATCHING, AutoMixEffect.INSTRUMENTAL_DROP,
-            AutoMixEffect.INSTRUMENTAL_FADE, AutoMixEffect.VOCAL_TO_INSTRUMENTAL,
-            AutoMixEffect.INSTRUMENTAL_TO_VOCAL, AutoMixEffect.INDEPENDENT_STEM_GAIN,
-            AutoMixEffect.STEM_AUTOMIX, AutoMixEffect.HALF_TIME_DOUBLE_TIME,
+            AutoMixEffect.BASS_BOOST, AutoMixEffect.ENERGY_MATCHING, AutoMixEffect.INDEPENDENT_STEM_GAIN,
+            AutoMixEffect.HALF_TIME_DOUBLE_TIME,
             AutoMixEffect.LOOP_TRANSITION -> 2
+            AutoMixEffect.STEM_AUTOMIX, in stemTransitionEffects -> 4
             AutoMixEffect.BEAT_JUMP, AutoMixEffect.BEAT_LOOP -> 1
             else -> 1
         }
@@ -259,7 +271,7 @@ object AutoMixEffectCapabilityRegistry {
             effect = effect,
             runtimeAvailable = supported,
             requiredAudioSources = sourceCount,
-            requiredStemSources = if (effect == AutoMixEffect.STEM_AUTOMIX) 4 else if (stems) 1 else 0,
+            requiredStemSources = if (effect == AutoMixEffect.STEM_AUTOMIX || effect in stemTransitionEffects) 4 else if (stems) 1 else 0,
             requiresBeatGrid = effect in setOf(
                 AutoMixEffect.BEATMATCH, AutoMixEffect.BEAT_JUMP,
                 AutoMixEffect.BEAT_LOOP, AutoMixEffect.LOOP_TRANSITION,
@@ -354,6 +366,10 @@ object AutoMixEffectCompatibilityEvaluator {
         ) return result(first, second, EffectCompatibility.NOT_SUPPORTED,
             "At least one effect has no runtime implementation.")
 
+        val firstStem = first in stemTransitionEffects || first == AutoMixEffect.STEM_AUTOMIX
+        val secondStem = second in stemTransitionEffects || second == AutoMixEffect.STEM_AUTOMIX
+        if (firstStem || secondStem) return evaluateStem(first, second, firstStem, secondStem)
+
         if (first in incomingFilterEffects && second in incomingFilterEffects) {
             return result(first, second, EffectCompatibility.MUTUALLY_EXCLUSIVE,
                 "Both effects require the incoming deck's single filter slot.")
@@ -434,6 +450,36 @@ object AutoMixEffectCompatibilityEvaluator {
         }
     }
 
+    /** Stem transitions replace the audible overlap, so deck-side envelopes and processors cannot co-own it. */
+    private fun evaluateStem(
+        first: AutoMixEffect, second: AutoMixEffect, firstStem: Boolean, secondStem: Boolean,
+    ): EffectCompatibilityResult {
+        if (firstStem && secondStem) {
+            return if (AutoMixEffect.STEM_AUTOMIX in setOf(first, second) && first != second) {
+                result(first, second, EffectCompatibility.COMPATIBLE,
+                    "Stem AutoMix is the planner that selects the stem transition.")
+            } else result(first, second, EffectCompatibility.MUTUALLY_EXCLUSIVE,
+                "Only one stem transition can drive the four stem gains.")
+        }
+        val other = if (firstStem) second else first
+        return when (other) {
+            AutoMixEffect.LOUDNESS_MATCHING, AutoMixEffect.REPLAY_GAIN ->
+                result(first, second, EffectCompatibility.COMPATIBLE,
+                    "Deck trims are applied to the stems so levels match the deck path.")
+            AutoMixEffect.ENERGY_MATCHING -> result(first, second, EffectCompatibility.COMPATIBLE,
+                "Energy Matching only scales the transition duration.")
+            AutoMixEffect.CROSSFADE, AutoMixEffect.EXPONENTIAL_FADE, AutoMixEffect.S_CURVE_FADE,
+            AutoMixEffect.LINEAR_FADE, AutoMixEffect.SMOOTH_CROSSFADE ->
+                result(first, second, EffectCompatibility.CONDITIONALLY_COMPATIBLE,
+                    "The deck envelope hands over to the stem player at the edges and is the fallback if stems fail.")
+            AutoMixEffect.BEATMATCH, AutoMixEffect.BPM_MATCHING ->
+                result(first, second, EffectCompatibility.CONDITIONALLY_COMPATIBLE,
+                    "Stems play at 1.0x, so only a start-phase alignment with a near-unity tempo ratio is compatible.")
+            else -> result(first, second, EffectCompatibility.MUTUALLY_EXCLUSIVE,
+                "Stems bypass deck processors, tempo changes, loops and seeks, so this effect would not be heard or would desynchronise them.")
+        }
+    }
+
     private fun result(
         first: AutoMixEffect,
         second: AutoMixEffect,
@@ -459,6 +505,7 @@ object AutoMixEffectArbitrator {
             )
         })
         val selected = mutableListOf<AutoMixEffect>()
+        val evaluated = mutableListOf<AutoMixEffect>()
         val results = mutableListOf<EffectSelectionResult>()
         for (evaluation in evaluations) {
             val rank = priorityPolicy.rank(evaluation.effect)
@@ -472,7 +519,9 @@ object AutoMixEffectArbitrator {
                 )
                 continue
             }
-            val conflicts = selected.mapNotNull { prior ->
+            // EVALUATED effects stay candidates, so later effects must still not conflict with them.
+            val candidates = selected + evaluated
+            val conflicts = candidates.mapNotNull { prior ->
                 val compatibility = AutoMixEffectCompatibilityEvaluator.evaluate(prior, evaluation.effect)
                 if (compatibility.compatibility in setOf(
                         EffectCompatibility.MUTUALLY_EXCLUSIVE,
@@ -495,10 +544,13 @@ object AutoMixEffectArbitrator {
                         rank, fallbackPolicy.fallbackFor(evaluation.effect, reason, generation)
                     )
                 }
-                conditional.isNotEmpty() -> results += EffectSelectionResult(
-                    evaluation, EffectLifecycleState.EVALUATED,
-                    "Compatibility requires runtime context.", conditional, rank
-                )
+                conditional.isNotEmpty() -> {
+                    evaluated += evaluation.effect
+                    results += EffectSelectionResult(
+                        evaluation, EffectLifecycleState.EVALUATED,
+                        "Compatibility requires runtime context.", conditional, rank
+                    )
+                }
                 else -> {
                     selected += evaluation.effect
                     results += EffectSelectionResult(

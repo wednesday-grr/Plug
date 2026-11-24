@@ -53,8 +53,9 @@ class StemSeparationManager(
     /** Queues [trackId]; no-op when it is already queued, running or ready. */
     @Synchronized
     fun request(trackId: String, uri: String) {
-        when (statusOf(trackId)) {
-            is StemStatus.Queued, is StemStatus.Processing, is StemStatus.Ready -> return
+        when (val current = statusOf(trackId)) {
+            is StemStatus.Queued, is StemStatus.Processing -> return
+            is StemStatus.Ready -> if (current.entry.dir.isDirectory) return
             else -> Unit
         }
         if (!eligibility()) { set(trackId, StemStatus.Failed(StemFailure.NOT_ELIGIBLE, null)); return }

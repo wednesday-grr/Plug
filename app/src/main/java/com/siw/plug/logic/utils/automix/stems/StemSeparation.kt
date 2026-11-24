@@ -50,3 +50,46 @@ object StemSeparation {
         )
     }
 }
+
+/** What AutoMix needs from the stem pipeline; kept tiny so playback code never touches inference. */
+interface StemTransitionSource {
+    val deviceEligible: Boolean
+    /** Returns verified, ready stems for [mediaId] or null (never blocks, never starts inference). */
+    fun readyEntry(mediaId: String): StemEntry?
+    /** Queues background separation; a no-op when already queued or ready. */
+    fun prefetch(mediaId: String, uri: String)
+    /** Coarse per-track state for display only; defaults to "not cached" for sources that cannot tell. */
+    fun availability(mediaId: String): StemAvailability = StemAvailability.NOT_CACHED
+}
+
+/** What the Audio Quality Info sheet may say about one track's stems. DISABLED means the setting is off. */
+enum class StemAvailability {
+    DISABLED, READY, PROCESSING, NOT_CACHED, FAILED;
+
+    companion object {
+        fun of(status: StemStatus): StemAvailability = when (status) {
+            is StemStatus.Ready -> READY
+            StemStatus.Queued, is StemStatus.Processing -> PROCESSING
+            is StemStatus.Failed -> FAILED
+            StemStatus.NotRequested, StemStatus.Cancelled, is StemStatus.Invalid -> NOT_CACHED
+        }
+    }
+}
+
+class ManagerStemTransitionSource(
+    private val context: Context,
+    private val manager: StemSeparationManager,
+) : StemTransitionSource {
+    override val deviceEligible: Boolean get() = StemSeparation.isDeviceEligible(context)
+
+    // The directory check covers "Clear stem cache" running from Settings while the status map still says Ready.
+    override fun readyEntry(mediaId: String) =
+        (manager.statusOf(mediaId) as? StemStatus.Ready)?.entry?.takeIf { it.dir.isDirectory }
+
+    override fun availability(mediaId: String): StemAvailability =
+        if (readyEntry(mediaId) != null) StemAvailability.READY
+        else StemAvailability.of(manager.statusOf(mediaId).let { if (it is StemStatus.Ready) StemStatus.NotRequested else it })
+
+    override fun prefetch(mediaId: String, uri: String) = manager.request(mediaId, uri)
+    fun close() = manager.cancelAll()
+}

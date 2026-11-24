@@ -21,20 +21,17 @@ import android.os.Bundle
 import androidx.preference.Preference
 import androidx.preference.SeekBarPreference
 import androidx.preference.SwitchPreferenceCompat
-import com.google.android.material.color.DynamicColors
 import com.siw.plug.R
 import com.siw.plug.ui.fragments.BasePreferenceFragment
 import com.siw.plug.ui.fragments.BaseSettingsActivity
 
 class PlayerSettingsActivity : BaseSettingsActivity(
-    R.string.settings_player_ui,
+    R.string.settings_now_playing,
     { PlayerSettingsFragment() })
 
 class PlayerSettingsFragment : BasePreferenceFragment() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_player, rootKey)
-        findPreference<Preference>("content_based_color")!!
-            .isVisible = DynamicColors.isDynamicColorAvailable()
 
         val cookieCoverPref = findPreference<SwitchPreferenceCompat>("cookie_cover")
         val roundCornerPref = findPreference<SeekBarPreference>("album_round_corner")

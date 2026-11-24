@@ -145,6 +145,9 @@ import com.siw.plug.logic.utils.automix.AutomixOffloadPolicy
 import com.siw.plug.logic.utils.automix.AutomixPlayer
 import com.siw.plug.logic.utils.automix.AutomixSettingsStore
 import com.siw.plug.logic.utils.automix.AudioAnalysisScheduler
+import com.siw.plug.logic.utils.automix.stems.ManagerStemTransitionSource
+import com.siw.plug.logic.utils.automix.stems.StemSeparation
+import com.siw.plug.logic.utils.automix.stems.StemTransitionSource
 import com.siw.plug.logic.utils.automix.TrackAnalysisCache
 import com.siw.plug.logic.utils.automix.AnalysisKey
 import com.siw.plug.logic.utils.automix.BeatGridCacheRead
@@ -260,6 +263,10 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
     private lateinit var afFormatTracker: AfFormatTracker
     private var automixPlayer: AutomixPlayer? = null
     private lateinit var audioAnalysis: AudioAnalysisScheduler
+    private val stemSourceDelegate = lazy {
+        ManagerStemTransitionSource(this, StemSeparation.create(this, scope))
+    }
+    private val stemSource: StemTransitionSource get() = stemSourceDelegate.value
     private var automixTrackers: List<AfFormatTracker> = emptyList()
     private val playerEventLogger = EventLogger()
     private lateinit var rgAp: ReplayGainAudioProcessor
@@ -925,6 +932,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
         upcomingLyricsFetcher.cancel()
         handler.removeCallbacks(automixLyricsTick)
         audioAnalysis.close()
+        if (stemSourceDelegate.isInitialized()) stemSourceDelegate.value.close()
         endedWorkaroundPlayer!!.stop()
         handler.removeCallbacks(timer)
         handler.removeCallbacks(sendLyrics)
@@ -1037,7 +1045,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
             key == "automix_fade_curve_intensity" || key == "automix_loudness_matching" ||
             key == "automix_agc" || key == "automix_bass_boost" ||
             key == "automix_bass_boost_gain_db" || key == "automix_bass_boost_frequency_hz" ||
-            key == "automix_energy_matching"
+            key == "automix_energy_matching" || key == "automix_stem_transitions"
         ) {
             automixSettings.settings.value.let { settings ->
                 automixPlayer?.updateAutomixConfig(
@@ -1046,7 +1054,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                     settings.additionalEffects, settings.effectIntensityPercent,
                     settings.loopTransitionBeats, settings.fadeCurveIntensityPercent,
                     settings.loudnessMatchingEnabled, settings.agcEnabled, settings.bassBoost,
-                    settings.energyMatchingEnabled
+                    settings.energyMatchingEnabled, settings.stemTransitionsEnabled
                 )
             }
         } else if (key == "offload") {
@@ -1177,6 +1185,7 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
             },
             onSinkCreated = { isA, sink -> trackers[if (isA) 0 else 1].setAudioSink(sink) },
             analysisCache = audioAnalysis.cache,
+            stemSource = stemSource,
         ) else null
         val renderFactory = if (newAutomix == null) createRenderFactory(newTracker, false) else null
         val newProcessor = newAutomix?.activeReplayGainProcessor ?: renderFactory!!.replayGainAudioProcessor
@@ -1225,7 +1234,8 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                     it.enabled, it.beatmatchEnabled, it.durationSeconds, it.transitionStyle,
                     it.automaticDuration, it.maxSkipSeconds, it.additionalEffects,
                     it.effectIntensityPercent, it.loopTransitionBeats, it.fadeCurveIntensityPercent,
-                    it.loudnessMatchingEnabled, it.agcEnabled, it.bassBoost, it.energyMatchingEnabled
+                    it.loudnessMatchingEnabled, it.agcEnabled, it.bassBoost, it.energyMatchingEnabled,
+                    it.stemTransitionsEnabled
                 )
             }
             newAutomix.onActiveDeckChanged = { outgoing, incoming ->
@@ -1496,6 +1506,10 @@ class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
                         putString("incoming_key", snapshot.incomingKey)
                         snapshot.outgoingVocalEnergy?.let { putFloat("outgoing_vocal", it) }
                         snapshot.incomingVocalEnergy?.let { putFloat("incoming_vocal", it) }
+                        snapshot.outgoingLufs?.let { putFloat("outgoing_lufs", it) }
+                        snapshot.incomingLufs?.let { putFloat("incoming_lufs", it) }
+                        snapshot.outgoingStems?.let { putString("outgoing_stems", it.name) }
+                        snapshot.incomingStems?.let { putString("incoming_stems", it.name) }
                         putParcelableArrayList("effects", ArrayList(snapshot.effects.map { effect ->
                             Bundle().apply {
                                 putString("id", effect.effectId)

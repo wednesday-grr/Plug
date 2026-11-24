@@ -18,7 +18,9 @@
 package com.siw.plug.ui.fragments.settings
 
 import android.os.Bundle
+import androidx.preference.Preference
 import com.siw.plug.R
+import com.siw.plug.logic.utils.PostAmpAudioOutputProvider
 import com.siw.plug.ui.fragments.BasePreferenceFragment
 import com.siw.plug.ui.fragments.BaseSettingsActivity
 
@@ -29,5 +31,7 @@ class ReplayGainSettingsActivity : BaseSettingsActivity(
 class ReplayGainSettingsFragment : BasePreferenceFragment() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_replaygain, rootKey)
+        findPreference<Preference>("rg_boost_gain_category")?.isVisible =
+            PostAmpAudioOutputProvider.isVolumeAvailable || PostAmpAudioOutputProvider.isDpeAvailable
     }
 }

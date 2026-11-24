@@ -50,8 +50,16 @@ class MainSettingsFragment : BasePreferenceFragment() {
                 startActivity(PlayerSettingsActivity::class.java)
             }
 
-            "audio" -> {
-                startActivity(AudioSettingsActivity::class.java)
+            "library" -> {
+                startActivity(LibrarySettingsActivity::class.java)
+            }
+
+            "automix" -> {
+                startActivity(AutomixSettingsActivity::class.java)
+            }
+
+            "stems" -> {
+                startActivity(StemSettingsActivity::class.java)
             }
 
             "experimental" -> {

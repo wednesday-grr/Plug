@@ -313,7 +313,15 @@
             android:exported="false" />
 
         <activity
-            android:name=".ui.fragments.settings.AudioSettingsActivity"
+            android:name=".ui.fragments.settings.AutomixSettingsActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ui.fragments.settings.StemSettingsActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ui.fragments.settings.LibrarySettingsActivity"
             android:exported="false" />
 
         <activity

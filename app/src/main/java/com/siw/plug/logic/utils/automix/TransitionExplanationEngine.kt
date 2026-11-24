@@ -8,6 +8,8 @@
  */
 package com.siw.plug.logic.utils.automix
 
+import com.siw.plug.logic.utils.automix.stems.StemAvailability
+
 internal enum class EffectDecisionReason {
     USER_PRESET,
     USER_ADDITIONAL_EFFECT,
@@ -42,6 +44,9 @@ internal enum class EffectDecisionReason {
     ENERGY_MATCH_APPLIED,
     ENERGY_WITHIN_THRESHOLD,
     ENERGY_DATA_UNAVAILABLE,
+    STEM_TRANSITION_APPLIED,
+    STEM_TRANSITION_NOT_APPLIED,
+    STEM_TRANSITION_FAILED,
 }
 
 internal enum class EffectSelectionStatus { SELECTED, SKIPPED }
@@ -106,6 +111,10 @@ internal data class TransitionAnalysisSnapshot(
     val outgoingVocalEnergy: Float?,
     val incomingVocalEnergy: Float?,
     val effects: List<EffectSelectionExplanation>,
+    val outgoingLufs: Float? = null,
+    val incomingLufs: Float? = null,
+    val outgoingStems: StemAvailability? = null,
+    val incomingStems: StemAvailability? = null,
 )
 
 internal object TransitionExplanationEngine {

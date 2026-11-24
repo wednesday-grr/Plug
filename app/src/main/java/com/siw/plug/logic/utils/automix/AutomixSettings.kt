@@ -40,6 +40,7 @@ data class AutomixSettings(
     val agcEnabled: Boolean = false,
     val bassBoost: BassBoostSettings = BassBoostSettings.OFF,
     val energyMatchingEnabled: Boolean = false,
+    val stemTransitionsEnabled: Boolean = false,
 )
 
 class AutomixSettingsStore(private val preferences: SharedPreferences) {
@@ -60,6 +61,7 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
         private const val AGC = "automix_agc"
         private const val BASS_BOOST = "automix_bass_boost"
         private const val ENERGY_MATCHING = "automix_energy_matching"
+        private const val STEM_TRANSITIONS = "automix_stem_transitions"
         private const val BASS_BOOST_GAIN = "automix_bass_boost_gain_db"
         private const val BASS_BOOST_FREQUENCY = "automix_bass_boost_frequency_hz"
         const val DEFAULT_LOOP_TRANSITION_BEATS = 4
@@ -79,7 +81,8 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
             key == ADDITIONAL_EFFECTS || key == EFFECT_INTENSITY || key == ANALYZER ||
                         key == LOOP_TRANSITION_BEATS || key == FADE_CURVE_INTENSITY ||
                         key == LOUDNESS_MATCHING || key == AGC || key == BASS_BOOST ||
-                        key == BASS_BOOST_GAIN || key == BASS_BOOST_FREQUENCY || key == ENERGY_MATCHING
+                        key == BASS_BOOST_GAIN || key == BASS_BOOST_FREQUENCY || key == ENERGY_MATCHING ||
+                        key == STEM_TRANSITIONS
                     ) {
             mutableSettings.value = readSettings()
         }
@@ -137,6 +140,7 @@ class AutomixSettingsStore(private val preferences: SharedPreferences) {
                             preferences.getBooleanStrict(BASS_BOOST, false), bassGain, bassFrequency
                         ),
                         energyMatchingEnabled = preferences.getBooleanStrict(ENERGY_MATCHING, false),
+                        stemTransitionsEnabled = preferences.getBooleanStrict(STEM_TRANSITIONS, false),
                     )
     }
 }

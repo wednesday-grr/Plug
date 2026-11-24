@@ -29,38 +29,36 @@
         android:icon="@drawable/ic_play_arrow"
         android:key="player"
         android:layout="@layout/preference_basic"
-        android:summary="@string/settings_player_ui_summary"
-        android:title="@string/settings_player_ui" />
-
-    <Preference
-        android:icon="@drawable/ic_manufacturing"
-        android:key="behavior"
-        android:layout="@layout/preference_basic"
-        android:summary="@string/settings_behavior_summary"
-        android:title="@string/settings_category_behavior" />
+        android:summary="@string/settings_now_playing_summary"
+        android:title="@string/settings_now_playing" />
 
     <Preference
         android:icon="@drawable/ic_collections_bookmark"
         android:key="library"
         android:layout="@layout/preference_basic"
         android:summary="@string/settings_library_summary"
-        android:title="@string/settings_library"
-        app:isPreferenceVisible="false" />
+        android:title="@string/settings_library" />
 
     <Preference
-        android:icon="@drawable/ic_dashboard_customize"
-        android:key="personalization"
+        android:icon="@drawable/ic_manufacturing"
+        android:key="behavior"
         android:layout="@layout/preference_basic"
-        android:summary="@string/settings_customization_summary"
-        android:title="@string/settings_customization"
-        app:isPreferenceVisible="false" />
+        android:summary="@string/settings_playback_summary"
+        android:title="@string/settings_playback" />
 
     <Preference
-        android:icon="@drawable/ic_headphones"
-        android:key="audio"
+        android:icon="@drawable/ic_automix"
+        android:key="automix"
         android:layout="@layout/preference_basic"
-        android:summary="@string/settings_player_options_summary"
-        android:title="@string/settings_player_options" />
+        android:summary="@string/settings_automix_screen_summary"
+        android:title="@string/settings_automix_screen" />
+
+    <Preference
+        android:icon="@drawable/ic_equalizer"
+        android:key="stems"
+        android:layout="@layout/preference_basic"
+        android:summary="@string/settings_stems_summary"
+        android:title="@string/settings_stems" />
 
     <Preference
         android:icon="@drawable/ic_experiment"

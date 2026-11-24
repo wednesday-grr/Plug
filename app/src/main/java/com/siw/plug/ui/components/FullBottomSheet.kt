@@ -165,6 +165,11 @@ internal fun djTransitionEffectLabelResource(effect: String?): Int = when (effec
     "s_curve_fade" -> R.string.automix_transition_s_curve_fade
     "loudness_matching" -> R.string.dj_loudness_matching
     "energy_matching" -> R.string.dj_energy_matching
+    "stem_automix" -> R.string.dj_stem_automix
+    "instrumental_drop" -> R.string.dj_instrumental_drop
+    "instrumental_fade" -> R.string.dj_instrumental_fade
+    "vocal_to_instrumental" -> R.string.dj_vocal_to_instrumental
+    "instrumental_to_vocal" -> R.string.dj_instrumental_to_vocal
     "smooth" -> R.string.dj_crossfade
     else -> R.string.dj_crossfade
 }
@@ -302,6 +307,7 @@ class FullBottomSheet
     private val bottomSheetPlaylistButton: MaterialButton
     private val bottomSheetTimerButton: MaterialButton
     private val bottomSheetPlaybackSpeedButton: MaterialButton
+    private val bottomSheetTransitionInfoButton: MaterialButton?
     private val bottomSheetFavoriteButton: MaterialButton
     val bottomSheetLyricButton: MaterialButton
     private val bottomSheetFullSeekBar: SeekBar
@@ -334,7 +340,8 @@ class FullBottomSheet
         bottomSheetPlaylistButton = findViewById(R.id.playlist)
         bottomSheetLyricButton = findViewById(R.id.lyrics)
         bottomSheetFullQualityDetails = findViewById(R.id.quality_details)
-        findViewById<MaterialButton?>(R.id.transition_info)?.setOnClickListener {
+        bottomSheetTransitionInfoButton = findViewById(R.id.transition_info)
+        bottomSheetTransitionInfoButton?.setOnClickListener {
             transitionInfoSheet?.dismiss()
             transitionInfoSheet = AudioQualityInfoBottomSheet(wrappedContext ?: context, { instance }).also { sheet ->
                 sheet.show()
@@ -1465,6 +1472,8 @@ class FullBottomSheet
                     val progressColor = animation.animatedValue as Int
                     bottomSheetTimerButton.iconTint =
                         ColorStateList.valueOf(progressColor)
+                    bottomSheetTransitionInfoButton?.iconTint =
+                        ColorStateList.valueOf(progressColor)
                     bottomSheetPlaybackSpeedButton.iconTint =
                         ColorStateList.valueOf(progressColor)
                     bottomSheetPlaylistButton.iconTint =
@@ -1589,6 +1598,8 @@ class FullBottomSheet
             )
 
             bottomSheetTimerButton.iconTint =
+                ColorStateList.valueOf(colorOnSurface)
+            bottomSheetTransitionInfoButton?.iconTint =
                 ColorStateList.valueOf(colorOnSurface)
             bottomSheetPlaybackSpeedButton.iconTint =
                 ColorStateList.valueOf(colorOnSurface)

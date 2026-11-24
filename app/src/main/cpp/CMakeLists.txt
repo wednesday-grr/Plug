@@ -29,4 +29,8 @@ target_include_directories(gramophone_essentia PRIVATE
     "${ESSENTIA_DIR}/include/essentia"
     "${ESSENTIA_DIR}/include/eigen3")
 target_link_libraries(gramophone_essentia PRIVATE essentia atomic log)
-target_link_options(gramophone_essentia PRIVATE "-Wl,--no-undefined")
+target_link_options(gramophone_essentia PRIVATE
+        "-Wl,--no-undefined"
+        "-Wl,-z,max-page-size=16384"
+)
+

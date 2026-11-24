@@ -40,6 +40,18 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ShuffleOrder
 import androidx.media3.extractor.mp3.Mp3Extractor
+import com.siw.plug.logic.utils.automix.stems.AudioTrackStemOutput
+import com.siw.plug.logic.utils.automix.stems.StemAutoMixPlanner
+import com.siw.plug.logic.utils.automix.stems.StemAvailability
+import com.siw.plug.logic.utils.automix.stems.StemEffect
+import com.siw.plug.logic.utils.automix.stems.StemEntry
+import com.siw.plug.logic.utils.automix.stems.StemHandOver
+import com.siw.plug.logic.utils.automix.stems.StemMath
+import com.siw.plug.logic.utils.automix.stems.StemPlanInput
+import com.siw.plug.logic.utils.automix.stems.StemPlanReason
+import com.siw.plug.logic.utils.automix.stems.StemPlayer
+import com.siw.plug.logic.utils.automix.stems.StemTrackEvidence
+import com.siw.plug.logic.utils.automix.stems.StemTransitionSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.android.asCoroutineDispatcher
@@ -137,7 +149,8 @@ class AutomixPlayer private constructor(
         onFormatChanged: (Boolean, Format?) -> Unit = { _, _ -> },
         onSinkCreated: (Boolean, PostAmpAudioOutputProvider) -> Unit = { _, _ -> },
         analysisCache: TrackAnalysisCache? = null,
-    ) : this(createDecks(context, replayGainSettings, playbackLooper, onFormatChanged, onSinkCreated, analysisCache))
+        stemSource: StemTransitionSource? = null,
+    ) : this(createDecks(context, replayGainSettings, playbackLooper, onFormatChanged, onSinkCreated, analysisCache, stemSource))
 
     private constructor(decks: Decks) : this(decks, SwappableDeckPlayer(decks.a))
 
@@ -149,6 +162,7 @@ class AutomixPlayer private constructor(
         val factoryB: PlugRenderFactory,
         val capture: Capture,
         val analysisCache: TrackAnalysisCache?,
+        val stemSource: StemTransitionSource?,
     )
 
     private class Capture {
@@ -161,6 +175,10 @@ class AutomixPlayer private constructor(
         private const val PREBUFFER_LEAD_MS = 5000L
         private const val TICK_MS = 25L
         private const val END_MARGIN_MS = 150L
+        private const val STEM_HANDOFF_WAIT_MS = 600L
+        private const val STEM_MAX_TEMPO_DEVIATION = 0.01f
+        private const val STEM_REQUEST_INTERVAL_MS = 30_000L
+        private val STEM_SMOOTH_STYLES = setOf("smooth", "fade", "exponential_fade", "s_curve_fade")
         private const val VINYL_BRAKE_DURATION_MS = 1000L
         private const val VINYL_BRAKE_MIN_SPEED = 0.15f
         private const val ECHO_OUT_WET_MIX = 0.65f
@@ -183,6 +201,7 @@ class AutomixPlayer private constructor(
             onFormatChanged: (Boolean, Format?) -> Unit,
             onSinkCreated: (Boolean, PostAmpAudioOutputProvider) -> Unit,
             analysisCache: TrackAnalysisCache?,
+            stemSource: StemTransitionSource?,
         ): Decks {
             val app = context.applicationContext
             val capture = Capture()
@@ -237,7 +256,7 @@ class AutomixPlayer private constructor(
                 a.release()
                 throw e
             }
-            return Decks(app, a, b, aFactory, bFactory, capture, analysisCache)
+            return Decks(app, a, b, aFactory, bFactory, capture, analysisCache, stemSource)
         }
     }
 
@@ -292,6 +311,18 @@ class AutomixPlayer private constructor(
     private var agcEnabled = false
     private var bassBoost = BassBoostSettings.OFF
     private var energyMatchingEnabled = false
+    private var stemTransitionsEnabled = false
+    private val stemPlayer = StemPlayer({ AudioTrackStemOutput() }) { error -> handler.post { onStemFailed(error) } }
+    private var stemEffect: StemEffect? = null
+    private var stemEntries: Pair<StemEntry, StemEntry>? = null
+    private var stemStarted = false
+    private var stemFellBack = false
+    private var stemDetail: String? = null
+    private var stemHandoffDeadlineMs = 0L
+    private var stemOutgoingReplayGain = 1f
+    private var stemIncomingReplayGain = 1f
+    private var stemLoudnessPlan: LoudnessMatchPlan? = null
+    private val stemPrefetched = mutableMapOf<String, Long>()
     private var energyPlanKey: Pair<String, String>? = null
     private var energyPlan: EnergyMatchPlan? = null
     private var loudnessPlan: LoudnessMatchPlan? = null
@@ -663,6 +694,7 @@ class AutomixPlayer private constructor(
         agcEnabled: Boolean = false,
         bassBoost: BassBoostSettings = BassBoostSettings.OFF,
         energyMatchingEnabled: Boolean = false,
+        stemTransitionsEnabled: Boolean = false,
     ) {
         assertThread()
         require(fadeCurveIntensityPercent in 0..100)
@@ -679,19 +711,22 @@ class AutomixPlayer private constructor(
         if (this.enabled != enabled || this.beatmatchEnabled != beatmatchEnabled ||
             durationMs != durationSec * 1000L || this.transitionStyle != transitionStyle ||
             this.automaticDuration != automaticDuration || maxSkipMs != maxSkipSeconds * 1000L ||
-            this.additionalEffects !=             additionalEffects || effectIntensity != effectIntensityPercent ||
-                        this.loopTransitionBeats != loopTransitionBeats ||
-                        fadeCurveIntensity != fadeCurveIntensityPercent ||
-                        this.loudnessMatchingEnabled != loudnessMatchingEnabled ||
-                        this.agcEnabled != agcEnabled ||
-                        this.energyMatchingEnabled != energyMatchingEnabled
-                    ) cancelTransition()
-                    this.loudnessMatchingEnabled = loudnessMatchingEnabled
-                    this.agcEnabled = agcEnabled
-                    this.bassBoost = bassBoost
-                    this.energyMatchingEnabled = energyMatchingEnabled
-                    this.fadeCurveIntensity = fadeCurveIntensityPercent
-                    this.loopTransitionBeats = loopTransitionBeats
+            this.additionalEffects != additionalEffects || effectIntensity != effectIntensityPercent ||
+            this.loopTransitionBeats != loopTransitionBeats ||
+            fadeCurveIntensity != fadeCurveIntensityPercent ||
+            this.loudnessMatchingEnabled != loudnessMatchingEnabled ||
+            this.agcEnabled != agcEnabled ||
+            this.energyMatchingEnabled != energyMatchingEnabled ||
+            this.stemTransitionsEnabled != stemTransitionsEnabled
+        ) cancelTransition()
+        if (this.stemTransitionsEnabled != stemTransitionsEnabled) stemPrefetched.clear()
+        this.stemTransitionsEnabled = stemTransitionsEnabled
+        this.loudnessMatchingEnabled = loudnessMatchingEnabled
+        this.agcEnabled = agcEnabled
+        this.bassBoost = bassBoost
+        this.energyMatchingEnabled = energyMatchingEnabled
+        this.fadeCurveIntensity = fadeCurveIntensityPercent
+        this.loopTransitionBeats = loopTransitionBeats
         this.enabled = enabled
         this.beatmatchEnabled = beatmatchEnabled
         durationMs = durationSec * 1000L
@@ -985,8 +1020,17 @@ class AutomixPlayer private constructor(
             activeTrim = if (activeIsOutgoing) outgoingTrim else incomingTrim
             standbyTrim = if (activeIsOutgoing) incomingTrim else outgoingTrim
         }
-        active.volume = userVolume * focusVolume * activeGain * activeTrim
-        standby.volume = userVolume * focusVolume * standbyGain * standbyTrim
+        var activeEnvelope = activeGain
+        var standbyEnvelope = standbyGain
+        if (stemEffect != null && stemPlayer.isRunning) {
+            stemPlayer.setVolume(userVolume * focusVolume)
+            StemHandOver.deckGains(stemPlayer.framesPlayed, stemPlayer.totalFrames, stemPlayer.edgeFrames)?.let {
+                activeEnvelope = it.outgoing
+                standbyEnvelope = it.incoming
+            }
+        }
+        active.volume = userVolume * focusVolume * activeEnvelope * activeTrim
+        standby.volume = userVolume * focusVolume * standbyEnvelope * standbyTrim
     }
 
     private fun recordTransient(isA: Boolean, event: PcmTransientAudioProcessor.Transient) {
@@ -1037,6 +1081,7 @@ class AutomixPlayer private constructor(
             clearBeatLoop("Playback operation cancelled the Beat Loop.")
         }
         releaseGainOwnership()
+        resetStemTransition()
         loudnessPlan = null
         observedExecutionEffects.clear()
         mutableRuntimeTelemetry.value = null
@@ -1196,6 +1241,7 @@ class AutomixPlayer private constructor(
             return
         }
         if (!enabled || nextItem == null) return
+        requestStems()
         if (transition.phase == DeckTransition.Phase.FADING) {
             if (active.pauseAtEndOfMediaItems) {
                 cancelTransition()
@@ -1220,6 +1266,7 @@ class AutomixPlayer private constructor(
                 standby.playWhenReady = active.playbackState == Player.STATE_READY
             }
             if (!active.isPlaying || !standby.isPlaying) {
+                if (stemPlayer.isRunning) fallBackFromStems("A deck paused or buffered during the stem transition.")
                 transition.pause(SystemClock.elapsedRealtime())
                 return
             }
@@ -1227,6 +1274,7 @@ class AutomixPlayer private constructor(
             transition.resume(now)
             val progress = transition.progress(now)
             transitionProgress = progress
+            startStemPlayerIfDue(progress)
             applyEffectPlan(progress)
             if (vinylBrakeTransition) {
                 val brakeDuration = minOf(VINYL_BRAKE_DURATION_MS, activeFadeDurationMs)
@@ -1268,11 +1316,17 @@ class AutomixPlayer private constructor(
                     activeGain *= modulation
                 }
                 standby.playbackParameters = PlaybackParameters(
-                    AutomixMath.rampSpeed(matchedSpeed, progress), active.playbackParameters.pitch
+                    if (stemEffect != null) 1f else AutomixMath.rampSpeed(matchedSpeed, progress),
+                    active.playbackParameters.pitch
                 )
             }
             applyVolumes()
             updateEffectExecutionTelemetry()
+            if (progress >= 1f && stemPlayer.isRunning) {
+                if (stemHandoffDeadlineMs == 0L) stemHandoffDeadlineMs = now + STEM_HANDOFF_WAIT_MS
+                if (now < stemHandoffDeadlineMs) return
+                fallBackFromStems("The stem player did not finish within the hand-over window.")
+            }
             if (progress >= 1f) handoff(now)
             return
         }
@@ -1448,8 +1502,9 @@ class AutomixPlayer private constructor(
             nextItem = null
             return
         }
+        val stemDecision = decideStemTransition(fadeDuration, outgoing, incoming, outgoingGrid?.confidence, incomingGrid?.confidence)
         standby.playbackParameters = PlaybackParameters(
-            if (vinylBrakeTransition) 1f else matchedSpeed,
+            if (vinylBrakeTransition || stemDecision?.effect != null) 1f else matchedSpeed,
             active.playbackParameters.pitch
         )
         activeEffectPlan = TransitionEffectPlan.create(activeTransitionStyle, additionalEffects, effectIntensity / 100f)
@@ -1506,7 +1561,11 @@ class AutomixPlayer private constructor(
                 effects = TransitionExplanationEngine.explain(activeEffectPlan, activeTransitionStyle,
                     automaticDecision?.reasons, additionalEffects) +
                     listOfNotNull(pendingBeatmatchExplanation) +
-                    listOfNotNull(loopTransitionExplanation(), loudnessExplanation, energyExplanation),
+                    listOfNotNull(loopTransitionExplanation(), loudnessExplanation, energyExplanation, stemDecision?.explanation),
+                outgoingLufs = measuredLufs(outgoingItem)?.toFloat(),
+                incomingLufs = measuredLufs(incomingItem)?.toFloat(),
+                outgoingStems = stemAvailability(outgoingItem),
+                incomingStems = stemAvailability(incomingItem),
             )
             gainOwnershipRegistry.beginGeneration(generation)
             gainOwnershipGeneration = generation
@@ -1542,6 +1601,7 @@ class AutomixPlayer private constructor(
             if (loudnessPlan?.applied == true) {
                 gainOwnershipRegistry.claim(AutoMixEffect.LOUDNESS_MATCHING, generation)
             }
+            stemEffect?.let { gainOwnershipRegistry.claim(checkNotNull(AutoMixEffect.fromId(it.id)), generation) }
             activeEffectPlan.effects.forEach { scheduled ->
                 gainOwnershipRegistry.claim(
                     checkNotNull(AutoMixEffect.fromId(scheduled.effect.id)), generation
@@ -1617,6 +1677,7 @@ class AutomixPlayer private constructor(
                 listOf(AutoMixEffect.LOOP_TRANSITION.id)
             } else emptyList()
         lastTransitionBeatmatched = activeTransitionBeatmatched
+        if (stemStarted && !stemFellBack) stemEffect?.let { lastEffectIds = lastEffectIds + it.id }
         incoming.playbackParameters = PlaybackParameters(
             if (vinylBrakeTransition) 1f else outgoing.playbackParameters.speed,
             outgoing.playbackParameters.pitch
@@ -1633,6 +1694,7 @@ class AutomixPlayer private constructor(
         }
         transition.complete(now)
         releaseGainOwnership()
+        resetStemTransition()
         activeEffectPlan = TransitionEffectPlan.create("smooth", emptySet())
         decks.factoryA.djTransitionAudioProcessor.bypass()
         decks.factoryB.djTransitionAudioProcessor.bypass()
@@ -1677,6 +1739,31 @@ class AutomixPlayer private constructor(
         val runtimeById = snapshot.effects.mapNotNull { effect ->
             if (effect.selectionStatus != EffectSelectionStatus.SELECTED) return@mapNotNull null
             val autoMixEffect = AutoMixEffect.fromId(effect.effectId) ?: return@mapNotNull null
+            if (autoMixEffect in stemTransitionEffects) {
+                val state = when {
+                    stemFellBack -> EffectLifecycleState.FAILED
+                    stemPlayer.isRunning && stemPlayer.framesPlayed > 0 -> {
+                        observedExecutionEffects += autoMixEffect
+                        EffectLifecycleState.EXECUTING
+                    }
+                    completed -> if (autoMixEffect in observedExecutionEffects) EffectLifecycleState.COMPLETED
+                        else EffectLifecycleState.PREPARED
+                    prepared || stemEffect != null -> EffectLifecycleState.PREPARED
+                    else -> return@mapNotNull null
+                }
+                return@mapNotNull effect.effectId to EffectRuntimeTelemetry(
+                    effect = autoMixEffect,
+                    state = state,
+                    processedFrames = stemPlayer.framesPlayed,
+                    sampleRate = StemMath.SAMPLE_RATE,
+                    activeGain = 1f,
+                    targetGain = 1f,
+                    detail = stemDetail ?: if (state == EffectLifecycleState.EXECUTING) {
+                        "${stemPlayer.lastActiveSources} of 4 stem sources were mixed in the last block; " +
+                            "device output is not observable."
+                    } else null,
+                )
+            }
             val processorEffects = processorEffects(effect.effectId)
             val activeSeen = processorEffects.any { it in activeRuntime.activeEffects }
             val standbySeen = processorEffects.any { it in standbyRuntime.activeEffects }
@@ -1865,6 +1952,182 @@ class AutomixPlayer private constructor(
         )
     }
 
+    private class StemDecision(val effect: StemEffect?, val explanation: EffectSelectionExplanation)
+
+    /**
+     * Requests background separation for the playing and upcoming tracks. The manager ignores tracks that are queued
+     * or ready, so re-asking every [STEM_REQUEST_INTERVAL_MS] only retries failures such as a model installed later.
+     */
+    private fun requestStems() {
+        if (!stemTransitionsEnabled) return
+        val source = decks.stemSource ?: return
+        val now = SystemClock.elapsedRealtime()
+        for (item in listOfNotNull(active.currentMediaItem, nextItem)) {
+            val uri = item.localConfiguration?.uri?.toString() ?: continue
+            val last = stemPrefetched[item.mediaId]
+            if (last == null || now - last >= STEM_REQUEST_INTERVAL_MS) {
+                stemPrefetched[item.mediaId] = now
+                source.prefetch(item.mediaId, uri)
+            }
+        }
+    }
+
+    private fun measuredLufs(item: MediaItem?): Double? {
+        val key = item?.let(AnalysisKey::from) ?: return null
+        val measured = decks.analysisCache?.peekLoudness(key) ?: return null
+        return measured.integratedLufs?.takeIf { measured.measuredSeconds >= 20f }?.toDouble()
+    }
+
+    private fun stemAvailability(item: MediaItem?): StemAvailability? {
+        if (!stemTransitionsEnabled) return StemAvailability.DISABLED
+        val source = decks.stemSource ?: return null
+        return item?.let { source.availability(it.mediaId) }
+    }
+
+    private fun replayGainLinear(isDeckA: Boolean): Float {
+        val db = (if (isDeckA) decks.factoryA else decks.factoryB).replayGainAudioProcessor.appliedGainDb
+        return if (db.isFinite()) 10f.pow(db / 20f) else 1f
+    }
+
+    /**
+     * Decides whether this transition is rendered from stems. Every unmet condition falls back to the ordinary
+     * two-deck crossfade; stems are never faked, and the deck envelope keeps running underneath as the fallback.
+     */
+    private fun decideStemTransition(
+        fadeDuration: Long,
+        outgoing: ResolvedTrackAudioMetadata,
+        incoming: ResolvedTrackAudioMetadata,
+        outgoingConfidence: Float?,
+        incomingConfidence: Float?,
+    ): StemDecision? {
+        if (!stemTransitionsEnabled) return null
+        fun skipped(detail: String) = StemDecision(null, EffectSelectionExplanation(
+            AutoMixEffect.STEM_AUTOMIX.id, EffectSelectionStatus.SKIPPED,
+            listOf(EffectDecisionReason.STEM_TRANSITION_NOT_APPLIED), null, executionDetail = detail,
+        ))
+        val source = decks.stemSource ?: return skipped("No stem pipeline is available in this player.")
+        val outgoingItem = active.currentMediaItem
+        val incomingItem = standby.currentMediaItem
+        if (outgoingItem == null || incomingItem == null) return skipped("Track identity unavailable.")
+        if (activeTransitionStyle !in STEM_SMOOTH_STYLES) {
+            return skipped("Transition style \"$activeTransitionStyle\" needs deck processing that stems bypass.")
+        }
+        if (additionalEffects.isNotEmpty()) return skipped("Additional deck effects are enabled and stems bypass them.")
+        if (agcEnabled || bassBoost.enabled) {
+            return skipped("AGC or Bass Boost runs on the decks only, so stems would sound different.")
+        }
+        if (kotlin.math.abs(matchedSpeed - 1f) > STEM_MAX_TEMPO_DEVIATION) {
+            return skipped("Beatmatch tempo change exceeds what unshifted stems can follow.")
+        }
+        val outgoingEntry = source.readyEntry(outgoingItem.mediaId)
+        val incomingEntry = source.readyEntry(incomingItem.mediaId)
+        val energy = decks.analysisCache?.let { cache ->
+            val outKey = AnalysisKey.from(outgoingItem)
+            val inKey = AnalysisKey.from(incomingItem)
+            if (outKey == null || inKey == null) null else EnergyMatcher.plan(cache.peekEnergy(outKey), cache.peekEnergy(inKey))
+        }?.takeIf {
+            it.reason == EnergyMatchReason.WITHIN_THRESHOLD || it.reason == EnergyMatchReason.EXTENDED_FOR_RISE ||
+                it.reason == EnergyMatchReason.EXTENDED_FOR_DROP
+        }?.differenceDb?.toDouble()
+        val plan = StemAutoMixPlanner.plan(StemPlanInput(
+            outgoing = StemTrackEvidence(outgoingEntry != null, measuredLufs(outgoingItem),
+                outgoing.bpm?.toDouble(), outgoingConfidence, outgoing.camelotKey),
+            incoming = StemTrackEvidence(incomingEntry != null, measuredLufs(incomingItem),
+                incoming.bpm?.toDouble(), incomingConfidence, incoming.camelotKey),
+            transitionMs = fadeDuration,
+            energyDeltaDb = energy,
+            deviceEligible = source.deviceEligible,
+            enabled = true,
+        ))
+        val effect = plan.effect
+        if (effect == null || outgoingEntry == null || incomingEntry == null) return skipped(plan.detail)
+        val baseFade = when (activeTransitionStyle) {
+            "exponential_fade" -> AutoMixEffect.EXPONENTIAL_FADE
+            "s_curve_fade" -> AutoMixEffect.S_CURVE_FADE
+            else -> AutoMixEffect.CROSSFADE
+        }
+        val stemAutoMixEffect = checkNotNull(AutoMixEffect.fromId(effect.id))
+        val arbitration = AutoMixEffectArbitrator.evaluate(listOf(baseFade, stemAutoMixEffect))
+        if (arbitration.any { it.state == EffectLifecycleState.REJECTED || it.state == EffectLifecycleState.UNAVAILABLE }) {
+            return skipped("Effect arbitration rejected the stem transition.")
+        }
+        stemEffect = effect
+        stemEntries = outgoingEntry to incomingEntry
+        stemStarted = false
+        stemFellBack = false
+        stemDetail = null
+        stemHandoffDeadlineMs = 0L
+        stemLoudnessPlan = loudnessPlan
+        stemOutgoingReplayGain = replayGainLinear(transition.activeDeck == DeckTransition.Deck.A)
+        stemIncomingReplayGain = replayGainLinear(transition.standbyDeck == DeckTransition.Deck.A)
+        return StemDecision(effect, EffectSelectionExplanation(
+            effect.id, EffectSelectionStatus.SELECTED, listOf(EffectDecisionReason.STEM_TRANSITION_APPLIED),
+            EffectExecutionStatus.PLANNED, executionDetail = plan.detail,
+        ))
+    }
+
+    private fun startStemPlayerIfDue(progress: Float) {
+        val effect = stemEffect ?: return
+        val entries = stemEntries ?: return
+        if (stemStarted || stemFellBack) return
+        val durationFrames = activeFadeDurationMs * StemMath.SAMPLE_RATE / 1000L
+        val progressFrames = (progress * durationFrames).toLong()
+        if (durationFrames - progressFrames < 3 * stemPlayer.edgeFrames) {
+            fallBackFromStems("The transition was already too far along to start the stem player.")
+            return
+        }
+        val plan = stemLoudnessPlan
+        val outgoingReplayGain = stemOutgoingReplayGain
+        val incomingReplayGain = stemIncomingReplayGain
+        try {
+            stemPlayer.setVolume(userVolume * focusVolume)
+            stemPlayer.start(
+                outgoing = entries.first, incoming = entries.second, effect = effect,
+                outgoingStartFrame = active.currentPosition * StemMath.SAMPLE_RATE / 1000L,
+                incomingStartFrame = standby.currentPosition * StemMath.SAMPLE_RATE / 1000L,
+                durationFrames = durationFrames,
+                progressAtSampleFrames = progressFrames,
+                outgoingTrim = { p ->
+                    outgoingReplayGain * (plan?.let { LoudnessMatcher.outgoingTrim(it.outgoingGain, p) } ?: 1f)
+                },
+                incomingTrim = { p ->
+                    incomingReplayGain * (plan?.let { LoudnessMatcher.incomingTrim(it.incomingGain, p) } ?: 1f)
+                },
+                onFinished = {},
+            )
+            stemStarted = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Stem player could not start", e)
+            fallBackFromStems("The stem player could not start: ${e.message}")
+        }
+    }
+
+    private fun onStemFailed(error: Throwable) {
+        if (released || stemEffect == null) return
+        Log.w(TAG, "Stem player failed", error)
+        fallBackFromStems("The stem player failed: ${error.message}")
+    }
+
+    /** Stops the stem player; the decks' ordinary crossfade envelope then carries the rest of the transition. */
+    private fun fallBackFromStems(detail: String) {
+        stemPlayer.stop()
+        if (stemEffect != null) {
+            stemFellBack = true
+            stemDetail = detail
+        }
+        applyVolumes()
+    }
+
+    private fun resetStemTransition() {
+        stemPlayer.stop()
+        stemEffect = null
+        stemEntries = null
+        stemStarted = false
+        stemFellBack = false
+        stemDetail = null
+        stemHandoffDeadlineMs = 0L
+        stemLoudnessPlan = null
+    }
     private fun releaseGainOwnership() {
         gainOwnershipGeneration?.let(gainOwnershipRegistry::releaseGeneration)
         gainOwnershipGeneration = null

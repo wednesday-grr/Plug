@@ -37,6 +37,7 @@ import com.siw.plug.logic.utils.automix.EffectExecutionStatus
 import com.siw.plug.logic.utils.automix.EffectLifecycleState
 import com.siw.plug.logic.utils.automix.EffectSelectionStatus
 import com.siw.plug.logic.utils.automix.TransitionExecutionStatus
+import com.siw.plug.logic.utils.automix.stems.StemAvailability
 import java.text.NumberFormat
 import kotlin.math.abs
 
@@ -102,6 +103,10 @@ internal data class DisplayTransition(
     val selectorVocalThreshold: Float?,
     val effects: List<DisplayEffect>,
     val beatEffect: DisplayBeatEffect? = null,
+    val outgoingLufs: Float? = null,
+    val incomingLufs: Float? = null,
+    val outgoingStems: StemAvailability? = null,
+    val incomingStems: StemAvailability? = null,
 )
 
 internal data class DisplayTrackAnalysis(
@@ -229,6 +234,9 @@ internal class AudioQualityInfoBottomSheet(
                 value("selector_difference"), value("selector_threshold"), value("selector_rising"),
                 value("selector_rising_threshold"), value("selector_vocal_threshold"), effects,
                 parseBeatEffect(data),
+                value("outgoing_lufs"), value("incoming_lufs"),
+                data.getString("outgoing_stems")?.let { runCatching { StemAvailability.valueOf(it) }.getOrNull() },
+                data.getString("incoming_stems")?.let { runCatching { StemAvailability.valueOf(it) }.getOrNull() },
             ), parseBeatEffect(data))
         } catch (e: CancellationException) {
             throw e
@@ -416,6 +424,10 @@ internal class AudioQualityInfoBottomSheet(
         detail(R.string.transition_info_incoming_grid, format(t.incomingGrid))
         detail(R.string.transition_info_outgoing_key, t.outgoingKey)
         detail(R.string.transition_info_incoming_key, t.incomingKey)
+        detail(R.string.transition_info_outgoing_lufs, t.outgoingLufs?.let { context.getString(R.string.transition_info_lufs_value, number.format(it)) })
+        detail(R.string.transition_info_incoming_lufs, t.incomingLufs?.let { context.getString(R.string.transition_info_lufs_value, number.format(it)) })
+        detail(R.string.transition_info_outgoing_stems, t.outgoingStems?.let { context.getString(stemAvailabilityLabelRes(it)) })
+        detail(R.string.transition_info_incoming_stems, t.incomingStems?.let { context.getString(stemAvailabilityLabelRes(it)) })
         detail(R.string.transition_info_outgoing_vocal, format(t.outgoingVocal))
         detail(R.string.transition_info_incoming_vocal, format(t.incomingVocal))
         detail(R.string.transition_info_bpm_confidence, null)
@@ -563,6 +575,9 @@ internal class AudioQualityInfoBottomSheet(
         EffectDecisionReason.ENERGY_MATCH_APPLIED -> R.string.transition_reason_energy_applied
         EffectDecisionReason.ENERGY_WITHIN_THRESHOLD -> R.string.transition_reason_energy_threshold
         EffectDecisionReason.ENERGY_DATA_UNAVAILABLE -> R.string.transition_reason_energy_unavailable
+        EffectDecisionReason.STEM_TRANSITION_APPLIED -> R.string.transition_reason_stem_applied
+        EffectDecisionReason.STEM_TRANSITION_NOT_APPLIED -> R.string.transition_reason_stem_not_applied
+        EffectDecisionReason.STEM_TRANSITION_FAILED -> R.string.transition_reason_stem_failed
     })
 
     private fun renderBeatEffect(effect: DisplayBeatEffect) {
