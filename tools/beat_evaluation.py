@@ -111,7 +111,7 @@ def evaluate(manifest_path, output_path):
         env.update(BEAT_EVAL_INPUT=str(input_path), BEAT_EVAL_OUTPUT=str(result_path))
         wrapper = repository / ("gradlew.bat" if os.name == "nt" else "gradlew")
         subprocess.run([str(wrapper), ":app:testDebugUnitTest", "--tests",
-                        "org.akanework.gramophone.BeatEvaluationRunnerTest",
+                        "com.siw.plug.BeatEvaluationRunnerTest",
                         "--rerun", "--console", "plain"], cwd=repository, env=env, check=True)
         rows = [line.split("\t") for line in result_path.read_text(encoding="utf-8").splitlines()]
     if len(rows) != len(tracks):

@@ -1,0 +1,2802 @@
+/*
+ *     Copyright (C) 2024 Akane Foundation
+ *
+ *     Gramophone is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     Gramophone is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.siw.plug.logic
+
+import android.annotation.SuppressLint
+import android.app.PendingIntent
+import android.bluetooth.BluetoothCodecStatus
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.ContentUris
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.media.AudioDeviceInfo
+import android.media.audiofx.AudioEffect
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
+import android.provider.MediaStore
+import androidx.concurrent.futures.CallbackToFutureAdapter
+import androidx.core.app.NotificationChannelCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
+import androidx.core.content.edit
+import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.DeviceInfo
+import androidx.media3.common.Format
+import androidx.media3.common.HeartRating
+import androidx.media3.common.IllegalSeekPositionException
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Metadata
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.Player
+import androidx.media3.common.Rating
+import androidx.media3.common.Timeline
+import androidx.media3.common.TrackSelectionParameters
+import androidx.media3.common.Tracks
+import androidx.media3.common.util.BitmapLoader
+import androidx.media3.common.util.Log
+import androidx.media3.common.util.Util
+import androidx.media3.common.util.Util.isBitmapFactorySupportedMimeType
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.util.EventLogger
+import androidx.media3.extractor.mp3.Mp3Extractor
+import androidx.media3.extractor.metadata.id3.TextInformationFrame
+import androidx.media3.extractor.metadata.vorbis.VorbisComment
+import androidx.media3.inspector.MetadataRetriever
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
+import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
+import androidx.media3.session.addToCommandQueueThenFlush
+import androidx.preference.PreferenceManager
+import androidx.media3.session.CacheBitmapLoader
+import androidx.media3.session.CommandButton
+import androidx.media3.session.MediaBrowser
+import androidx.media3.session.MediaConstants
+import coil3.BitmapImage
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
+import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
+import com.google.common.util.concurrent.SettableFuture
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.guava.future
+import kotlinx.coroutines.guava.await
+import com.siw.plug.R
+import com.siw.plug.logic.ui.MeiZuLyricsMediaNotificationProvider
+import com.siw.plug.logic.ui.isManualNotificationUpdate
+import com.siw.plug.logic.utils.AfFormatInfo
+import com.siw.plug.logic.utils.AfFormatTracker
+import com.siw.plug.logic.utils.AudioTrackInfo
+import com.siw.plug.logic.utils.BtCodecInfo
+import com.siw.plug.logic.utils.CircularShuffleOrder
+import com.siw.plug.logic.utils.Flags
+import com.siw.plug.logic.utils.LastPlayedManager
+import com.siw.plug.logic.utils.LrclibClient
+import com.siw.plug.logic.utils.LyricsResponseCache
+import com.siw.plug.logic.utils.LrcUtils.LrcParserOptions
+import com.siw.plug.logic.utils.LrcUtils.extractAndParseLyrics
+import com.siw.plug.logic.utils.LrcUtils.loadAndParseLyricsFile
+import com.siw.plug.logic.utils.MediaItemList
+import com.siw.plug.logic.utils.ReplayGainAudioProcessor
+import com.siw.plug.logic.utils.ReplayGainUtil
+import com.siw.plug.logic.utils.SemanticLyrics
+import com.siw.plug.logic.utils.SpicyLyricsAttribution
+import com.siw.plug.logic.utils.SpicyLyricsClient
+import com.siw.plug.logic.utils.SpicyLyricsResult
+import com.siw.plug.logic.utils.automix.AutomixOffloadPolicy
+import com.siw.plug.logic.utils.automix.AutomixPlayer
+import com.siw.plug.logic.utils.automix.AutomixSettingsStore
+import com.siw.plug.logic.utils.automix.AudioAnalysisScheduler
+import com.siw.plug.logic.utils.automix.TrackAnalysisCache
+import com.siw.plug.logic.utils.automix.AnalysisKey
+import com.siw.plug.logic.utils.automix.BeatGridCacheRead
+import com.siw.plug.logic.utils.automix.SmartQueueSorter
+import com.siw.plug.logic.utils.automix.TrackAudioMetadataResolver
+
+import com.siw.plug.logic.utils.exoplayer.EndedWorkaroundPlayer
+import com.siw.plug.logic.utils.exoplayer.PlugExtractorsFactory
+import com.siw.plug.logic.utils.exoplayer.PlugMediaSourceFactory
+import com.siw.plug.logic.utils.exoplayer.PlugRenderFactory
+import com.siw.plug.ui.AudioPreviewActivity
+import com.siw.plug.ui.LyricWidgetProvider
+import com.siw.plug.ui.MainActivity
+import com.siw.plug.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_ALL
+import com.siw.plug.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_CLEAR
+import com.siw.plug.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_ITEM
+import com.siw.plug.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_LIST
+import com.siw.plug.ui.fragments.compose.MqState.Companion.CLIENT_QB_REFRESH_QUEUES
+import org.nift4.mediastorecompat.MediaStoreCompat
+import uk.akane.libphonograph.dynamicitem.Favorite
+import uk.akane.libphonograph.items.albumId
+import uk.akane.libphonograph.manipulator.ItemManipulator
+import uk.akane.libphonograph.manipulator.PlaylistSerializer
+import uk.akane.libphonograph.manipulator.PlaylistSerializer.Entry
+import java.util.concurrent.Executor
+import kotlin.collections.emptyList
+import kotlin.collections.map
+import kotlin.collections.plus
+import kotlin.random.Random
+
+
+/**
+ * [PlugPlaybackService] is a server service.
+ * It's using exoplayer2 as its player backend.
+ */
+class PlugPlaybackService : MediaLibraryService(), MediaSessionService.Listener,
+    MediaLibrarySession.Callback, Player.Listener, AnalyticsListener,
+    SharedPreferences.OnSharedPreferenceChangeListener {
+
+    companion object {
+        private const val TAG = "GramoPlaybackService"
+        const val NOTIFY_CHANNEL_ID = "plugServiceFgsError"
+        const val NOTIFY_ID = 1
+        private const val FAVE_ID = 2
+        private const val PENDING_INTENT_SESSION_ID = 0
+        const val PENDING_INTENT_NOTIFY_ID = 1
+        const val PENDING_INTENT_WIDGET_ID = 2
+        const val PENDING_INTENT_FAVE_ID = 3
+
+        const val SERVICE_SET_TIMER = "set_timer"
+        const val SERVICE_QUERY_TIMER = "query_timer"
+        const val SERVICE_GET_AUDIO_FORMAT = "get_audio_format"
+        const val SERVICE_GET_DJ_METRICS = "get_dj_metrics"
+        const val SERVICE_GET_TRANSITION_INFO = "get_transition_info"
+        const val SERVICE_BEAT_JUMP = "automix_beat_jump"
+        const val SERVICE_BEAT_LOOP = "automix_beat_loop"
+        const val SERVICE_CLEAR_BEAT_LOOP = "automix_clear_beat_loop"
+        const val SERVICE_BEAT_ANALYSIS = "offline_beat_analysis"
+        const val SERVICE_GET_LYRICS = "get_lyrics"
+        const val LYRICS_CACHE_PREFERENCES = "lyrics_response_cache"
+        const val CLIENT_AUTOMIX_LYRICS = "automix_lyrics"
+        const val SERVICE_TIMER_CHANGED = "changed_timer"
+        const val SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY = "set_media_items_seamlessly"
+        const val SERVICE_SET_MEDIA_ITEMS_ATOMIC = "set_media_items_atomic"
+
+        const val SERVICE_QB_GET_INACTIVE_LIST = "qb_get_inactive_list"
+        const val SERVICE_QB_LOAD_QUEUE = "qb_load"
+        const val SERVICE_QB_GET_QUEUE_FOR_UI = "qb_get_queue_for_ui"
+        const val SERVICE_QB_DEL = "qb_delete"
+        const val SERVICE_QB_REORDER = "qb_reorder"
+        const val SERVICE_SORT_AUTOMIX = "sort_automix"
+        const val SERVICE_QB_PIN_QUEUE = "qb_pin_queue"
+        const val SERVICE_QB_UNPIN_QUEUE = "qb_unpin_queue"
+        const val SERVICE_QB_RENAME_QUEUE = "qb_rename"
+
+        const val SERVICE_QB_AGE = "qb_age"
+
+        var instanceForWidgetAndLyricsOnly: PlugPlaybackService? = null
+    }
+
+    private var lastSessionId = 0
+    private val internalPlaybackThread =
+        HandlerThread("ExoPlayer:Playback", Process.THREAD_PRIORITY_AUDIO)
+    private var mediaSession: MediaLibrarySession? = null
+    val endedWorkaroundPlayer
+        get() = mediaSession?.player as EndedWorkaroundPlayer?
+
+    private lateinit var libraryTreeLoader: LibraryTreeLoader
+
+    private var controller: MediaBrowser? = null
+    lateinit var qb: QueueBoard
+    private val sendLyrics = Runnable { scheduleSendingLyrics(false) }
+    var lyrics: SemanticLyrics? = null
+        private set
+    var lyricsAttribution: SpicyLyricsAttribution? = null
+        private set
+    private val lyricsResponseCache by lazy {
+        LyricsResponseCache(getSharedPreferences(LYRICS_CACHE_PREFERENCES, MODE_PRIVATE))
+    }
+    val syncedLyrics
+        get() = lyrics as? SemanticLyrics.SyncedLyrics
+    private lateinit var customCommands: List<CommandButton>
+    private lateinit var handler: Handler
+    private lateinit var mainExecutor: Executor
+    private lateinit var playbackHandler: Handler
+    private lateinit var nm: NotificationManagerCompat
+    private lateinit var lastPlayedManager: LastPlayedManager
+    private lateinit var prefs: SharedPreferences
+    internal lateinit var automixSettings: AutomixSettingsStore
+        private set
+    private var lastSentHighlightedLyric: String? = null
+    private var lastSentNotificationLyric: String? = null
+    private lateinit var afFormatTracker: AfFormatTracker
+    private var automixPlayer: AutomixPlayer? = null
+    private lateinit var audioAnalysis: AudioAnalysisScheduler
+    private var automixTrackers: List<AfFormatTracker> = emptyList()
+    private val playerEventLogger = EventLogger()
+    private lateinit var rgAp: ReplayGainAudioProcessor
+    private var rgMode = 0 // 0 = disabled, 1 = track, 2 = album, 3 = smart
+    private var updatedLyricAtLeastOnce = false
+    private val downstreamFormat = hashSetOf<Pair<Any, Pair<Int, Format>>>()
+    private val pendingDownstreamFormat = hashSetOf<Pair<Any, Pair<Int, Format>>>()
+    private var afTrackFormat: Pair<Any, AfFormatInfo>? = null
+    private val pendingAfTrackFormats = hashMapOf<Any, AfFormatInfo>()
+    private var audioSinkInputFormat: Format? = null
+    private var audioTrackInfo: AudioTrackInfo? = null
+    private var audioTrackInfoCounter = 0
+    private var audioTrackReleaseCounter = 0
+
+    // only used for formats where this is significant for quality, but not in header (opus)
+    private var bitrate: Int? = null
+    private var btInfo: BtCodecInfo? = null
+    private var proxy: BtCodecInfo.Companion.Proxy? = null
+    private val scope = CoroutineScope(Dispatchers.Main)
+    private val lastPlaylistLoaded = CompletableDeferred<Unit>()
+    private val lyricsFetcher = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
+    private val upcomingLyricsFetcher = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
+    private var upcomingLyricsItem: MediaItem? = null
+    private var upcomingLyricsResult: Pair<SemanticLyrics?, SpicyLyricsAttribution?>? = null
+    private var upcomingLyricsVersion = 0
+    private var upcomingLyricsGeneration = 0
+    private var upcomingLyricsLoadingGeneration: Int? = null
+    private var sentUpcomingLyricsVersion = -1
+    private var sentUpcomingLyricsAt = 0L
+    private var wasLyricsCrossfading = false
+    private var lyricsCrossfadeEngine: AutomixPlayer? = null
+    private var lyricsOutgoingDeck: ExoPlayer? = null
+    private val automixLyricsTick = object : Runnable {
+        override fun run() {
+            updateAutomixLyrics()
+            handler.postDelayed(this, 200L)
+        }
+    }
+
+    private fun updateAutomixLyrics() {
+        val engine = automixPlayer
+        val standby = engine?.upcomingStandbyPlayer
+        val item = standby?.currentMediaItem
+        if (item != upcomingLyricsItem) {
+            upcomingLyricsItem = item
+            upcomingLyricsResult = null
+            upcomingLyricsVersion++
+            upcomingLyricsGeneration++
+            upcomingLyricsLoadingGeneration = null
+        }
+        if (item != null && standby != null && upcomingLyricsResult == null) {
+            val format = standby.currentTracks.getFirstSelectedTrackFormatByType(C.TRACK_TYPE_AUDIO)
+            if (format != null && upcomingLyricsLoadingGeneration == null) {
+                val generation = upcomingLyricsGeneration
+                upcomingLyricsLoadingGeneration = generation
+                val duration = standby.duration.takeIf { it > 0 }
+                upcomingLyricsFetcher.launch {
+                    val result = loadTrackLyrics(item, format, duration)
+                    withContext(Dispatchers.Main) {
+                        if (upcomingLyricsLoadingGeneration == generation) upcomingLyricsLoadingGeneration = null
+                        if (upcomingLyricsGeneration == generation && upcomingLyricsItem == item) {
+                            upcomingLyricsResult = result
+                            upcomingLyricsVersion++
+                        }
+                    }
+                }
+            }
+        }
+        val fading = engine?.isCrossfading == true && standby != null && item != null
+        if (fading && !wasLyricsCrossfading) {
+            lyricsCrossfadeEngine = engine
+            lyricsOutgoingDeck = engine?.activeExoPlayer
+        }
+        if (fading || wasLyricsCrossfading) {
+            val args = Bundle().apply {
+                putBoolean("fading", fading)
+                putString("current_id", engine?.currentMediaItem?.mediaId)
+                if (!fading) putBoolean("handoff", engine != null &&
+                    engine === lyricsCrossfadeEngine && engine.activeExoPlayer !== lyricsOutgoingDeck)
+                if (fading) {
+                    putString("incoming_id", item?.mediaId)
+                    putString("incoming_artwork", item?.mediaMetadata?.artworkUri?.toString())
+                    putLong("outgoing_position", engine?.currentPosition?.coerceAtLeast(0) ?: 0L)
+                    putBoolean("outgoing_playing", engine?.isPlaying == true)
+                    putFloat("outgoing_speed", engine?.playbackParameters?.speed ?: 1f)
+                    putLong("position", standby!!.currentPosition.coerceAtLeast(0))
+                    putLong("sample_time", SystemClock.elapsedRealtime())
+                    putBoolean("playing", standby.isPlaying)
+                    putFloat("speed", standby.playbackParameters.speed)
+                    if (upcomingLyricsResult != null && (sentUpcomingLyricsVersion != upcomingLyricsVersion ||
+                            SystemClock.elapsedRealtime() - sentUpcomingLyricsAt >= 2000L)) {
+                        putBoolean("lyrics_updated", true)
+                        putParcelable("lyrics", upcomingLyricsResult?.first)
+                        putParcelable("attribution", upcomingLyricsResult?.second)
+                        sentUpcomingLyricsVersion = upcomingLyricsVersion
+                        sentUpcomingLyricsAt = SystemClock.elapsedRealtime()
+                    }
+                }
+            }
+            mediaSession?.broadcastCustomCommand(SessionCommand(CLIENT_AUTOMIX_LYRICS, Bundle.EMPTY), args)
+        }
+        if (!fading) {
+            lyricsCrossfadeEngine = null
+            lyricsOutgoingDeck = null
+        }
+        wasLyricsCrossfading = fading
+    }
+    private val bitrateFetcher = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
+
+    private fun getRepeatCommand() =
+        when (controller!!.repeatMode) {
+            Player.REPEAT_MODE_OFF -> customCommands[2]
+            Player.REPEAT_MODE_ALL -> customCommands[3]
+            Player.REPEAT_MODE_ONE -> customCommands[4]
+            else -> throw IllegalArgumentException()
+        }
+
+    private fun getShufflingCommand() =
+        if (controller!!.shuffleModeEnabled)
+            customCommands[1]
+        else
+            customCommands[0]
+
+    private fun getFavoriteCommand(): CommandButton {
+        val isFavorite = (controller?.currentMediaItem?.mediaMetadata?.userRating as? HeartRating)?.isHeart == true
+        return if (isFavorite) {
+            customCommands[6]
+        } else {
+            customCommands[5]
+        }
+    }
+
+    private val timer: Runnable = Runnable {
+        if (timerPauseOnEnd) {
+            endedWorkaroundPlayer!!.exoPlayer.pauseAtEndOfMediaItems = true
+        } else {
+            controller!!.pause()
+        }
+        timerDuration = null
+    }
+    private var timerPauseOnEnd = false
+    private var timerDuration: Long? = null
+        set(value) {
+            field = value
+            if (value != null && value > 0) {
+                handler.postDelayed(timer, value - SystemClock.elapsedRealtime())
+            } else {
+                handler.removeCallbacks(timer)
+            }
+            mediaSession!!.broadcastCustomCommand(
+                SessionCommand(SERVICE_TIMER_CHANGED, Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        }
+
+    private val seekReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val to =
+                intent.extras?.getLong("seekTo", C.INDEX_UNSET.toLong()) ?: C.INDEX_UNSET.toLong()
+            if (to != C.INDEX_UNSET.toLong())
+                controller?.seekTo(to)
+        }
+    }
+
+    private val btReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action.equals("android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED") &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O /* before 8, only sbc was supported */
+            ) {
+                btInfo = BtCodecInfo.fromCodecConfig(
+                    @SuppressLint("NewApi") IntentCompat.getParcelableExtra(
+                        intent,
+                        "android.bluetooth.extra.CODEC_STATUS",
+                        BluetoothCodecStatus::class.java
+                    )?.codecConfig
+                )
+                Log.d(TAG, "new bluetooth codec config $btInfo")
+            }
+        }
+    }
+
+    override fun onCreate() {
+        Log.i(TAG, "+onCreate()")
+        super.onCreate()
+        prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        automixSettings = AutomixSettingsStore(prefs)
+        audioAnalysis = AudioAnalysisScheduler(this, TrackAnalysisCache(this))
+        audioAnalysis.setAnalyzer(automixSettings.settings.value.analyzer)
+        audioAnalysis.setIdle(true)
+        scope.launch {
+            plugApplication.reader.songListFlow.collect { audioAnalysis.updateLibrary(it) }
+        }
+        instanceForWidgetAndLyricsOnly = this
+        internalPlaybackThread.start()
+        playbackHandler = Handler(internalPlaybackThread.looper)
+        handler = Handler(Looper.getMainLooper())
+        handler.post(automixLyricsTick)
+        mainExecutor = ContextCompat.getMainExecutor(this)
+        nm = NotificationManagerCompat.from(this)
+        qb = QueueBoard(this)
+        setListener(this)
+        setMediaNotificationProvider(
+            MeiZuLyricsMediaNotificationProvider(this) { lastSentHighlightedLyric }
+        )
+        setForegroundServiceTimeoutMs(120000)
+        setShowNotificationForEmptyPlayer(SHOW_NOTIFICATION_FOR_EMPTY_PLAYER_AFTER_STOP_OR_ERROR)
+        nm.createNotificationChannel(
+            NotificationChannelCompat.Builder(
+                NOTIFY_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_HIGH
+            ).apply {
+                setName("${getString(R.string.app_name)} - ${getString(R.string.error_in_bg)}")
+                setVibrationEnabled(true)
+                setVibrationPattern(longArrayOf(0L, 200L))
+                setLightsEnabled(false)
+                setShowBadge(false)
+                setSound(null, null)
+            }.build()
+        )
+
+        customCommands =
+            listOf(
+                CommandButton.Builder(CommandButton.ICON_SHUFFLE_OFF) // shuffle currently disabled, click will enable
+                    .setDisplayName(getString(R.string.shuffle))
+                    .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE, true)
+                    .build(),
+                CommandButton.Builder(CommandButton.ICON_SHUFFLE_ON) // shuffle currently enabled, click will disable
+                    .setDisplayName(getString(R.string.shuffle))
+                    .setPlayerCommand(Player.COMMAND_SET_SHUFFLE_MODE, false)
+                    .build(),
+                CommandButton.Builder(CommandButton.ICON_REPEAT_OFF) // repeat currently disabled, click will repeat all
+                    .setDisplayName(getString(R.string.repeat_mode))
+                    .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_ALL)
+                    .build(),
+                CommandButton.Builder(CommandButton.ICON_REPEAT_ALL) // repeat all currently enabled, click will repeat one
+                    .setDisplayName(getString(R.string.repeat_mode))
+                    .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_ONE)
+                    .build(),
+                CommandButton.Builder(CommandButton.ICON_REPEAT_ONE) // repeat one currently enabled, click will disable
+                    .setDisplayName(getString(R.string.repeat_mode))
+                    .setPlayerCommand(Player.COMMAND_SET_REPEAT_MODE, Player.REPEAT_MODE_OFF)
+                    .build(),
+                CommandButton.Builder(CommandButton.ICON_HEART_UNFILLED) // not favorite, click will favorite
+                    .setDisplayName(getString(R.string.favorite))
+                    .setSessionCommand(SessionCommand(SessionCommand.COMMAND_CODE_SESSION_SET_RATING), HeartRating(true))
+                    .build(),
+                CommandButton.Builder(CommandButton.ICON_HEART_FILLED) // favorite, click will unfavorite
+                    .setDisplayName(getString(R.string.unfavorite))
+                    .setSessionCommand(SessionCommand(SessionCommand.COMMAND_CODE_SESSION_SET_RATING), HeartRating(false))
+                    .build(),
+            )
+        afFormatTracker = createAfFormatTracker()
+        val renderFactory = createRenderFactory(
+            afFormatTracker, automixSettings.settings.value.enabled
+        )
+        rgAp = renderFactory.replayGainAudioProcessor
+        prefs.registerOnSharedPreferenceChangeListener(this)
+        onSharedPreferenceChanged(prefs, null) // read initial values
+        val offloadPreferences = getAudioOffloadPreferences()
+        rgAp.setOffloadEnabled(
+            offloadPreferences.audioOffloadMode !=
+                TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
+        )
+        val player = EndedWorkaroundPlayer(
+            this,
+            prefs,
+            exoPlayer = createExoPlayer(renderFactory, offloadPreferences),
+            { lyrics },
+            queueBoard = qb,
+            getNotificationLyric = { lastSentNotificationLyric }
+        )
+        player.exoPlayer.addAnalyticsListener(playerEventLogger)
+        player.exoPlayer.addAnalyticsListener(afFormatTracker)
+        player.exoPlayer.addAnalyticsListener(this)
+        player.exoPlayer.setShuffleOrder(CircularShuffleOrder(player, 0, 0, Random.nextLong()))
+        lastPlayedManager = LastPlayedManager(this, player)
+        lastPlayedManager.allowSavingState = false
+        libraryTreeLoader = LibraryTreeLoader(
+            this,
+            plugApplication,
+            lifecycleScope,
+            prefs
+        )
+
+        mediaSession =
+            MediaLibrarySession
+                .Builder(this, player, this)
+                // CacheBitmapLoader is required for MeiZuLyricsMediaNotificationProvider
+                .setBitmapLoader(CacheBitmapLoader(object : BitmapLoader {
+                    // Coil-based bitmap loader to reuse Coil's caching and to make sure we use
+                    // the same cover art as the rest of the app, ie MediaStore's cover
+
+                    private val limit by lazy { MediaSession.getBitmapDimensionLimit(this@PlugPlaybackService) }
+
+                    // the suppression is correct, we want identity of the byte array as it will
+                    // stay the same over one song's lifetime
+                    @Suppress("KotlinArrayHashCode")
+                    override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
+                        return CallbackToFutureAdapter.getFuture { completer ->
+                            imageLoader.enqueue(
+                                ImageRequest.Builder(this@PlugPlaybackService)
+                                    .data(data)
+                                    .memoryCacheKey(data.hashCode().toString())
+                                    .size(limit, limit)
+                                    .allowHardware(false)
+                                    .target(
+                                        onStart = { _ ->
+                                            // We don't need or want a placeholder.
+                                        },
+                                        onSuccess = { result ->
+                                            completer.set((result as BitmapImage).bitmap)
+                                        },
+                                        onError = { _ ->
+                                            completer.setException(
+                                                Exception(
+                                                    "coil onError called for byte array"
+                                                )
+                                            )
+                                        }
+                                    )
+                                    .build())
+                                .also {
+                                    completer.addCancellationListener(
+                                        { it.dispose() },
+                                        mainExecutor
+                                    )
+                                }
+                            "coil load for ${data.hashCode()}"
+                        }
+                    }
+
+                    override fun loadBitmap(
+                        uri: Uri
+                    ): ListenableFuture<Bitmap> {
+                        return CallbackToFutureAdapter.getFuture { completer ->
+                            imageLoader.enqueue(
+                                ImageRequest.Builder(this@PlugPlaybackService)
+                                    .data(uri)
+                                    .size(limit, limit)
+                                    .allowHardware(false)
+                                    .target(
+                                        onStart = { _ ->
+                                            // We don't need or want a placeholder.
+                                        },
+                                        onSuccess = { result ->
+                                            completer.set((result as BitmapImage).bitmap)
+                                        },
+                                        onError = { _ ->
+                                            completer.setException(
+                                                Exception(
+                                                    "coil onError called" +
+                                                            " (normal if no album art exists)"
+                                                )
+                                            )
+                                        }
+                                    )
+                                    .build())
+                                .also {
+                                    completer.addCancellationListener(
+                                        { it.dispose() },
+                                        mainExecutor
+                                    )
+                                }
+                            "coil load for $uri"
+                        }
+                    }
+
+                    override fun supportsMimeType(mimeType: String): Boolean {
+                        return isBitmapFactorySupportedMimeType(mimeType)
+                    }
+
+                    override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
+                        return metadata.artworkUri?.let { loadBitmap(it) }
+                    }
+                }))
+                .setSessionActivity(
+                    PendingIntent.getActivity(
+                        this,
+                        PENDING_INTENT_SESSION_ID,
+                        Intent(this, MainActivity::class.java),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                )
+                .setSystemUiPlaybackResumptionOptIn(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                // Workaround for AA bug where content cannot be scrolled (androidx/media#2192)
+                .setPeriodicPositionUpdateEnabled(false)
+                .build()
+        if (automixSettings.settings.value.enabled) rebuildPlayerForAudioMode(true)
+        addSession(mediaSession!!)
+        controller = MediaBrowser.Builder(this, mediaSession!!.token).buildAsync().get()
+        controller!!.addListener(this)
+        if (controller!!.audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            onAudioSessionIdChanged(controller!!.audioSessionId)
+        }
+        ContextCompat.registerReceiver(
+            this,
+            seekReceiver,
+            IntentFilter("$packageName.SEEK_TO"),
+            @SuppressLint("WrongConstant") // why is this needed?
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        ContextCompat.registerReceiver(
+            this,
+            btReceiver,
+            IntentFilter("android.bluetooth.a2dp.profile.action.CODEC_CONFIG_CHANGED"),
+            @SuppressLint("WrongConstant") // why is this needed?
+            ContextCompat.RECEIVER_EXPORTED
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O /* before 8, only sbc was supported */) {
+            proxy = BtCodecInfo.getCodec(this) {
+                Log.d(TAG, "first bluetooth codec config $btInfo")
+                btInfo = it
+                mediaSession?.broadcastCustomCommand(
+                    SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                    Bundle.EMPTY
+                )
+            }
+        }
+        scope.launch {
+            lastPlayedManager.restore { items ->
+                if (mediaSession == null) return@restore
+                if (items != null) {
+                    val list = mapMediaItemsForFavorites(items.items.mediaItems)
+                    withContext(Dispatchers.Main) {
+                        if (lastPlayedManager.allowSavingState)
+                            return@withContext // media items were already applied to player
+                        try {
+                            if (list.size >= items.items.startIndex) {
+                                endedWorkaroundPlayer?.setMediaItems(
+                                    list,
+                                    items.items.startIndex,
+                                    items.items.startPositionMs,
+                                    items.title,
+                                    false, /* TODO(MQ) */
+                                    true, /* TODO(MQ) */
+                                    items.isEnded,
+                                    items.repeatMode,
+                                    items.shuffle,
+                                    items.seed,
+                                    items.playbackParameters,
+                                )
+                            } else {
+                                endedWorkaroundPlayer?.setMediaItems(
+                                    list,
+                                    C.INDEX_UNSET,
+                                    C.TIME_UNSET,
+                                    items.title,
+                                    false, /* TODO(MQ) */
+                                    true, /* TODO(MQ) */
+                                    items.isEnded,
+                                    items.repeatMode,
+                                    items.shuffle,
+                                    items.seed,
+                                    items.playbackParameters,
+                                )
+                                Log.w(TAG, "failed to restore index")
+                            }
+                        } catch (e: IllegalSeekPositionException) {
+                            Log.e(TAG, "failed to restore", e)
+                        }
+                        if (mediaSession?.connectedControllers?.find {
+                                it.connectionHints
+                                    .getBoolean("PrepareWhenReady", false)
+                            } != null) {
+                            handler.post { endedWorkaroundPlayer?.prepare() }
+                        }
+                    }
+                } else
+                    lastPlaylistLoaded.complete(Unit)
+            }
+        }
+        scope.launch(Dispatchers.Default) {
+            plugApplication.reader.playlistListFlow.map { it.find { p -> p is Favorite } }
+                .collect { list ->
+                    val ids = list?.songList?.map { it.mediaId } ?: emptyList()
+                    withContext(Dispatchers.Main + NonCancellable) {
+                        controller?.let { controller ->
+                            for (i in 0..<controller.mediaItemCount) {
+                                val item = controller.getMediaItemAt(i)
+                                val isHeart = (item.mediaMetadata.userRating as? HeartRating)
+                                    ?.isHeart == true
+                                val shouldBeHeart = ids.contains(item.mediaId)
+                                if (isHeart != shouldBeHeart ||
+                                    item.mediaMetadata.userRating !is HeartRating
+                                ) {
+                                    controller.replaceMediaItem(
+                                        i, item
+                                            .buildUpon().setMediaMetadata(
+                                                item.mediaMetadata.buildUpon()
+                                                    .setUserRating(HeartRating(shouldBeHeart))
+                                                    .build()
+                                            ).build()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+        Log.i(TAG, "-onCreate()")
+    }
+
+    private fun createAfFormatTracker(): AfFormatTracker {
+        val tracker = AfFormatTracker(this, playbackHandler, handler)
+        tracker.formatChangedCallback = { format, period ->
+            if (period != null) {
+                handler.post {
+                    if (afFormatTracker !== tracker) return@post
+                    val currentPeriod = endedWorkaroundPlayer?.exoPlayer?.currentPeriodIndex
+                        ?.takeIf { it != C.INDEX_UNSET && (endedWorkaroundPlayer?.exoPlayer
+                            ?.currentTimeline?.periodCount ?: 0) > it }?.let {
+                                endedWorkaroundPlayer!!.exoPlayer.currentTimeline
+                                    .getUidOfPeriod(it) }
+                    if (currentPeriod != period) {
+                        if (format != null) pendingAfTrackFormats[period] = format
+                        else pendingAfTrackFormats.remove(period)
+                    } else {
+                        afTrackFormat = format?.let { period to it }
+                        mediaSession?.broadcastCustomCommand(
+                            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY), Bundle.EMPTY
+                        )
+                    }
+                }
+            } else {
+                Log.e(TAG, "mediaPeriodId is NULL in formatChangedCallback!!")
+            }
+        }
+        return tracker
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        var extras = intent?.extras
+        // Deserialize all extras to be able to log them.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            extras = extras?.deepCopy()
+        } else {
+            if (extras != null) {
+                for (i in extras.keySet()) {
+                    @Suppress("deprecation") extras.get(i)
+                }
+            }
+        }
+        Log.i(TAG, "onStartCommand(): $intent, ${extras?.toString()}")
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    override fun onSetRating(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        mediaId: String,
+        rating: Rating
+    ): ListenableFuture<SessionResult> {
+        if (rating !is HeartRating) {
+            return Futures.immediateFuture(SessionResult(
+                SessionError.ERROR_BAD_VALUE))
+        }
+        val completion = SettableFuture.create<SessionResult>()
+        lifecycleScope.launch(Dispatchers.Default) {
+            val item = plugApplication.reader.songListFlow.map {
+                it.find { s -> s.mediaId == mediaId } }.first()
+            if (item == null) {
+                completion.set(SessionResult(SessionError.ERROR_BAD_VALUE))
+                return@launch
+            }
+            val song = Entry.ofMediaItem(item)
+            if (song == null) {
+                completion.set(SessionResult(SessionError.ERROR_BAD_VALUE))
+                return@launch
+            }
+            val uriIn = plugApplication.reader.playlistListFlow.map { it.find { p ->
+                p is Favorite } }.first()?.id?.let {
+                ContentUris.withAppendedId(@Suppress("deprecation")
+                MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, it)
+            }
+            val token = if (uriIn != null) {
+                MediaStoreCompat.needRequestBytesWrite(this@PlugPlaybackService,
+                    uriIn)
+            } else {
+                MediaStoreCompat.needRequestCreate(this@PlugPlaybackService,
+                    ItemManipulator.getDefaultPlaylistFile(
+                        ItemManipulator.FAVORITES).path)
+            }
+            var error: Exception? = null
+            if (token == null) {
+                try {
+                    val uri = uriIn ?: ItemManipulator.createPlaylist(
+                        this@PlugPlaybackService, ItemManipulator
+                            .getDefaultPlaylistFile(ItemManipulator.FAVORITES))
+                    val readback = if (uriIn != null) ItemManipulator.readbackPlaylist(
+                        this@PlugPlaybackService, uri) else
+                            PlaylistSerializer.Playlist.create()
+                    val newSongs = if (rating.isHeart) {
+                        readback.entries + song
+                    } else {
+                        readback.entries.filter { !song.fuzzyEquals(it) }
+                    }
+                    ItemManipulator.setPlaylistContent(this@PlugPlaybackService, uri,
+                        readback.copy(entries = newSongs), uriIn == null)
+                } catch (e: Exception) {
+                    Log.e(TAG, "failed to set $rating on $mediaId", e)
+                    error = e
+                }
+            }
+            if (token == null && error == null) {
+                completion.set(SessionResult(SessionResult.RESULT_SUCCESS))
+            } else {
+                if (!supportsNotificationPermission() || hasNotificationPermission()) {
+                    @SuppressLint("MissingPermission") // false positive
+                    nm.notify(FAVE_ID, NotificationCompat.Builder(
+                        this@PlugPlaybackService, NOTIFY_CHANNEL_ID).apply {
+                        setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        setAutoCancel(true)
+                        setCategory(NotificationCompat.CATEGORY_ERROR)
+                        setSmallIcon(R.drawable.ic_error)
+                        setContentTitle(this@PlugPlaybackService.getString(R.string.favorite_failed_title))
+                        setContentText(this@PlugPlaybackService.getString(R.string.favorite_failed_text))
+                        setContentIntent(
+                            PendingIntent.getActivity(
+                                this@PlugPlaybackService,
+                                PENDING_INTENT_FAVE_ID,
+                                Intent(this@PlugPlaybackService, MainActivity::class.java)
+                                    .putExtra(MainActivity.FAVORITE_ENTRY, song)
+                                    .putExtra(MainActivity.FAVORITE_STATE, rating.isHeart),
+                                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                            )
+                        )
+                        setVibrate(longArrayOf(0L, 200L))
+                        setLights(0, 0, 0)
+                        setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+                        setSound(null)
+                    }.build())
+                }
+                completion.set(SessionResult(SessionError.ERROR_IO))
+                return@launch
+            }
+        }
+        return completion
+    }
+
+    override fun onSetRating(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        rating: Rating
+    ): ListenableFuture<SessionResult> {
+        val mediaItemId =
+            this.controller?.currentMediaItem?.mediaId ?: return Futures.immediateFuture(
+                SessionResult(SessionError.ERROR_INVALID_STATE)
+            )
+        return onSetRating(session, controller, mediaItemId, rating)
+    }
+
+    // When destroying, we should release server side player
+    // alongside with the mediaSession.
+    override fun onDestroy() {
+        Log.i(TAG, "+onDestroy()")
+        instanceForWidgetAndLyricsOnly = null
+        unregisterReceiver(seekReceiver)
+        unregisterReceiver(btReceiver)
+        prefs.unregisterOnSharedPreferenceChangeListener(this)
+        // Important: this must happen before sending stop() as that changes state ENDED -> IDLE
+        lastPlayedManager.save()
+        scope.cancel()
+        lyricsFetcher.cancel()
+        upcomingLyricsFetcher.cancel()
+        handler.removeCallbacks(automixLyricsTick)
+        audioAnalysis.close()
+        endedWorkaroundPlayer!!.stop()
+        handler.removeCallbacks(timer)
+        handler.removeCallbacks(sendLyrics)
+        mediaSession!!.setOptOutOfMediaButtonPlaybackResumption(controller!!.currentTimeline.isEmpty)
+        proxy?.let {
+            it.adapter.closeProfileProxy(BluetoothProfile.A2DP, it.a2dp)
+        }
+        controller!!.release()
+        controller = null
+        mediaSession!!.release()
+        endedWorkaroundPlayer!!.release()
+        if (automixTrackers.isEmpty()) afFormatTracker.detach()
+        else automixTrackers.forEach(AfFormatTracker::detach)
+        automixTrackers = emptyList()
+        mediaSession = null
+        broadcastAudioSessionClose()
+        LyricWidgetProvider.update(this)
+        internalPlaybackThread.quitSafely()
+        super.onDestroy()
+        Log.i(TAG, "-onDestroy()")
+    }
+
+    // This onGetSession is a necessary method override needed by
+    // MediaSessionService.
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
+        mediaSession
+
+    // Configure commands available to the controller in onConnect()
+    override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo)
+            : MediaSession.ConnectionResult {
+        Log.i(TAG, "onConnect(): $controller")
+        val builder = MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+        val availableSessionCommands =
+            MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
+        if (session.isMediaNotificationController(controller)
+            || session.isAutoCompanionController(controller)
+            || session.isAutomotiveController(controller)
+        ) {
+            if (this.controller?.currentTimeline?.isEmpty == false) {
+                builder.setMediaButtonPreferences(
+                    ImmutableList.of(
+                        getRepeatCommand(),
+                        getShufflingCommand(),
+                        getFavoriteCommand()
+                    )
+                )
+            }
+        }
+        if (controller.connectionHints.getBoolean("PrepareWhenReady", false) &&
+            endedWorkaroundPlayer?.currentTimeline?.isEmpty == false
+        ) {
+            handler.post { this.controller?.prepare() }
+        }
+        availableSessionCommands.add(SessionCommand.COMMAND_CODE_SESSION_SET_RATING)
+        availableSessionCommands.add(SessionCommand(SERVICE_SET_TIMER, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QUERY_TIMER, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_GET_LYRICS, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_SET_MEDIA_ITEMS_ATOMIC, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_GET_INACTIVE_LIST, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_GET_QUEUE_FOR_UI, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_LOAD_QUEUE, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_DEL, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_REORDER, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_SORT_AUTOMIX, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_GET_DJ_METRICS, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_GET_TRANSITION_INFO, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_BEAT_JUMP, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_BEAT_LOOP, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_CLEAR_BEAT_LOOP, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_BEAT_ANALYSIS, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_PIN_QUEUE, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_UNPIN_QUEUE, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_RENAME_QUEUE, Bundle.EMPTY))
+        availableSessionCommands.add(SessionCommand(SERVICE_QB_AGE, Bundle.EMPTY))
+        return builder.setAvailableSessionCommands(availableSessionCommands.build()).build()
+    }
+
+    override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
+        Log.i(TAG, "onPostConnect(): $controller")
+        sentUpcomingLyricsVersion = -1
+        session.sendCustomCommand(
+            controller,
+            SessionCommand(SERVICE_GET_LYRICS, Bundle.EMPTY),
+            Bundle.EMPTY
+        )
+        session.sendCustomCommand(
+            controller,
+            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+            Bundle.EMPTY
+        )
+    }
+
+    override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
+        Log.i(TAG, "onDisconnected(): $controller")
+    }
+
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String?) {
+        automixSettings.onPreferenceChanged(key)
+        if (key == null || key == "automix_analyzer") {
+            audioAnalysis.setAnalyzer(automixSettings.settings.value.analyzer)
+        }
+        if (key == "automix_enabled") {
+            rebuildPlayerForAudioMode(automixSettings.settings.value.enabled)
+        } else if (key == "automix_beatmatch_enabled" || key == "automix_duration_sec" ||
+            key == "automix_transition_style" || key == "automix_duration_auto" ||
+            key == "automix_max_skip_sec" || key == "automix_additional_effects" ||
+            key == "automix_effect_intensity" || key == "automix_loop_transition_beats" ||
+            key == "automix_fade_curve_intensity" || key == "automix_loudness_matching" ||
+            key == "automix_agc" || key == "automix_bass_boost" ||
+            key == "automix_bass_boost_gain_db" || key == "automix_bass_boost_frequency_hz" ||
+            key == "automix_energy_matching"
+        ) {
+            automixSettings.settings.value.let { settings ->
+                automixPlayer?.updateAutomixConfig(
+                    settings.enabled, settings.beatmatchEnabled, settings.durationSeconds,
+                    settings.transitionStyle, settings.automaticDuration, settings.maxSkipSeconds,
+                    settings.additionalEffects, settings.effectIntensityPercent,
+                    settings.loopTransitionBeats, settings.fadeCurveIntensityPercent,
+                    settings.loudnessMatchingEnabled, settings.agcEnabled, settings.bassBoost,
+                    settings.energyMatchingEnabled
+                )
+            }
+        } else if (key == "offload") {
+            updateAudioOffloadPreferences()
+        }
+        var restart = false
+        if (key == null || key == "notification_lyrics" || key == "status_bar_lyrics") {
+            scheduleSendingLyrics(false)
+            endedWorkaroundPlayer?.updateLyricNow()
+        }
+        if (key == "spicy_lyrics_enabled" || key == "spicy_lyrics_api_key") {
+            upcomingLyricsResult = null
+            upcomingLyricsVersion++
+            upcomingLyricsGeneration++
+            upcomingLyricsLoadingGeneration = null
+            controller?.currentTracks?.let(::onTracksChanged)
+        }
+        if (key == null || key == "rg_mode") {
+            rgMode = prefs.getStringStrict("rg_mode", "0")!!.toInt()
+            restart = !computeRgMode(true)
+        }
+        if (key == null || key == "rg_drc") {
+            val drc = prefs.getBooleanStrict("rg_drc", true)
+            restart = !rgAp.setReduceGain(!drc) || restart
+        }
+        if (key == null || key == "rg_rg_gain") {
+            val rgGain = prefs.getIntStrict("rg_rg_gain", 19)
+            restart = !rgAp.setRgGain(rgGain - 15) || restart
+        }
+        if (key == null || key == "rg_no_rg_gain") {
+            val nonRgGain = prefs.getIntStrict("rg_no_rg_gain", 0)
+            restart = !rgAp.setNonRgGain(-nonRgGain) || restart
+        }
+        if (key == null || key == "rg_boost_gain") {
+            val boostGain = prefs.getIntStrict("rg_boost_gain", 0)
+            restart = !rgAp.setBoostGain(boostGain) || restart
+        }
+        if (key == null || key.startsWith("rg_")) {
+            automixPlayer?.let { restart = !it.applyReplayGainSettings(rgAp.snapshotSettings()) || restart }
+        }
+        if (restart) {
+            controller?.stop()
+            controller?.prepare()
+        }
+    }
+
+    private fun getAudioOffloadPreferences(): TrackSelectionParameters.AudioOffloadPreferences =
+        AutomixOffloadPolicy.preferences(
+            automixSettings.settings.value.enabled,
+            Flags.OFFLOAD,
+            prefs.getStringStrict("offload", "0")?.toIntOrNull(),
+        )
+
+    private fun createExoPlayer(
+        renderFactory: PlugRenderFactory,
+        offloadPreferences: TrackSelectionParameters.AudioOffloadPreferences,
+    ): ExoPlayer = ExoPlayer.Builder(
+        this,
+        renderFactory
+            .setEnableHighResolutionPcmOutput(true)
+            .setEnableDecoderFallback(true)
+            .setEnableAudioOutputPlaybackParameters(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
+        PlugMediaSourceFactory(
+            DefaultDataSource.Factory(this),
+            PlugExtractorsFactory().also {
+                it.setConstantBitrateSeekingEnabled(true)
+                it.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
+            })
+    )
+        .setWakeMode(C.WAKE_MODE_LOCAL)
+        .setAudioAttributes(
+            AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true
+        )
+        .setHandleAudioBecomingNoisy(true)
+        .setTrackSelector(DefaultTrackSelector(this).apply {
+            setParameters(buildUponParameters()
+                .setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true)
+                .setAudioOffloadPreferences(offloadPreferences))
+        })
+        .setPlaybackLooper(internalPlaybackThread.looper)
+        .build()
+
+    private fun createRenderFactory(
+        tracker: AfFormatTracker,
+        pcmMixing: Boolean,
+    ): PlugRenderFactory = PlugRenderFactory(
+        this,
+        { format ->
+            handler.post {
+                if (afFormatTracker === tracker) onAudioSinkInputFormatChanged(format)
+            }
+        },
+        tracker::setAudioSink,
+        pcmMixing,
+    )
+
+    private fun rebuildPlayerForAudioMode(pcmMixingMode: Boolean) {
+        val wrapper = endedWorkaroundPlayer ?: return
+        val oldEngine = wrapper.playbackEngine
+        val oldPlayer = wrapper.exoPlayer
+        val items = (0 until wrapper.mediaItemCount).map(wrapper::getMediaItemAt)
+        val index = wrapper.currentMediaItemIndex
+        val position = wrapper.currentPosition
+        val wasEnded = wrapper.playbackState == Player.STATE_ENDED
+        val shouldPrepare = oldPlayer.playbackState != Player.STATE_IDLE
+        val playWhenReady = (oldEngine as? AutomixPlayer)?.wantsPlayback ?: wrapper.playWhenReady
+        val shuffleOrder = oldPlayer.shuffleOrder
+        val settings = rgAp.snapshotSettings()
+        val offloadPreferences = getAudioOffloadPreferences()
+        val oldTracker = afFormatTracker
+        val newTracker = createAfFormatTracker()
+        val trackers = if (pcmMixingMode) listOf(newTracker, createAfFormatTracker()) else emptyList()
+        val sinkFormats = arrayOfNulls<Format>(2)
+        val deckAudioTracks = arrayOfNulls<AudioTrackInfo>(2)
+        val deckAudioTrackInitializations = IntArray(2)
+        val deckAudioTrackReleases = IntArray(2)
+        val deckDownstreamFormats = Array(2) { mutableListOf<Pair<Any, Pair<Int, Format>>>() }
+        val newAutomix = if (pcmMixingMode) AutomixPlayer(
+            this, settings, internalPlaybackThread.looper,
+            onFormatChanged = { isA, format ->
+                val tracker = trackers[if (isA) 0 else 1]
+                handler.post {
+                    sinkFormats[if (isA) 0 else 1] = format
+                    if (afFormatTracker === tracker) onAudioSinkInputFormatChanged(format)
+                }
+            },
+            onSinkCreated = { isA, sink -> trackers[if (isA) 0 else 1].setAudioSink(sink) },
+            analysisCache = audioAnalysis.cache,
+        ) else null
+        val renderFactory = if (newAutomix == null) createRenderFactory(newTracker, false) else null
+        val newProcessor = newAutomix?.activeReplayGainProcessor ?: renderFactory!!.replayGainAudioProcessor
+        if (newAutomix == null) newProcessor.applySettings(settings)
+        newProcessor.setOffloadEnabled(offloadPreferences.audioOffloadMode !=
+            TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
+        val newDeck = newAutomix?.activeExoPlayer ?: createExoPlayer(renderFactory!!, offloadPreferences)
+        val newEngine: Player = newAutomix ?: newDeck
+        if (newAutomix != null) {
+            val initialDeck = newDeck
+            newAutomix.addDeckAnalyticsListener(trackers[0], trackers[1])
+            fun deckAnalytics(index: Int) = object : AnalyticsListener {
+                override fun onAudioTrackInitialized(
+                    eventTime: AnalyticsListener.EventTime, audioTrackConfig: AudioSink.AudioTrackConfig
+                ) {
+                    deckAudioTrackInitializations[index]++
+                    deckAudioTracks[index] = AudioTrackInfo.fromMedia3AudioTrackConfig(audioTrackConfig)
+                }
+
+                override fun onAudioTrackReleased(
+                    eventTime: AnalyticsListener.EventTime, audioTrackConfig: AudioSink.AudioTrackConfig
+                ) {
+                    if (++deckAudioTrackReleases[index] == deckAudioTrackInitializations[index]) {
+                        deckAudioTracks[index] = null
+                    }
+                }
+
+                override fun onDownstreamFormatChanged(
+                    eventTime: AnalyticsListener.EventTime, mediaLoadData: MediaLoadData
+                ) {
+                    val period = eventTime.mediaPeriodId?.periodUid ?: return
+                    val format = mediaLoadData.trackFormat ?: return
+                    val formats = deckDownstreamFormats[index]
+                    formats.removeAll { it.first == period && it.second.first == mediaLoadData.trackType }
+                    formats.add(period to (mediaLoadData.trackType to format))
+                    if (formats.size > 64) formats.removeAt(0)
+                }
+            }
+            newAutomix.addDeckAnalyticsListener(deckAnalytics(0), deckAnalytics(1))
+            newAutomix.setAudioAttributes(
+                AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true
+            )
+            automixSettings.settings.value.let {
+                newAutomix.updateAutomixConfig(
+                    it.enabled, it.beatmatchEnabled, it.durationSeconds, it.transitionStyle,
+                    it.automaticDuration, it.maxSkipSeconds, it.additionalEffects,
+                    it.effectIntensityPercent, it.loopTransitionBeats, it.fadeCurveIntensityPercent,
+                    it.loudnessMatchingEnabled, it.agcEnabled, it.bassBoost, it.energyMatchingEnabled
+                )
+            }
+            newAutomix.onActiveDeckChanged = { outgoing, incoming ->
+                val deckIndex = if (incoming === initialDeck) 0 else 1
+                outgoing.removeAnalyticsListener(this)
+                outgoing.removeAnalyticsListener(playerEventLogger)
+                incoming.addAnalyticsListener(this)
+                incoming.addAnalyticsListener(playerEventLogger)
+                afFormatTracker = trackers[deckIndex]
+                rgAp = newAutomix.activeReplayGainProcessor
+                onAudioSinkInputFormatChanged(sinkFormats[deckIndex])
+                val periodIndex = incoming.currentPeriodIndex
+                val period = if (periodIndex != C.INDEX_UNSET &&
+                    periodIndex < incoming.currentTimeline.periodCount
+                ) incoming.currentTimeline.getUidOfPeriod(periodIndex) else null
+                afTrackFormat = period?.let { uid ->
+                    afFormatTracker.format
+                        ?.takeIf { it.audioSessionId == incoming.audioSessionId }
+                        ?.let { uid to it }
+                }
+                audioTrackInfo = deckAudioTracks[deckIndex]
+                audioTrackInfoCounter = if (audioTrackInfo == null) 0 else 1
+                audioTrackReleaseCounter = 0
+                downstreamFormat.clear()
+                pendingDownstreamFormat.clear()
+                pendingAfTrackFormats.clear()
+                downstreamFormat.addAll(deckDownstreamFormats[deckIndex].filter { it.first == period })
+                deckDownstreamFormats[1 - deckIndex].clear()
+                mediaSession?.broadcastCustomCommand(
+                    SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY), Bundle.EMPTY
+                )
+            }
+        } else if (oldPlayer.audioSessionId != C.AUDIO_SESSION_ID_UNSET) {
+            newDeck.setAudioSessionId(oldPlayer.audioSessionId)
+        }
+        newEngine.repeatMode = wrapper.repeatMode
+        newEngine.shuffleModeEnabled = wrapper.shuffleModeEnabled
+        newEngine.playbackParameters = wrapper.playbackParameters
+        newEngine.volume = wrapper.volume
+        newDeck.pauseAtEndOfMediaItems = oldPlayer.pauseAtEndOfMediaItems
+        newEngine.trackSelectionParameters = oldPlayer.trackSelectionParameters.buildUpon()
+            .setAudioOffloadPreferences(offloadPreferences).build()
+        if (items.isNotEmpty()) newEngine.setMediaItems(items, index, position)
+        newDeck.setShuffleOrder(shuffleOrder)
+        newDeck.addAnalyticsListener(playerEventLogger)
+        if (newAutomix == null) newDeck.addAnalyticsListener(newTracker)
+        newDeck.addAnalyticsListener(this)
+        oldPlayer.removeAnalyticsListener(oldTracker)
+        oldPlayer.removeAnalyticsListener(this)
+        oldPlayer.removeAnalyticsListener(playerEventLogger)
+        if (automixTrackers.isEmpty()) oldTracker.detach()
+        else automixTrackers.forEach(AfFormatTracker::detach)
+        automixTrackers = trackers
+        automixPlayer = newAutomix
+        afFormatTracker = newTracker
+        rgAp = newProcessor
+        afTrackFormat = null
+        pendingAfTrackFormats.clear()
+        downstreamFormat.clear()
+        pendingDownstreamFormat.clear()
+        audioTrackInfo = null
+        audioTrackInfoCounter = 0
+        audioTrackReleaseCounter = 0
+        onAudioSinkInputFormatChanged(null)
+        wrapper.replacePlayer(newEngine, wasEnded)
+        oldEngine.release()
+        if (shouldPrepare) newEngine.prepare()
+        newEngine.playWhenReady = playWhenReady
+    }
+
+    private fun updateAudioOffloadPreferences() {
+        val player = endedWorkaroundPlayer?.exoPlayer ?: return
+        val offloadPreferences = getAudioOffloadPreferences()
+        rgAp.setOffloadEnabled(
+            offloadPreferences.audioOffloadMode !=
+                TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
+        )
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setAudioOffloadPreferences(offloadPreferences)
+            .build()
+    }
+
+    private fun computeRgMode(force: Boolean): Boolean {
+        val mode = when (rgMode) {
+                0 -> ReplayGainUtil.Mode.None
+                1 -> ReplayGainUtil.Mode.Track
+                2 -> ReplayGainUtil.Mode.Album
+                3 -> {
+                    val item = controller?.currentMediaItem
+                    val idx = controller?.currentMediaItemIndex ?: 0
+                    val count = controller?.mediaItemCount ?: 0
+                    val next = if (idx + 1 >= count) null else
+                        controller?.getMediaItemAt(idx + 1)
+                    val prev = if (idx - 1 < 0 || count == 0) null else
+                        controller?.getMediaItemAt(idx - 1)
+                    if (item != null && (item.mediaMetadata.albumId == next?.mediaMetadata?.albumId ||
+                                item.mediaMetadata.albumId == prev?.mediaMetadata?.albumId)
+                    )
+                        ReplayGainUtil.Mode.Album
+                    else ReplayGainUtil.Mode.Track
+                }
+
+                else -> throw IllegalArgumentException("invalid rg mode $rgMode")
+            }
+        return automixPlayer?.setReplayGainMode(mode, !force) ?: rgAp.setMode(mode, !force)
+    }
+
+    override fun onAudioSessionIdChanged(audioSessionId: Int) {
+        if (audioSessionId != lastSessionId) {
+            broadcastAudioSessionClose()
+            lastSessionId = audioSessionId
+            broadcastAudioSession()
+        }
+    }
+
+    private fun broadcastAudioSession() {
+        if (lastSessionId != 0) {
+            Log.i(TAG, "broadcast audio session open: $lastSessionId")
+            sendBroadcast(Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION).apply {
+                putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
+                putExtra(AudioEffect.EXTRA_AUDIO_SESSION, lastSessionId)
+                putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+            })
+        } else {
+            Log.e(TAG, "session id is 0? why????? THIS MIGHT BREAK EQUALIZER")
+        }
+    }
+
+    private fun broadcastAudioSessionClose() {
+        if (lastSessionId != 0) {
+            Log.i(TAG, "broadcast audio session close: $lastSessionId")
+            sendBroadcast(Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION).apply {
+                putExtra(AudioEffect.EXTRA_PACKAGE_NAME, packageName)
+                putExtra(AudioEffect.EXTRA_AUDIO_SESSION, lastSessionId)
+            })
+            lastSessionId = 0
+        }
+    }
+
+    override fun onCustomCommand(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        customCommand: SessionCommand,
+        args: Bundle
+    ): ListenableFuture<SessionResult> {
+        if (customCommand.customAction == SERVICE_BEAT_ANALYSIS) {
+            val operation = args.getString("operation")
+            val ownerId = args.getString("owner_id").orEmpty()
+            val item = args.getBinder("item")?.let { binder ->
+                MediaItemList.getList(binder).singleOrNull()
+            }
+            val key = item?.let(AnalysisKey::from)
+            val status = when (operation) {
+                "request" -> {
+                    if (ownerId.isBlank() || item == null || key == null) {
+                        return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                    }
+                    audioAnalysis.requestBeatAnalysis(item, ownerId)
+                    audioAnalysis.beatAnalysisStatus(key).name
+                }
+                "status" -> {
+                    if (key == null) return Futures.immediateFuture(
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
+                    )
+                    audioAnalysis.beatAnalysisStatus(key).name
+                }
+                "cancel" -> {
+                    if (ownerId.isBlank()) return Futures.immediateFuture(
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
+                    )
+                    audioAnalysis.cancelBeatAnalysis(ownerId)
+                    item?.let { key?.let(audioAnalysis::beatAnalysisStatus) }?.name ?: "MISSING"
+                }
+                else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS).also { result ->
+                result.extras.putString("beat_analysis_status", status)
+                val cached = key?.let(audioAnalysis.cache::peekBeatGrid) as? BeatGridCacheRead.Available
+                cached?.record?.result?.grid?.events?.size?.let {
+                    result.extras.putInt("beat_analysis_count", it)
+                }
+            })
+        }
+
+        if (customCommand.customAction == SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY
+            || customCommand.customAction == SERVICE_SET_MEDIA_ITEMS_ATOMIC) {
+            val songList = MediaItemList.getList(
+                customCommand.customExtras.getBinder("items")!!)
+            val position = customCommand.customExtras.getInt("position")
+            val title = customCommand.customExtras.getString("title")!!
+            val seamless = customCommand.customAction == SERVICE_SET_MEDIA_ITEMS_SEAMLESSLY
+            val itemsFuture = Futures.transform(
+                onAddMediaItems(session, controller, songList),
+                { songList ->
+                    if (seamless) {
+                        endedWorkaroundPlayer!!.setMediaItemsSeamlessly(songList,
+                            position, null, title, pinned = false, original = true,
+                            repeatMode = null, shuffleModeEnabled = null, newShuffleOrder = null,
+                            playbackParameters = null, ended = false,
+                             )
+                    } else {
+                        val shuffleModeEnabled = if (customCommand.customExtras.containsKey("shuffleEnabled"))
+                            customCommand.customExtras.getBoolean("shuffleEnabled") else null
+                        val repeatMode = if (customCommand.customExtras.containsKey("repeatMode"))
+                            customCommand.customExtras.getInt("repeatMode") else null
+                        endedWorkaroundPlayer!!.setMediaItems(songList, startIndex = position,
+                            startPositionMs = C.TIME_UNSET, title, pinned = false, original = true,
+                            newShuffleOrder = null, ended = false, repeatMode = repeatMode,
+                            shuffleModeEnabled = shuffleModeEnabled, playbackParameters = null)
+                    }
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                },
+                mainExecutor
+            )
+            // Ensure no further player commands (such as play) are executed until we're done.
+            session.addToCommandQueueThenFlush(controller) { Futures.transform(itemsFuture,
+                { null }, MoreExecutors.directExecutor()) }
+            return itemsFuture
+        }
+
+        fun buildMqCustomCommand(action: String, queueId: Long?): SessionCommand {
+            return SessionCommand(action, Bundle.EMPTY).apply {
+                val plr = endedWorkaroundPlayer!!
+                queueId?.let {
+                    customExtras.putLong("queueId", it)
+                }
+                if (action != CLIENT_QB_REFRESH_CLEAR) {
+                    customExtras.putBinder(
+                        "activeQueue",
+                        MultiQueueList(listOf(plr.getActiveQueue()))
+                    )
+                    customExtras.putBinder(
+                        "inactiveQueues",
+                        MultiQueueList(qb.getInactiveQueues().map { it.copy(queue = ArrayList()) })
+                    )
+                }
+            }
+        }
+
+        if (customCommand.customAction == SERVICE_GET_TRANSITION_INFO) {
+            val engine = endedWorkaroundPlayer?.playbackEngine as? AutomixPlayer
+            val snapshot = engine?.currentTransitionExplanation()
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS).also { result ->
+                if (snapshot != null) {
+                    result.extras.apply {
+                        putLong("generation", snapshot.generation)
+                        putString("outgoing_id", snapshot.outgoingId)
+                        putString("incoming_id", snapshot.incomingId)
+                        putInt("outgoing_index", snapshot.outgoingIndex)
+                        putInt("incoming_index", snapshot.incomingIndex)
+                        putString("outgoing_title", snapshot.outgoingTitle)
+                        putString("incoming_title", snapshot.incomingTitle)
+                        putLong("duration", snapshot.durationMs)
+                        putString("style", snapshot.transitionStyle)
+                        putStringArrayList("style_reasons", ArrayList(snapshot.transitionReasons.map { it.name }))
+                        snapshot.selectorDifferencePercent?.let { putFloat("selector_difference", it) }
+                        snapshot.selectorThresholdPercent?.let { putFloat("selector_threshold", it) }
+                        snapshot.selectorRisingPercent?.let { putFloat("selector_rising", it) }
+                        snapshot.selectorRisingThresholdPercent?.let { putFloat("selector_rising_threshold", it) }
+                        snapshot.selectorVocalThreshold?.let { putFloat("selector_vocal_threshold", it) }
+                        putString("status", snapshot.status.name)
+                        putString("analyzer", snapshot.analyzer)
+                        snapshot.outgoingBpm?.let { putFloat("outgoing_bpm", it) }
+                        snapshot.incomingBpm?.let { putFloat("incoming_bpm", it) }
+                        snapshot.outgoingGridConfidence?.let { putFloat("outgoing_grid", it) }
+                        snapshot.incomingGridConfidence?.let { putFloat("incoming_grid", it) }
+                        putString("outgoing_key", snapshot.outgoingKey)
+                        putString("incoming_key", snapshot.incomingKey)
+                        snapshot.outgoingVocalEnergy?.let { putFloat("outgoing_vocal", it) }
+                        snapshot.incomingVocalEnergy?.let { putFloat("incoming_vocal", it) }
+                        putParcelableArrayList("effects", ArrayList(snapshot.effects.map { effect ->
+                            Bundle().apply {
+                                putString("id", effect.effectId)
+                                putString("selection", effect.selectionStatus.name)
+                                putString("execution", effect.executionStatus?.name)
+                                effect.processedFrames?.let { putLong("processed_frames", it) }
+                                effect.sampleRate?.let { putInt("sample_rate", it) }
+                                putString("execution_detail", effect.executionDetail)
+                                putString("tempo_interpretation", effect.tempoInterpretation)
+                                effect.tempoRatio?.let { putFloat("tempo_ratio", it) }
+                                effect.effectiveIncomingBpm?.let { putFloat("effective_incoming_bpm", it) }
+                                effect.pitchPreserved?.let { putBoolean("pitch_preserved", it) }
+                                effect.loopStartMs?.let { putLong("loop_start_ms", it) }
+                                effect.loopEndMs?.let { putLong("loop_end_ms", it) }
+                                putString("timing_limitation", effect.timingLimitation)
+                                putStringArrayList("reasons", ArrayList(effect.reasons.map { it.name }))
+                                effect.beatmatchEvidence?.let { evidence ->
+                                    evidence.outgoingBpm?.let { putFloat("out_bpm", it) }
+                                    evidence.incomingBpm?.let { putFloat("in_bpm", it) }
+                                    evidence.outgoingGridConfidence?.let { putFloat("out_grid", it) }
+                                    evidence.incomingGridConfidence?.let { putFloat("in_grid", it) }
+                                    putFloat("minimum_grid", evidence.minimumGridConfidence)
+                                    putFloat("max_tempo_deviation", evidence.maximumTempoDeviation)
+                                }
+                            }
+                        }))
+                    }
+                }
+                engine?.currentBeatEffectTelemetry?.let { telemetry ->
+                    result.extras.putBundle("beat_effect", Bundle().apply {
+                        putString("id", telemetry.effectId)
+                        putBoolean("available", telemetry.available)
+                        putBoolean("evaluated", telemetry.evaluated)
+                        putBoolean("selected", telemetry.selected)
+                        putString("state", telemetry.state.name)
+                        telemetry.gridConfidence?.let { putFloat("grid_confidence", it) }
+                        telemetry.beatPositionMs?.let { putLong("beat_position_ms", it) }
+                        telemetry.beatIndex?.let { putLong("beat_index", it) }
+                        telemetry.loopStartMs?.let { putLong("loop_start_ms", it) }
+                        telemetry.loopEndMs?.let { putLong("loop_end_ms", it) }
+                        putString("tempo_interpretation", telemetry.tempoInterpretation)
+                        telemetry.tempoRatio?.let { putFloat("tempo_ratio", it) }
+                        putString("reason", telemetry.reason)
+                        putString("timing_limitation", telemetry.timingLimitation)
+                    })
+                }
+
+                if (customCommand.customAction == SERVICE_BEAT_JUMP ||
+                    customCommand.customAction == SERVICE_BEAT_LOOP ||
+                    customCommand.customAction == SERVICE_CLEAR_BEAT_LOOP
+                ) {
+                    val engine = endedWorkaroundPlayer?.playbackEngine as? AutomixPlayer
+                        ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_INVALID_STATE))
+                    val beats = args.getInt("beats", 0)
+                    val direction = args.getInt("direction", 0)
+                    if ((customCommand.customAction == SERVICE_BEAT_JUMP &&
+                            (beats !in setOf(1, 2, 4, 8, 16) || direction !in setOf(-1, 1))) ||
+                        (customCommand.customAction == SERVICE_BEAT_LOOP && beats !in setOf(1, 2, 4, 8, 16))
+                    ) {
+                        return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+                    }
+                    val completion = SettableFuture.create<SessionResult>()
+                    if (!playbackHandler.post {
+                            if ((endedWorkaroundPlayer?.playbackEngine as? AutomixPlayer) !== engine) {
+                                completion.set(SessionResult(SessionError.ERROR_INVALID_STATE))
+                                return@post
+                            }
+                            val telemetry = when (customCommand.customAction) {
+                                SERVICE_BEAT_JUMP -> engine.jumpBeats(beats, direction)
+                                SERVICE_BEAT_LOOP -> engine.startBeatLoop(beats)
+                                else -> engine.clearBeatLoop()
+                            }
+                            completion.set(SessionResult(SessionResult.RESULT_SUCCESS).also { result ->
+                                result.extras.putBundle("beat_effect", Bundle().apply {
+                            putString("id", telemetry.effectId)
+                            putBoolean("available", telemetry.available)
+                            putBoolean("evaluated", telemetry.evaluated)
+                            putBoolean("selected", telemetry.selected)
+                            putString("state", telemetry.state.name)
+                            telemetry.gridConfidence?.let { putFloat("grid_confidence", it) }
+                            telemetry.beatPositionMs?.let { putLong("beat_position_ms", it) }
+                            telemetry.beatIndex?.let { putLong("beat_index", it) }
+                            telemetry.loopStartMs?.let { putLong("loop_start_ms", it) }
+                            telemetry.loopEndMs?.let { putLong("loop_end_ms", it) }
+                            putString("tempo_interpretation", telemetry.tempoInterpretation)
+                            telemetry.tempoRatio?.let { putFloat("tempo_ratio", it) }
+                            putString("reason", telemetry.reason)
+                            putString("timing_limitation", telemetry.timingLimitation)
+                                })
+                            })
+                        }
+                    ) completion.set(SessionResult(SessionError.ERROR_INVALID_STATE))
+                    return completion
+                }
+            })
+        }
+
+        if (customCommand.customAction == SERVICE_GET_DJ_METRICS) {
+            return lifecycleScope.future {
+                val wrapper = endedWorkaroundPlayer
+                    ?: return@future SessionResult(SessionError.ERROR_INVALID_STATE)
+                val player = wrapper.exoPlayer
+                val item = player.currentMediaItem
+                    ?: return@future SessionResult(SessionError.ERROR_INVALID_STATE)
+                val index = player.currentMediaItemIndex
+                val engine = wrapper.playbackEngine as? AutomixPlayer
+                val nextItem = engine?.upcomingMediaItem
+                val selectedAnalyzer = audioAnalysis.cache.selectedAnalyzer
+                val key = AnalysisKey.from(item)
+                key?.let { audioAnalysis.loadCachedForDisplay(it)?.join() }
+                val nextKey = nextItem?.let(AnalysisKey::from)
+                nextKey?.let { audioAnalysis.loadCachedForDisplay(it)?.join() }
+                if (endedWorkaroundPlayer !== wrapper || wrapper.exoPlayer !== player ||
+                    player.currentMediaItemIndex != index || player.currentMediaItem != item ||
+                    (wrapper.playbackEngine as? AutomixPlayer) !== engine ||
+                    engine?.upcomingMediaItem != nextItem || audioAnalysis.cache.selectedAnalyzer != selectedAnalyzer
+                ) return@future SessionResult(SessionError.ERROR_INVALID_STATE)
+                val metadata = TrackAudioMetadataResolver.resolvePlayer(
+                    player, key?.let(audioAnalysis.cache::peekSelected)
+                )
+                val standby = engine?.upcomingStandbyPlayer
+                val nextMetadata = if (nextItem != null) {
+                    standby?.let {
+                        TrackAudioMetadataResolver.resolvePlayer(it, nextKey?.let(audioAnalysis.cache::peekSelected))
+                    } ?: TrackAudioMetadataResolver.resolve(
+                        emptyList(), nextKey?.let(audioAnalysis.cache::peekSelected), 0
+                    )
+                } else null
+                val now = SystemClock.elapsedRealtime()
+                val lastHandoff = engine?.lastHandoffElapsedRealtimeMs
+                SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
+                    res.extras.putString("media_id", item.mediaId)
+                    res.extras.putInt("index", index)
+                    res.extras.putString("title", item.mediaMetadata.title?.toString())
+                    res.extras.putString("analyzer", selectedAnalyzer)
+                    res.extras.putBoolean("analysis_failed", key?.let(audioAnalysis::analysisFailed) == true)
+                    key?.let {
+                        res.extras.putString("analysis_status", audioAnalysis.displayStatus(it).name)
+                    }
+                    metadata.bpm?.let { res.extras.putFloat("bpm", it) }
+                    res.extras.putString("key", metadata.camelotKey)
+                    res.extras.putFloat("speed", player.playbackParameters.speed)
+                    res.extras.putBoolean("next_available", nextItem != null)
+                    nextItem?.let {
+                        res.extras.putString("next_media_id", it.mediaId)
+                        res.extras.putString("next_title", it.mediaMetadata.title?.toString())
+                    }
+                    nextKey?.let {
+                        res.extras.putString("next_analysis_status", audioAnalysis.displayStatus(it).name)
+                        res.extras.putBoolean("next_analysis_failed", audioAnalysis.analysisFailed(it))
+                    }
+                    nextMetadata?.bpm?.let { res.extras.putFloat("next_bpm", it) }
+                    res.extras.putString("next_key", nextMetadata?.camelotKey)
+                    if (nextItem != null) {
+                        res.extras.putFloat("next_speed", engine.upcomingPlaybackSpeed)
+                    }
+                    res.extras.putBoolean("mixing", engine?.isCrossfading == true)
+                    res.extras.putBoolean(
+                        "mixed",
+                        lastHandoff != null && now - lastHandoff in 0 until 6_000L
+                    )
+                    res.extras.putString("transition_effect", engine?.transitionEffect)
+                    res.extras.putStringArrayList(
+                        "transition_effects", ArrayList(engine?.transitionEffects ?: emptyList())
+                    )
+                    res.extras.putBoolean(
+                        "beatmatch", engine?.isTransitionBeatmatched == true
+                    )
+                }
+            }
+        }
+
+        if (customCommand.customAction == SERVICE_SORT_AUTOMIX) {
+            return lifecycleScope.future {
+                val wrapper = endedWorkaroundPlayer
+                val engine = wrapper?.playbackEngine as? AutomixPlayer
+                val index = engine?.currentMediaItemIndex ?: C.INDEX_UNSET
+                if (wrapper == null || engine == null || !automixSettings.settings.value.enabled ||
+                    index !in 0 until engine.mediaItemCount || engine.isCrossfading
+                ) return@future SessionResult(SessionError.ERROR_INVALID_STATE)
+
+                val timeline = engine.currentTimeline
+                val shuffle = engine.shuffleModeEnabled
+                val repeat = engine.repeatMode
+                fun shuffleOrder(): List<Int> {
+                    val order = engine.activeExoPlayer.shuffleOrder
+                    val indices = ArrayList<Int>(order.length)
+                    var next = order.firstIndex
+                    while (next != C.INDEX_UNSET && indices.size < order.length) {
+                        indices.add(next)
+                        next = order.getNextIndex(next)
+                    }
+                    return indices
+                }
+                val shuffledIndices = if (shuffle) shuffleOrder() else emptyList()
+                val window = Timeline.Window()
+                val ids = (0 until timeline.windowCount).map { timeline.getWindow(it, window).uid }
+                val items = (0 until engine.mediaItemCount).map(engine::getMediaItemAt)
+                val selectedAnalyzer = audioAnalysis.cache.selectedAnalyzer
+                val metadata = items.mapIndexed { itemIndex, item ->
+                    if (itemIndex < index) return@mapIndexed SmartQueueSorter.Metadata(null, null)
+                    val cached = withContext(Dispatchers.IO) {
+                        AnalysisKey.from(item)?.copy(analyzer = selectedAnalyzer)?.let(audioAnalysis.cache::load)
+                    }
+                    val uri = item.localConfiguration?.uri
+                    val tags = if (uri?.scheme in listOf("content", "file")) {
+                        val retriever = MetadataRetriever.Builder(applicationContext, item).build()
+                        try {
+                            val groups = withTimeout(10_000) {
+                                retriever.retrieveTrackGroups().await()
+                            }
+                            (0 until groups.length).flatMap { groupIndex ->
+                                val group = groups.get(groupIndex)
+                                (0 until group.length).map { group.getFormat(it).metadata }
+                            }
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                            Log.w(TAG, "Timed out reading tags for ${item.mediaId}", e)
+                            emptyList()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Unable to read tags for ${item.mediaId}", e)
+                            emptyList()
+                        } finally {
+                            retriever.close()
+                        }
+                    } else emptyList()
+                    val resolved = TrackAudioMetadataResolver.resolve(tags, cached, 0)
+                    SmartQueueSorter.Metadata(resolved.bpm, resolved.camelotKey)
+                }
+                val order = withContext(Dispatchers.Default) { SmartQueueSorter.order(metadata, index) }
+                val now = engine.currentTimeline
+                if (endedWorkaroundPlayer !== wrapper || wrapper.playbackEngine !== engine ||
+                    engine.currentMediaItemIndex != index || engine.isCrossfading ||
+                    audioAnalysis.cache.selectedAnalyzer != selectedAnalyzer ||
+                    !automixSettings.settings.value.enabled ||
+                    engine.shuffleModeEnabled != shuffle || engine.repeatMode != repeat ||
+                    (shuffle && shuffleOrder() != shuffledIndices) ||
+                    now.windowCount != ids.size ||
+                    ids.indices.any { now.getWindow(it, window).uid != ids[it] } ||
+                    items.indices.any { engine.getMediaItemAt(it) != items[it] }
+                ) return@future SessionResult(SessionError.ERROR_INVALID_STATE)
+
+                wrapper.sortQueueForAutomix(order)
+                for (connected in session.connectedControllers) {
+                    session.sendCustomCommand(
+                        connected, buildMqCustomCommand(CLIENT_QB_REFRESH_LIST, null), Bundle.EMPTY
+                    )
+                }
+                SessionResult(SessionResult.RESULT_SUCCESS, Bundle().apply {
+                    putInt("count", items.size - index - 1)
+                })
+            }
+        }
+
+        return Futures.immediateFuture(
+            when (customCommand.customAction) {
+                SERVICE_SET_TIMER -> {
+                    // 0 = clear timer; 0 with pauseOnEnd true will pause on end of current song
+                    val duration = customCommand.customExtras.getInt("duration")
+                    val pauseOnEnd = customCommand.customExtras.getBoolean("pauseOnEnd")
+                    if (duration > 0) {
+                        timerPauseOnEnd = pauseOnEnd
+                        timerDuration = SystemClock.elapsedRealtime() + duration
+                    } else {
+                        val currentPauseOnEnd = this.endedWorkaroundPlayer!!.exoPlayer.pauseAtEndOfMediaItems
+                        this.endedWorkaroundPlayer!!.exoPlayer.pauseAtEndOfMediaItems = pauseOnEnd
+                        if (timerDuration != null) {
+                            timerDuration = null
+                        } else if (pauseOnEnd != currentPauseOnEnd) {
+                            mediaSession!!.broadcastCustomCommand(
+                                SessionCommand(SERVICE_TIMER_CHANGED, Bundle.EMPTY),
+                                Bundle.EMPTY
+                            )
+                        }
+                    }
+                    if (duration > 0 || pauseOnEnd) {
+                        prefs.edit {
+                            putBoolean("lastTimerEos", pauseOnEnd)
+                        }
+                    }
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                }
+
+                SERVICE_QUERY_TIMER -> {
+                    SessionResult(SessionResult.RESULT_SUCCESS).also {
+                        timerDuration?.let { td ->
+                            it.extras.putInt(
+                                "duration",
+                                (td - SystemClock.elapsedRealtime()).toInt()
+                            )
+                            it.extras.putBoolean("pauseOnEnd", timerPauseOnEnd)
+                        } ?: it.extras.putBoolean(
+                            "pauseOnEnd",
+                            this.endedWorkaroundPlayer!!.exoPlayer.pauseAtEndOfMediaItems
+                        )
+                    }
+                }
+
+                SERVICE_GET_AUDIO_FORMAT -> {
+                    SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
+                        if (downstreamFormat.isNotEmpty()) {
+                            res.extras.putParcelableArrayList(
+                                "file_format",
+                                ArrayList(downstreamFormat.map {
+                                    Bundle().apply {
+                                        putInt("type", it.second.first)
+                                        val bitrate = bitrate
+                                        // TODO: should this be done here? this will create a new format object every query
+                                        val format = if (it.second.first == C.TRACK_TYPE_AUDIO &&
+                                            bitrate != null &&
+                                            it.second.second.sampleMimeType == MimeTypes.AUDIO_OPUS
+                                        ) {
+                                            it.second.second.buildUpon().setAverageBitrate(bitrate)
+                                                .build()
+                                        } else it.second.second
+                                        putBundle("format", format.toBundle())
+                                        putBundle("rg", ReplayGainUtil.parse(format).toBundle())
+                                    }
+                                })
+                            )
+                        }
+                        res.extras.putBundle("sink_format", audioSinkInputFormat?.toBundle())
+                        res.extras.putParcelable("track_format", audioTrackInfo)
+                        res.extras.putParcelable("hal_format", afTrackFormat?.second)
+                        if (afFormatTracker.format?.routedDeviceType == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) {
+                            res.extras.putParcelable("bt", btInfo)
+                        }
+                    }
+                }
+
+                SERVICE_GET_LYRICS -> {
+                    SessionResult(SessionResult.RESULT_SUCCESS).also {
+                        it.extras.putParcelable("lyrics", lyrics)
+                        it.extras.putParcelable("lyrics_attribution", lyricsAttribution)
+                    }
+                }
+
+                SERVICE_QB_GET_INACTIVE_LIST -> {
+                    SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
+                        val queueList: List<MultiQueueObject> = qb.getInactiveQueues().map { it.copy(queue = ArrayList()) }
+                        val binder = MultiQueueList(queueList)
+                        res.extras.putBinder("allQueues", binder)
+                    }
+                }
+
+                SERVICE_QB_GET_QUEUE_FOR_UI -> {
+                    try {
+                        val queueId = customCommand.customExtras.getLong("queueId")
+                        val queue: MultiQueueObject = if (queueId != -1L) {
+                            qb.getInactiveQueue(queueId)
+                        } else {
+                            endedWorkaroundPlayer!!.getActiveQueue()
+                        }!!
+                        SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
+                            val binder = MultiQueueList(listOf(queue))
+                            res.extras.putBinder("allQueues", binder)
+                        }
+                    } catch (e: IllegalStateException) {
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
+                    }
+                }
+
+                SERVICE_QB_LOAD_QUEUE -> {
+                    val queueId = customCommand.customExtras.getLong("queueId")
+                    val startIndex = customCommand.customExtras.getInt("startIndex")
+
+                    val index = qb.masterQueues.indexOfFirst { it.id == queueId }
+
+                    if (index != -1) {
+                        qb.commitQueue(index, startIndex)
+
+                        for (controller in mediaSession!!.connectedControllers) {
+                            val customCommand = buildMqCustomCommand(CLIENT_QB_REFRESH_ALL, null)
+                            mediaSession!!.sendCustomCommand(
+                                controller,
+                                customCommand,
+                                Bundle.EMPTY
+                            )
+                        }
+                        SessionResult(SessionResult.RESULT_SUCCESS)
+                    } else {
+                        SessionResult(SessionError.ERROR_BAD_VALUE)
+                    }
+                }
+
+                SERVICE_QB_PIN_QUEUE -> {
+                    val plr = endedWorkaroundPlayer!!
+                    val queueId = customCommand.customExtras.getLong("queueId")
+                    val status = if (queueId == plr.currentQueueId) {
+                        plr.currentIsPinned = true
+                        true
+                    } else {
+                        val index = qb.masterQueues.indexOfFirst { it.id == queueId }
+                        if (index == -1) {
+                            false
+                        } else {
+                            qb.pinQueue(index)
+                        }
+                    }
+                    if (status) {
+                        for (controller in mediaSession!!.connectedControllers) {
+                            val customCommand = buildMqCustomCommand(CLIENT_QB_REFRESH_ITEM, queueId)
+                            mediaSession!!.sendCustomCommand(controller, customCommand, Bundle.EMPTY)
+                        }
+                    }
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                }
+
+                SERVICE_QB_UNPIN_QUEUE -> {
+                    val plr = endedWorkaroundPlayer!!
+                    val queueId = customCommand.customExtras.getLong("queueId")
+                    val status = if (queueId == plr.currentQueueId) {
+                        endedWorkaroundPlayer!!.currentIsPinned = false
+                        true
+                    } else {
+                        val index = qb.masterQueues.indexOfFirst { it.id == queueId }
+                        if (index == -1) {
+                            false
+                        } else {
+                            qb.unpinQueue(index)
+                        }
+                    }
+                    if (status) {
+                        for (controller in mediaSession!!.connectedControllers) {
+                            val customCommand = buildMqCustomCommand(CLIENT_QB_REFRESH_ITEM, queueId)
+                            mediaSession!!.sendCustomCommand(controller, customCommand, Bundle.EMPTY)
+                        }
+                    }
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                }
+
+                SERVICE_QB_DEL -> {
+                    val plr = endedWorkaroundPlayer!!
+                    val queueId = customCommand.customExtras.getLong("queueId")
+                    var refreshLevel = CLIENT_QB_REFRESH_ALL
+
+                    val status: Boolean = if (queueId == plr.currentQueueId) {
+                        // active queue
+                        try {
+                            val nextQueueIndex = qb.getInactiveQueues().size - 1
+                            if (nextQueueIndex < 0) {
+                                plr.clearMediaItems()
+                                refreshLevel = CLIENT_QB_REFRESH_CLEAR
+                                true
+                            } else {
+                                val currentQueueId = plr.currentQueueId
+                                val nextQueue = qb.getInactiveQueue(nextQueueIndex)!!
+                                qb.commitQueue(nextQueueIndex, nextQueue.startIndex)
+                                currentQueueId?.let {
+                                    // TODO: nick plz do delete active queue if this is too cursed
+                                    qb.deleteQueue(currentQueueId)
+                                }
+                                refreshLevel = CLIENT_QB_REFRESH_ALL
+                                true
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, e.message.toString(), e)
+                            false
+                        }
+
+                    } else {
+                        // inactive queues
+                        refreshLevel = CLIENT_QB_REFRESH_QUEUES
+                        val ret = qb.deleteQueue(queueId)
+                        ret
+                    }
+
+                    if (status) {
+                        for (controller in mediaSession!!.connectedControllers) {
+                            val customCommand = buildMqCustomCommand(refreshLevel, null)
+                            mediaSession!!.sendCustomCommand(controller, customCommand, Bundle.EMPTY)
+                        }
+                    }
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                }
+
+                SERVICE_QB_RENAME_QUEUE -> {
+                    val plr = endedWorkaroundPlayer!!
+                    val queueId = customCommand.customExtras.getLong("queueId")
+                    val title = customCommand.customExtras.getString("title")
+                    val dryRun = customCommand.customExtras.getBoolean("dryRun")
+
+                    val status = if (title.isNullOrBlank()) {
+                        false
+                    } else if (queueId == plr.currentQueueId) {
+                        if (qb.masterQueues.any { it.title == title }) {
+                            false
+                        } else {
+                            if (!dryRun) {
+                                plr.currentTitle = title
+                            }
+                            true
+                        }
+                    } else {
+                        val index = qb.masterQueues.indexOfFirst { it.id == queueId }
+                        qb.renameQueue(index, title, dryRun)
+                    }
+                    if (status) {
+                        for (controller in mediaSession!!.connectedControllers) {
+                            val customCommand = buildMqCustomCommand(CLIENT_QB_REFRESH_ITEM, queueId)
+                            mediaSession!!.sendCustomCommand(controller, customCommand, Bundle.EMPTY)
+                        }
+                    }
+                    SessionResult(SessionResult.RESULT_SUCCESS).also { res ->
+                        res.extras.putBoolean("status", status)
+                    }
+                }
+
+                SERVICE_QB_AGE -> {
+                    qb.age()
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                }
+
+                else -> {
+                    SessionResult(SessionError.ERROR_BAD_VALUE)
+                }
+            })
+    }
+
+    override fun onPlayWhenReadyChanged(
+        playWhenReady: Boolean,
+        reason: @Player.PlayWhenReadyChangeReason Int
+    ) {
+        if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+            this.endedWorkaroundPlayer?.exoPlayer?.pauseAtEndOfMediaItems = false
+            mediaSession!!.broadcastCustomCommand(
+                SessionCommand(SERVICE_TIMER_CHANGED, Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        }
+    }
+
+    override fun onPlaybackResumption(
+        mediaSession: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        isForPlayback: Boolean
+    ): ListenableFuture<MediaItemsWithStartPosition> {
+        val settable = SettableFuture.create<MediaItemsWithStartPosition>()
+        if (isForPlayback) {
+            scope.launch {
+                lastPlaylistLoaded.await()
+                Util.handlePlayButtonAction(endedWorkaroundPlayer)
+                settable.setException(MediaSession.ManuallyHandlePlaybackResumption())
+            }
+            return settable
+        }
+        val job = scope.launch {
+            lastPlayedManager.restore { items ->
+                if (items == null) {
+                    settable.setException(
+                        NullPointerException(
+                            "null MediaItemsWithStartPosition, see former logs for root cause"
+                        ).also { Log.e(TAG, Log.getThrowableString(it)!!) }
+                    )
+                } else {
+                    if (items.items.mediaItems.isNotEmpty()) {
+                        var theItem = items.items.mediaItems[items.items.startIndex]
+                        if (theItem.mediaMetadata.durationMs != null &&
+                            theItem.mediaMetadata.durationMs!! > 0 &&
+                            items.items.startPositionMs != C.TIME_UNSET
+                        ) {
+                            theItem = theItem.buildUpon()
+                                .setMediaMetadata(
+                                    theItem.mediaMetadata.buildUpon()
+                                    .setExtras(Bundle(theItem.mediaMetadata.extras).apply {
+                                        if (items.items.startPositionMs == 0L) {
+                                            putInt(
+                                                MediaConstants.EXTRAS_KEY_COMPLETION_STATUS,
+                                                MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_NOT_PLAYED
+                                            )
+                                        } else if (items.items.startPositionMs != theItem.mediaMetadata.durationMs!!) {
+                                            putInt(
+                                                MediaConstants.EXTRAS_KEY_COMPLETION_STATUS,
+                                                MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_PARTIALLY_PLAYED
+                                            )
+                                            putDouble(
+                                                MediaConstants.EXTRAS_KEY_COMPLETION_PERCENTAGE,
+                                                (items.items.startPositionMs.toDouble() /
+                                                        theItem.mediaMetadata.durationMs!!)
+                                                    .coerceIn(0.0, 1.0)
+                                            )
+                                        } else {
+                                            putInt(
+                                                MediaConstants.EXTRAS_KEY_COMPLETION_STATUS,
+                                                MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_FULLY_PLAYED
+                                            )
+                                        }
+                                    }).build()
+                                ).build()
+                        }
+                        settable.set(
+                            MediaItemsWithStartPosition(
+                                listOf(theItem),
+                                0, items.items.startPositionMs
+                            )
+                        )
+                    } else {
+                        settable.set(items.items)
+                    }
+                }
+            }
+        }
+        job.invokeOnCompletion { t ->
+            if (t is CancellationException && !settable.isDone) {
+                settable.setException(t)
+            }
+        }
+        return settable
+    }
+
+
+    private fun extractIsrc(metadata: Metadata): String? {
+        for (index in 0 until metadata.length()) {
+            when (val entry = metadata[index]) {
+                is TextInformationFrame -> if (entry.id == "TSRC") {
+                    entry.values.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+                }
+                is VorbisComment -> if (entry.key.equals("ISRC", ignoreCase = true)) {
+                    entry.value.trim().takeIf { it.isNotEmpty() }?.let { return it }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun loadTrackLyrics(
+        mediaItem: MediaItem?, format: Format?, durationMs: Long?
+    ): Pair<SemanticLyrics?, SpicyLyricsAttribution?> {
+        lyricsResponseCache.removeExpired()
+        val mediaId = mediaItem?.mediaId
+        val trackTitle = mediaItem?.mediaMetadata?.title?.toString()
+        val trackArtist = mediaItem?.mediaMetadata?.artist?.toString()
+        val trim = prefs.getBoolean("trim_lyrics", true)
+        val options = LrcParserOptions(
+            trim = trim, multiLine = true,
+            errorText = getString(R.string.failed_to_parse_lyric)
+        )
+        // TODO: allow multiple lyric files/tags combining them for translations...maybe?
+        var lrc: SemanticLyrics? = null
+        var attribution: SpicyLyricsAttribution? = null
+        var trackMetadata: Metadata? = null
+        if (format != null) {
+            lrc = loadAndParseLyricsFile(
+                applicationContext,
+                mediaItem?.getFile(),
+                format.sampleMimeType, options
+            )
+            if (lrc == null) {
+                // note: wav files can have null metadata
+                trackMetadata = format.metadata
+                if (trackMetadata != null) {
+                    lrc = extractAndParseLyrics(
+                        format.sampleRate.takeIf { it != Format.NO_VALUE } ?: 0,
+                        format.sampleMimeType,
+                        trackMetadata,
+                        options).firstOrNull()
+                }
+            }
+        }
+        val apiKey = prefs.getString("spicy_lyrics_api_key", null)?.trim()
+        if (lrc == null && prefs.getBoolean("spicy_lyrics_enabled", false) &&
+            !apiKey.isNullOrEmpty() && mediaId != null
+        ) {
+            val isrc = trackMetadata?.let(::extractIsrc)
+            val cacheKey = "spicy:media:$mediaId"
+            val client = SpicyLyricsClient(apiKey)
+            var responseJson = lyricsResponseCache.get(cacheKey)
+            var result: SpicyLyricsResult? = null
+            try {
+                result = responseJson?.let(client::parse)
+                if (result == null) {
+                    if (responseJson != null) {
+                        lyricsResponseCache.remove(cacheKey)
+                    }
+                    responseJson = client.lookup(isrc, trackTitle, trackArtist, durationMs)
+                    if (responseJson != null) {
+                        result = client.parse(responseJson)
+                        if (result != null) {
+                            lyricsResponseCache.put(cacheKey, responseJson)
+                        }
+                    }
+                }
+            } catch (e: java.io.IOException) {
+                Log.w(TAG, "Spicy Lyrics lookup failed: ${e.message}")
+            } catch (e: org.json.JSONException) {
+                Log.w(TAG, "Spicy Lyrics response could not be parsed: ${e.message}")
+            }
+            lrc = result?.lyrics
+            attribution = result?.attribution
+        }
+        if (lrc == null && prefs.getBoolean("lrclib_enabled", true) &&
+            !trackTitle.isNullOrBlank() && !trackArtist.isNullOrBlank() && mediaId != null
+        ) {
+            val cacheKey = "lrclib:media:$mediaId"
+            val parserOptions = options
+            val cached = lyricsResponseCache.get(cacheKey)
+            try {
+                var response = cached
+                lrc = response?.let {
+                    com.siw.plug.logic.utils.LrcUtils.parseLyrics(
+                        it, format?.sampleMimeType, parserOptions, null
+                    )
+                }
+                if (lrc == null) {
+                    response = LrclibClient().lookup(trackTitle, trackArtist, durationMs)
+                    if (response != null) {
+                        lrc = com.siw.plug.logic.utils.LrcUtils.parseLyrics(
+                            response, format?.sampleMimeType, parserOptions, null
+                        )
+                        if (lrc != null) lyricsResponseCache.put(cacheKey, response)
+                    }
+                }
+            } catch (e: java.io.IOException) {
+                Log.w(TAG, "LRCLIB lookup failed: ${e.message}")
+            } catch (e: org.json.JSONException) {
+                Log.w(TAG, "LRCLIB response could not be parsed: ${e.message}")
+            }
+        }
+        return lrc to attribution
+    }
+
+    override fun onTracksChanged(tracks: Tracks) {
+        if (!tracks.isEmpty && !tracks.isTypeSelected(C.TRACK_TYPE_AUDIO)) {
+            Log.e(TAG, "No audio track selected: $tracks")
+            controller!!.stop()
+        }
+
+        val mediaItem = controller?.currentMediaItem
+        val mediaId = mediaItem?.mediaId
+        val durationMs = controller?.duration?.takeIf { it > 0 }
+        val format = tracks.getFirstSelectedTrackFormatByType(C.TRACK_TYPE_AUDIO)
+        lyricsFetcher.launch {
+            val (lrc, attribution) = loadTrackLyrics(mediaItem, format, durationMs)
+            withContext(Dispatchers.Main) {
+                if (mediaItem != null && controller?.currentMediaItem?.mediaId != mediaId) {
+                    return@withContext
+                }
+                mediaSession?.let {
+                    lyrics = lrc
+                    lyricsAttribution = attribution
+                    it.broadcastCustomCommand(
+                        SessionCommand(SERVICE_GET_LYRICS, Bundle.EMPTY),
+                        Bundle.EMPTY
+                    )
+                    scheduleSendingLyrics(true)
+                }
+            }
+        }
+    }
+
+    override fun onAudioTrackInitialized(
+        eventTime: AnalyticsListener.EventTime,
+        audioTrackConfig: AudioSink.AudioTrackConfig
+    ) {
+        audioTrackInfoCounter++
+        audioTrackInfo = AudioTrackInfo.fromMedia3AudioTrackConfig(audioTrackConfig)
+        mediaSession?.broadcastCustomCommand(
+            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+            Bundle.EMPTY
+        )
+    }
+
+    override fun onAudioTrackReleased(
+        eventTime: AnalyticsListener.EventTime,
+        audioTrackConfig: AudioSink.AudioTrackConfig
+    ) {
+        // Normally called after the replacement has been initialized, but if old track is released
+        // without replacement, we want to instantly know that instead of keeping stale data.
+        if (++audioTrackReleaseCounter == audioTrackInfoCounter) {
+            audioTrackInfo = null
+            mediaSession?.broadcastCustomCommand(
+                SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        }
+    }
+
+    override fun onDownstreamFormatChanged(
+        eventTime: AnalyticsListener.EventTime,
+        mediaLoadData: MediaLoadData
+    ) {
+        if (eventTime.mediaPeriodId == null) { // https://github.com/androidx/media/issues/2812
+            Log.e(TAG, "mediaPeriodId is NULL in onDownstreamFormatChanged()!!")
+            return
+        }
+        val currentPeriod = endedWorkaroundPlayer?.exoPlayer?.currentPeriodIndex?.takeIf {
+            it != C.INDEX_UNSET &&
+                    (endedWorkaroundPlayer?.exoPlayer?.currentTimeline?.periodCount ?: 0) > it
+        }?.let { endedWorkaroundPlayer!!.exoPlayer.currentTimeline.getUidOfPeriod(it) }
+        val item = eventTime.mediaPeriodId!!.periodUid to
+                (mediaLoadData.trackType to mediaLoadData.trackFormat!!)
+        if (currentPeriod != item.first) {
+            pendingDownstreamFormat += item
+        } else {
+            downstreamFormat += item
+            mediaSession?.broadcastCustomCommand(
+                SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                Bundle.EMPTY
+            )
+        }
+    }
+
+    private fun onAudioSinkInputFormatChanged(inputFormat: Format?) {
+        audioSinkInputFormat = inputFormat
+        mediaSession?.broadcastCustomCommand(
+            SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+            Bundle.EMPTY
+        )
+    }
+
+    override fun onPlaybackStateChanged(state: Int) {
+        if (state == Player.STATE_IDLE) {
+            var changed = false
+            if (afTrackFormat != null) {
+                Log.e(TAG, "leaked track format: $afTrackFormat")
+                afTrackFormat = null
+                changed = true
+            }
+            if (pendingAfTrackFormats.isNotEmpty()) {
+                Log.e(TAG, "leaked pending track formats: $pendingAfTrackFormats")
+                pendingAfTrackFormats.clear()
+            }
+            if (downstreamFormat.isNotEmpty()) {
+                Log.e(TAG, "leaked downstream formats: $downstreamFormat")
+                downstreamFormat.clear()
+                changed = true
+            }
+            if (pendingDownstreamFormat.isNotEmpty()) {
+                Log.e(TAG, "leaked pending downstream formats: $pendingDownstreamFormat")
+                pendingDownstreamFormat.clear()
+            }
+            if (changed) {
+                mediaSession?.broadcastCustomCommand(
+                    SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                    Bundle.EMPTY
+                )
+            }
+        }
+    }
+
+    override fun onPlaybackParametersChanged(
+        eventTime: AnalyticsListener.EventTime,
+        playbackParameters: PlaybackParameters
+    ) {
+        scheduleSendingLyrics(false) // if speed changes
+    }
+
+    override fun onPlayerError(error: PlaybackException) {
+        // TODO
+    }
+
+    override fun onDeviceInfoChanged(deviceInfo: DeviceInfo) {
+        if (deviceInfo.playbackType == DeviceInfo.PLAYBACK_TYPE_REMOTE) {
+            handler.postDelayed({
+                setShowNotificationForEmptyPlayer(SHOW_NOTIFICATION_FOR_EMPTY_PLAYER_NEVER)
+            }, 2000) // TODO lol
+        } else {
+            setShowNotificationForEmptyPlayer(SHOW_NOTIFICATION_FOR_EMPTY_PLAYER_AFTER_STOP_OR_ERROR)
+        }
+    }
+
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+            bitrate = null
+            bitrateFetcher.launch {
+                bitrate = mediaItem?.getBitrate(this@PlugPlaybackService) // TODO subtract cover size
+                this@PlugPlaybackService.mediaSession?.broadcastCustomCommand(
+                    SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                    Bundle.EMPTY
+                )
+            }
+            // TODO: re-enable this when https://github.com/androidx/media/issues/3248 is fixed
+            //lyrics = null
+            //scheduleSendingLyrics(true)
+        }
+        lastSentNotificationLyric = null
+        lastSentHighlightedLyric = null
+
+        // reshuffle queue when shuffle AND repeat all are enabled
+        val player = endedWorkaroundPlayer
+        if (player != null && player.currentMediaItemIndex == player.exoPlayer.shuffleOrder.lastIndex &&
+            reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
+            player.shuffleModeEnabled && player.repeatMode == Player.REPEAT_MODE_ALL
+        ) {
+            player.exoPlayer.setShuffleOrder(
+                CircularShuffleOrder(
+                    player,
+                    player.exoPlayer.shuffleOrder.lastIndex,
+                    player.exoPlayer.mediaItemCount,
+                    Random.nextLong()
+                )
+            )
+            for (controller in mediaSession!!.connectedControllers) {
+                val customCommand = SessionCommand(CLIENT_QB_REFRESH_LIST, Bundle.EMPTY).apply {
+                    val plr = endedWorkaroundPlayer!!
+                    customExtras.putBinder(
+                        "activeQueue",
+                        MultiQueueList(listOf(plr.getActiveQueue()))
+                    )
+                    customExtras.putBinder(
+                        "inactiveQueues",
+                        MultiQueueList(qb.getInactiveQueues().map { it.copy(queue = ArrayList()) })
+                    )
+                }
+                mediaSession!!.sendCustomCommand(
+                    controller,
+                    customCommand,
+                    Bundle.EMPTY
+                )
+            }
+        }
+
+        lastPlayedManager.save()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (prefs.getBooleanStrict("stopPlayingWhenDismissTask", false) &&
+            rootIntent?.component != ComponentName(this, AudioPreviewActivity::class.java)
+        ) {
+            pauseAllPlayersAndStopSelf()
+        } else {
+            super.onTaskRemoved(rootIntent)
+        }
+    }
+
+    override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+        refreshMediaButtonCustomLayout()
+    }
+
+    override fun onIsPlayingChanged(isPlaying: Boolean) {
+        scheduleSendingLyrics(false)
+        lastPlayedManager.save()
+        audioAnalysis.setIdle(!isPlaying)
+    }
+
+    override fun onEvents(player: Player, events: Player.Events) {
+        super<Player.Listener>.onEvents(player, events)
+        if (events.containsAny(
+                Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION,
+                Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED
+            )
+        ) {
+            val engine = endedWorkaroundPlayer?.exoPlayer
+            if (engine != null) {
+                val order = engine.shuffleOrder
+                val queue = mutableListOf<MediaItem>()
+                val current = engine.currentMediaItemIndex
+                var index = if (engine.repeatMode == Player.REPEAT_MODE_ONE) current
+                    else engine.nextMediaItemIndex
+                val visited = mutableSetOf<Int>()
+                while (index in 0 until engine.mediaItemCount && visited.add(index)) {
+                    queue.add(engine.getMediaItemAt(index))
+                    index = if (engine.shuffleModeEnabled) order.getNextIndex(index) else index + 1
+                }
+                if (current in 0 until engine.mediaItemCount && visited.add(current))
+                    queue.add(engine.getMediaItemAt(current))
+                audioAnalysis.updateQueue(queue)
+            }
+        }
+        // if timeline changed, shuffle order is handled elsewhere instead (cloneAndInsert called by
+        // ExoPlayer for common case and nextShuffleOrder for resumption case)
+        if (events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)
+            && !events.contains(Player.EVENT_TIMELINE_CHANGED)
+        ) {
+            // when enabling shuffle, re-shuffle lists so that the first index is up to date
+            Log.i(TAG, "re-shuffling playlist")
+            endedWorkaroundPlayer?.let {
+                it.exoPlayer.setShuffleOrder(
+                    CircularShuffleOrder(
+                        it,
+                        it.exoPlayer.currentMediaItemIndex,
+                        it.exoPlayer.mediaItemCount,
+                        Random.nextLong()
+                    )
+                )
+            }
+        }
+    }
+
+    private suspend fun mapMediaItemsForFavorites(mediaItems: List<MediaItem>): List<MediaItem> {
+        val favorites = plugApplication.reader.playlistListFlow.map { it.find { p ->
+            p is Favorite } }.first()?.songList?.map { it.mediaId } ?: emptyList()
+        return mediaItems.map { item ->
+            val isHeart = (item.mediaMetadata.userRating as? HeartRating)
+                ?.isHeart == true
+            val shouldBeHeart = favorites.contains(item.mediaId)
+            if (isHeart != shouldBeHeart ||
+                item.mediaMetadata.userRating !is HeartRating) {
+                item.buildUpon().setMediaMetadata(item.mediaMetadata.buildUpon().setUserRating(
+                    HeartRating(shouldBeHeart)).build()).build()
+            } else item
+        }
+    }
+    override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+        refreshMediaButtonCustomLayout()
+        if (needsMissingOnDestroyCallWorkarounds()) {
+            handler.post { lastPlayedManager.save() }
+        }
+    }
+
+    override fun onRepeatModeChanged(repeatMode: Int) {
+        refreshMediaButtonCustomLayout()
+        if (needsMissingOnDestroyCallWorkarounds()) {
+            handler.post { lastPlayedManager.save() }
+        }
+    }
+
+    override fun onTimelineChanged(timeline: Timeline, reason: @Player.TimelineChangeReason Int) {
+        if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+            lastPlayedManager.allowSavingState = true
+            lastPlaylistLoaded.complete(Unit)
+            refreshMediaButtonCustomLayout()
+            if (!computeRgMode(false))
+                throw IllegalStateException("unreachable, mode failed with force=false")
+        }
+        // if it's a remotable timeline, it's a temporary masking timeline and real one will follow
+        if (timeline !is Timeline.RemotableTimeline) {
+            pendingDownstreamFormat.toSet().forEach {
+                if (timeline.getIndexOfPeriod(it.first) == C.INDEX_UNSET) {
+                    // This period is going away.
+                    pendingDownstreamFormat.remove(it)
+                }
+            }
+            pendingAfTrackFormats.toMap().forEach { (key, _) ->
+                if (timeline.getIndexOfPeriod(key) == C.INDEX_UNSET) {
+                    // This period is going away.
+                    pendingAfTrackFormats.remove(key)
+                }
+            }
+        }
+    }
+
+    private fun refreshMediaButtonCustomLayout() {
+        val isEmpty = controller?.currentTimeline?.isEmpty != false
+        mediaSession!!.connectedControllers.forEach {
+            if (mediaSession!!.isMediaNotificationController(it)
+                || mediaSession!!.isAutoCompanionController(it)
+                || mediaSession!!.isAutomotiveController(it)
+            ) {
+                mediaSession!!.setMediaButtonPreferences(
+                    it, if (isEmpty) emptyList() else
+                        ImmutableList.of(getRepeatCommand(), getShufflingCommand(), getFavoriteCommand())
+                )
+            }
+        }
+    }
+
+    override fun onLoadCanceled(
+        eventTime: AnalyticsListener.EventTime,
+        loadEventInfo: LoadEventInfo,
+        mediaLoadData: MediaLoadData
+    ) {
+        pendingDownstreamFormat.removeAll { eventTime.mediaPeriodId?.periodUid == it.first }
+    }
+
+    var lastKnownPeriodUid: Any? = null // TODO: file upstream bug, maybe? this seems a bit weird
+    override fun onPositionDiscontinuity(
+        oldPosition: Player.PositionInfo,
+        newPosition: Player.PositionInfo,
+        reason: Int
+    ) {
+        if (lastKnownPeriodUid != newPosition.periodUid || oldPosition.periodUid != newPosition.periodUid) {
+            var changed = false
+            downstreamFormat.toSet().forEach {
+                if (newPosition.periodUid != it.first) {
+                    downstreamFormat.remove(it)
+                    changed = true
+                }
+            }
+            pendingDownstreamFormat.toSet().forEach {
+                if (newPosition.periodUid == it.first) {
+                    downstreamFormat.add(it)
+                    pendingDownstreamFormat.remove(it)
+                    changed = true
+                }
+            }
+            if (afTrackFormat?.first != newPosition.periodUid) {
+                afTrackFormat = null
+                changed = true
+            }
+            pendingAfTrackFormats[newPosition.periodUid]?.let { format ->
+                afTrackFormat = newPosition.periodUid!! to format
+                pendingAfTrackFormats.remove(newPosition.periodUid)
+                changed = true
+            }
+            if (changed) {
+                mediaSession?.broadcastCustomCommand(
+                    SessionCommand(SERVICE_GET_AUDIO_FORMAT, Bundle.EMPTY),
+                    Bundle.EMPTY
+                )
+            }
+            lastKnownPeriodUid = newPosition.periodUid
+        }
+        scheduleSendingLyrics(false)
+    }
+
+    private fun getActiveNotificationLyric(): String? {
+        val isNotificationLyricsEnabled = prefs.getBooleanStrict("notification_lyrics", false)
+        if (!isNotificationLyricsEnabled) return null
+        if (controller?.playbackState == Player.STATE_ENDED || controller?.playbackState == Player.STATE_IDLE) return null
+
+        val cPos = (controller?.contentPosition ?: 0).toULong()
+        val lines = syncedLyrics?.text?.filter {
+            it.start <= cPos && !it.isTranslated
+        }
+        val currentLine = lines?.maxByOrNull { it.start } ?: return null
+        if (currentLine.text.isBlank()) return null
+        return currentLine.text
+    }
+
+    private fun scheduleSendingLyrics(new: Boolean) {
+        handler.removeCallbacks(sendLyrics)
+        sendLyricNow(new || !updatedLyricAtLeastOnce)
+        updatedLyricAtLeastOnce = true
+        if (new) {
+            endedWorkaroundPlayer?.updateLyricNow()
+        }
+        val isStatusBarLyricsEnabled = prefs.getBooleanStrict("status_bar_lyrics", false)
+        val isNotificationLyricsEnabled = prefs.getBooleanStrict("notification_lyrics", false)
+        val hnw = !LyricWidgetProvider.hasWidget(this)
+        if (controller?.isPlaying != true || (!isStatusBarLyricsEnabled && !isNotificationLyricsEnabled && hnw)) return
+        val cPos = (controller?.contentPosition ?: 0).toULong()
+        val nextUpdate = syncedLyrics?.text?.flatMap { line ->
+            if (hnw && line.start <= cPos) listOf() else if (hnw) listOf(line.start) else
+                (line.words?.map { it.timeRange.first }?.filter { it > cPos } ?: listOf())
+                    .let { i -> if (line.start > cPos) i + line.start else i }
+        }?.minOrNull()
+        nextUpdate?.let {
+            handler.postDelayed(
+                sendLyrics, ((it - cPos).toLong()
+                        / (controller?.playbackParameters?.speed ?: 1f)).toLong()
+            )
+        }
+    }
+
+    private fun sendLyricNow(new: Boolean) {
+        if (new)
+            LyricWidgetProvider.update(this)
+        else
+            LyricWidgetProvider.adapterUpdate(this)
+        val isStatusBarLyricsEnabled = prefs.getBooleanStrict("status_bar_lyrics", false)
+        val highlightedLyric = if (isStatusBarLyricsEnabled && controller?.playWhenReady == true)
+            getCurrentLyricIndex(false)?.let {
+                syncedLyrics?.text?.get(it)?.text
+            }
+        else null
+        val notificationLyric = getActiveNotificationLyric()
+        if (lastSentHighlightedLyric != highlightedLyric || lastSentNotificationLyric != notificationLyric) {
+            val notifLyricChanged = lastSentNotificationLyric != notificationLyric
+            lastSentHighlightedLyric = highlightedLyric
+            lastSentNotificationLyric = notificationLyric
+            handler.post {
+                endedWorkaroundPlayer?.let {
+                    if (notifLyricChanged) {
+                        it.updateLyricNow()
+                    }
+                    // This will access the media notification controller's getters. But because
+                    // controller callback ordering is undefined and in practice our service
+                    // controller sometimes gets called first, this would cause us to access a stale
+                    // PlaybackInfo in the media notification controller which causes wrong decision
+                    // for startInForegroundRequired and that leads to crash.
+                    if (Looper.myLooper() != it.applicationLooper)
+                        throw UnsupportedOperationException("wrong looper for triggerNotificationUpdate")
+                    isManualNotificationUpdate = true
+                    triggerNotificationUpdate()
+                    isManualNotificationUpdate = false
+                }
+            }
+        }
+    }
+
+    fun getCurrentLyricIndex(withTranslation: Boolean): Int? {
+        val lines = syncedLyrics?.text?.mapIndexed { i, it -> i to it }?.filter {
+            it.second.start <= (controller?.currentPosition ?: 0).toULong()
+                    && (!it.second.isTranslated || withTranslation)
+        }
+        // return first non-blank line if there are are multiple lines, else the first blank like
+        val max = lines?.maxByOrNull { it.second.start }
+        if (max == null) {
+            return null
+        }
+        val maxLines =
+            lines.filter { it.second.start == max.second.start && it.second.text.isNotBlank() }
+        return maxLines.firstOrNull()?.first ?: max.first
+    }
+
+    override fun onForegroundServiceStartNotAllowedException() {
+        Log.w(TAG, "Failed to resume playback :/")
+        if (mayThrowForegroundServiceStartNotAllowed()
+            || mayThrowForegroundServiceStartNotAllowedMiui()
+        ) {
+            if (supportsNotificationPermission() && !hasNotificationPermission()) {
+                Log.e(
+                    TAG, Log.getThrowableString(
+                        IllegalStateException(
+                            "onForegroundServiceStartNotAllowedException shouldn't be called on T+"
+                        )
+                    )!!
+                )
+                return
+            }
+            @SuppressLint("MissingPermission") // false positive
+            nm.notify(NOTIFY_ID, NotificationCompat.Builder(this, NOTIFY_CHANNEL_ID).apply {
+                setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                setAutoCancel(true)
+                setCategory(NotificationCompat.CATEGORY_ERROR)
+                setSmallIcon(R.drawable.ic_error)
+                setContentTitle(this@PlugPlaybackService.getString(R.string.fgs_failed_title))
+                setContentText(this@PlugPlaybackService.getString(R.string.fgs_failed_text))
+                setContentIntent(
+                    PendingIntent.getActivity(
+                        this@PlugPlaybackService,
+                        PENDING_INTENT_NOTIFY_ID,
+                        Intent(this@PlugPlaybackService, MainActivity::class.java)
+                            .putExtra(MainActivity.PLAYBACK_AUTO_START_FOR_FGS, true),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                )
+                setVibrate(longArrayOf(0L, 200L))
+                setLights(0, 0, 0)
+                setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+                setSound(null)
+            }.build())
+        } else {
+            handler.post {
+                throw IllegalStateException("onForegroundServiceStartNotAllowedException shouldn't be called on T+")
+            }
+        }
+    }
+
+    // --- MediaLibrarySession.Callback Implementation ---
+
+    override fun onGetLibraryRoot(
+        session: MediaLibrarySession,
+        browser: MediaSession.ControllerInfo,
+        params: LibraryParams?
+    ): ListenableFuture<LibraryResult<MediaItem>> {
+        val tabCount = params?.extras?.getInt(MediaConstants.EXTRAS_KEY_ROOT_CHILDREN_LIMIT,
+            4) ?: 4
+        return libraryTreeLoader.getLibraryRoot(tabCount)
+    }
+
+    override fun onGetChildren(
+        session: MediaLibrarySession,
+        browser: MediaSession.ControllerInfo,
+        parentId: String,
+        page: Int,
+        pageSize: Int,
+        params: LibraryParams?
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+        return libraryTreeLoader.getChildren(parentId, page, pageSize, params)
+    }
+
+    override fun onGetItem(
+        session: MediaLibrarySession,
+        browser: MediaSession.ControllerInfo,
+        mediaId: String
+    ): ListenableFuture<LibraryResult<MediaItem>> {
+        return libraryTreeLoader.getItem(mediaId)
+    }
+
+    override fun onSearch(
+        session: MediaLibrarySession,
+        browser: MediaSession.ControllerInfo,
+        query: String,
+        params: LibraryParams?
+    ): ListenableFuture<LibraryResult<Void>> {
+        session.notifySearchResultChanged(browser, query, 0, params)
+        return Futures.immediateFuture(LibraryResult.ofVoid())
+    }
+
+    override fun onGetSearchResult(
+        session: MediaLibrarySession,
+        browser: MediaSession.ControllerInfo,
+        query: String,
+        page: Int,
+        pageSize: Int,
+        params: LibraryParams?
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+        return libraryTreeLoader.getSearchResult(query, page, pageSize, params)
+    }
+
+    override fun onAddMediaItems(
+        mediaSession: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        mediaItems: List<MediaItem>
+    ): ListenableFuture<List<MediaItem>> = lifecycleScope.future(Dispatchers.Default) {
+        val expanded = libraryTreeLoader.addMediaItems(mediaItems).await()
+        mapMediaItemsForFavorites(expanded.mediaItems)
+    }
+
+    override fun onSetMediaItems(
+        mediaSession: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        mediaItems: List<MediaItem>,
+        startIndex: Int,
+        startPositionMs: Long
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = lifecycleScope.future(Dispatchers.Default) {
+        val expanded = libraryTreeLoader.addMediaItems(mediaItems).await()
+        val mapped = mapMediaItemsForFavorites(expanded.mediaItems)
+        MediaSession.MediaItemsWithStartPosition(mapped, expanded.startIndex ?: startIndex, startPositionMs)
+    }
+}

@@ -7,7 +7,7 @@
         <intent
             android:action="android.intent.action.SEARCH"
             android:targetPackage="${applicationId}"
-            android:targetClass="org.akanework.gramophone.ui.MainActivity">
+            android:targetClass="com.siw.plug.ui.MainActivity">
             <parameter android:name="thing.name" android:key="query" android:required="true"/>
         </intent>
     </capability>
@@ -17,7 +17,7 @@
         <intent
             android:action="${applicationId}.action.SHUFFLE"
             android:targetPackage="${applicationId}"
-            android:targetClass="org.akanework.gramophone.ui.MainActivity">
+            android:targetClass="com.siw.plug.ui.MainActivity">
         <parameter
             android:name="item_name"
             android:key="item_name"
@@ -33,7 +33,7 @@
         <intent
             android:action="${applicationId}.action.SHUFFLE"
             android:targetPackage="${applicationId}"
-            android:targetClass="org.akanework.gramophone.ui.MainActivity" />
+            android:targetClass="com.siw.plug.ui.MainActivity" />
         <capability-binding android:key="${applicationId}.actions.intent.SHUFFLE" />
     </shortcut>
 </shortcuts>

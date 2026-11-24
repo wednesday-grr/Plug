@@ -44,7 +44,7 @@ android {
         throw IllegalArgumentException("releaseType must not contain \"")
     }
 
-    namespace = "org.akanework.gramophone"
+    namespace = "com.siw.plug"
     compileSdk = 37
 
     signingConfigs {
@@ -121,7 +121,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = appIdOverride ?: "org.plug.player"
+        applicationId = appIdOverride ?: "com.siw.plug"
         minSdk = 23
         resourceConfigurations += listOf("en")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

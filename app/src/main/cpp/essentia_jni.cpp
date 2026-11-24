@@ -28,7 +28,7 @@ void throwJava(JNIEnv* env, const char* message) {
 }
 
 extern "C" JNIEXPORT jdoubleArray JNICALL
-Java_org_akanework_gramophone_logic_utils_automix_EssentiaNative_analyzeNative(
+Java_com_siw_plug_logic_utils_automix_EssentiaNative_analyzeNative(
     JNIEnv* env, jobject, jfloatArray input) {
     if (input == nullptr) {
         throwJava(env, "PCM input is null");

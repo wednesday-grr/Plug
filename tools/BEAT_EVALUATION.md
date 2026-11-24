@@ -243,7 +243,7 @@ format handling and runtime only, not musical accuracy.
 
 Build with `.\gradlew.bat :app:assembleDebugAndroidTest`, install the debug app and test APK, copy
 fixtures into the app-private `files/beat-benchmark` directory, then run
-`adb shell am instrument -w -e class org.akanework.gramophone.BeatAnalysisDeviceBenchmarkTest org.plug.player.debug.test/androidx.test.runner.AndroidJUnitRunner`.
+`adb shell am instrument -w -e class com.siw.plug.BeatAnalysisDeviceBenchmarkTest com.siw.plug.debug.test/androidx.test.runner.AndroidJUnitRunner`.
 The generated `benchmark-results.json` is local device output and is not included in the repository.
 
 ### RMX3939 synthetic device run

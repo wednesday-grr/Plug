@@ -104,7 +104,7 @@
         app:layout_constraintTop_toBottomOf="@id/slide_down"
         app:strokeWidth="0dp">
 
-        <org.akanework.gramophone.ui.components.TransformableImageView
+        <com.siw.plug.ui.components.TransformableImageView
             android:id="@+id/full_sheet_cover"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
@@ -143,7 +143,7 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent">
 
-            <org.akanework.gramophone.ui.components.MarqueeTextView
+            <com.siw.plug.ui.components.MarqueeTextView
                 android:id="@+id/full_song_name"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -155,7 +155,7 @@
                 app:textFontWeight="500"
                 tools:text="Artifiction" />
 
-            <org.akanework.gramophone.ui.components.MarqueeTextView
+            <com.siw.plug.ui.components.MarqueeTextView
                 android:id="@+id/full_song_artist"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
